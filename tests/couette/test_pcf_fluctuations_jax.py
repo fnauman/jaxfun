@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
+from jaxfun.integrators import IMEXRK3
 
 
 def test_pcf_fluctuation_initialization_and_one_step_are_finite() -> None:
@@ -50,3 +51,21 @@ def test_pcf_one_step_matches_shenfun_reference_diagnostics() -> None:
     for key, value in expected.items():
         atol = 1.0e-12 if key != "divL2" else 5.0e-15
         assert jnp.allclose(diag[key], value, rtol=1.0e-10, atol=atol), key
+
+
+def test_pcf_imexrk3_one_step_is_finite() -> None:
+    solver = PlaneCouetteFluctuationJax(
+        N=(9, 4, 4),
+        Re=200.0,
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+        timestepper=IMEXRK3,
+    )
+    state = solver.step(solver.initial_state())
+    diag = solver.diagnostics(state)
+
+    assert solver.timestepper is IMEXRK3
+    assert all(jnp.isfinite(component).all() for component in state.u)
+    assert bool(jnp.isfinite(state.g).all())
+    assert float(diag["Epert"]) > 0.0
+    assert float(diag["divL2"]) < 1.0e-4

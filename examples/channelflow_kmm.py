@@ -27,7 +27,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators import IMEXRK222, PDEIMEXRK, ars_stage_rhs
+from jaxfun.integrators import IMEXRK3, IMEXRK222, PDEIMEXRK, ars_stage_rhs
 from jaxfun.la.solvers import Biharmonic, Helmholtz
 
 type Velocity = tuple[Array, Array, Array]
@@ -69,9 +69,10 @@ class KMM:
         self.dt = float(dt)
         self.padding_factor = padding_factor
         self.dpdy = float(dpdy)
+        if not (issubclass(timestepper, PDEIMEXRK) or timestepper is IMEXRK3):
+            raise NotImplementedError("KMM supports ARS PDEIMEXRK steppers and IMEXRK3")
         self.timestepper = timestepper
-        if not issubclass(timestepper, PDEIMEXRK):
-            raise NotImplementedError("KMM currently supports ARS PDEIMEXRK steppers")
+        self._low_storage_imexrk3 = timestepper is IMEXRK3
 
         family_cls = self._family_class(family)
         self.B0 = FunctionSpace(
@@ -130,8 +131,8 @@ class KMM:
         References: couette/ChannelFlow.py:145-163 and the ARS stage update in
         shenfun/shenfun/utilities/integrators.py:702-817.
         """
-        a, _, _ = self.timestepper.stages()
-        self._gamma = float(a[1, 1])
+        a, b, _ = self.timestepper.stages()
+        self._gamma = None if self._low_storage_imexrk3 else float(a[1, 1])
 
         ub = TrialFunction(self.TB, name="ub")
         vb = TestFunction(self.TB, name="vb")
@@ -145,29 +146,76 @@ class KMM:
         self.Lu = inner(vb * (self.nu * self._lap(lap_ub, coords)), sparse=True)
         self.Mg = inner(vh * hb, sparse=True)
         self.Lg = inner(vh * (self.nu * lap_hb), sparse=True)
-        self.Su = Biharmonic(
-            vb,
-            ub,
-            coeff=self.dt * self._gamma,
-            diffusivity=self.nu,
-            coords=coords,
-            sparse=True,
-        )
-        self.Sg = Helmholtz(
-            vh,
-            hb,
-            coeff=self.dt * self._gamma,
-            diffusivity=self.nu,
-            coords=coords,
-            sparse=True,
-        )
+        if self._low_storage_imexrk3:
+            gammas = tuple(float((a[rk] + b[rk]) * self.dt / 2.0) for rk in range(3))
+            self.Su = tuple(
+                Biharmonic(
+                    vb,
+                    ub,
+                    coeff=gamma,
+                    diffusivity=self.nu,
+                    coords=coords,
+                    sparse=True,
+                )
+                for gamma in gammas
+            )
+            self.Sg = tuple(
+                Helmholtz(
+                    vh,
+                    hb,
+                    coeff=gamma,
+                    diffusivity=self.nu,
+                    coords=coords,
+                    sparse=True,
+                )
+                for gamma in gammas
+            )
+        else:
+            assert self._gamma is not None
+            self.Su = Biharmonic(
+                vb,
+                ub,
+                coeff=self.dt * self._gamma,
+                diffusivity=self.nu,
+                coords=coords,
+                sparse=True,
+            )
+            self.Sg = Helmholtz(
+                vh,
+                hb,
+                coeff=self.dt * self._gamma,
+                diffusivity=self.nu,
+                coords=coords,
+                sparse=True,
+            )
 
         u0 = TrialFunction(self.D00, name="u0")
         v0 = TestFunction(self.D00, name="v0")
         (x0,) = self.D00.system.base_scalars()
         self.M00 = inner(v0 * u0, sparse=True)
         self.L00 = inner(v0 * (self.nu * sp.diff(u0, x0, 2)), sparse=True)
-        self.S00 = self.M00 - (self.dt * self._gamma) * self.L00
+        if self._low_storage_imexrk3:
+            self.S00 = tuple(
+                Helmholtz(
+                    v0,
+                    u0,
+                    coeff=gamma,
+                    diffusivity=self.nu,
+                    coords=(x0,),
+                    sparse=True,
+                )
+                for gamma in gammas
+            )
+        else:
+            assert self._gamma is not None
+            self.S00 = Helmholtz(
+                v0,
+                u0,
+                coeff=self.dt * self._gamma,
+                diffusivity=self.nu,
+                coords=(x0,),
+                sparse=True,
+            )
         if self.dpdy != 0.0:
             ones = jnp.ones(self.C00.num_quad_points) * (-self.dpdy)
             self.dpdy_rhs = self.D00.scalar_product(ones)
@@ -265,8 +313,51 @@ class KMM:
             self.TD.mask_nyquist(u2),
         )
 
+    def _step_imexrk3(self, state: KMMState) -> KMMState:
+        """Advance one Spalart low-storage IMEXRK3 step."""
+        a, b, _ = self.timestepper.stages()
+        u_stage = state.u
+        g_stage = state.g
+        previous = (
+            jnp.zeros_like(state.u[0]),
+            jnp.zeros_like(state.g),
+            jnp.zeros_like(state.u[1][:, 0, 0]),
+            jnp.zeros_like(state.u[2][:, 0, 0]),
+        )
+
+        assert isinstance(self.Su, tuple)
+        assert isinstance(self.Sg, tuple)
+        assert isinstance(self.S00, tuple)
+        for rk in range(self.timestepper.steps()):
+            H = self.convection(KMMState(u=u_stage, g=g_stage))
+            current = self._nonlinear_rhs(H)
+            gamma = (a[rk] + b[rk]) * self.dt / 2.0
+            rhs_u = self.Mu @ u_stage[0] + gamma * (self.Lu @ u_stage[0])
+            rhs_g = self.Mg @ g_stage + gamma * (self.Lg @ g_stage)
+            rhs_v = self.M00 @ u_stage[1][:, 0, 0] + gamma * (
+                self.L00 @ u_stage[1][:, 0, 0]
+            )
+            rhs_w = self.M00 @ u_stage[2][:, 0, 0] + gamma * (
+                self.L00 @ u_stage[2][:, 0, 0]
+            )
+            rhs_u = rhs_u + self.dt * (a[rk] * current[0] + b[rk] * previous[0])
+            rhs_g = rhs_g + self.dt * (a[rk] * current[1] + b[rk] * previous[1])
+            rhs_v = rhs_v + self.dt * (a[rk] * current[2] + b[rk] * previous[2])
+            rhs_w = rhs_w + self.dt * (a[rk] * current[3] + b[rk] * previous[3])
+
+            u0_new = self.Su[rk].solve(self.TB.mask_nyquist(rhs_u))
+            g_new = self.Sg[rk].solve(self.TD.mask_nyquist(rhs_g))
+            v00_new = self.S00[rk].solve(rhs_v)
+            w00_new = self.S00[rk].solve(rhs_w)
+            u_stage = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
+            g_stage = g_new
+            previous = current
+        return KMMState(u=u_stage, g=g_stage)
+
     def step(self, state: KMMState) -> KMMState:
         """Advance one IMEX-RK step."""
+        if self._low_storage_imexrk3:
+            return self._step_imexrk3(state)
         a, b, _ = self.timestepper.stages()
         steps = self.timestepper.steps()
         u0_initial = state.u[0]
