@@ -741,7 +741,7 @@ for each (m, k_z):
 
 This part supersedes Part I's status claims. It is based on a full audit of branch `couette-jax-implementation`. **Golden rule for this part:** an item marked *done/partial* is **internally self-consistent only**; the phrase "**not shenfun-validated**" means no test compares it to a live `shenfun` run (see the M0b blocker). Do not silently upgrade "done" to "parity-validated" downstream.
 
-> **Implementation update (2026-06-01):** after this audit, the branch added the reusable CNAB2/coupled-IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, physical `Array`, optional HDF5/checkpoint/XDMF IO, host-side cadence runner, differentiability checks, and live `shenfun` parity coverage for PCF 1/5/50-step diagnostics/physical velocity fields, TC linear/MRI, and the radial dealiased product. Older status tables below are retained for context where not explicitly updated.
+> **Implementation update (2026-06-01):** after this audit, the branch added the reusable CNAB2/coupled-IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, physical `Array`, optional HDF5/checkpoint/XDMF IO, host-side cadence runner, differentiability checks, and live `shenfun` parity coverage for PCF 1/5/50-step diagnostics, physical velocity fields, and mapped coefficient fields, TC linear/MRI, and the radial dealiased product. Older status tables below are retained for context where not explicitly updated.
 
 ## 11. Status review
 
@@ -757,7 +757,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 | T6.1 | mixed `CoupledSpace` + truncated-orthogonal pressure (`P_N/P_{N-2}`) | `tensorproductspace.py`; `test_coupled_space_tc_dns.py` | — |
 
 **Runnable solver examples** (correct-looking, smoke/self-consistency tested, **not** `shenfun`-parity):
-- **KMM PCF** (`channelflow_kmm.py`, `pcf_fluctuations_jax.py`): real biharmonic-`u` + Helmholtz-`g`, vmapped per-mode banded LU, `compute_vw`, base-flow convection. Live `shenfun` integration coverage now compares IMEXRK222 1/5/50-step diagnostics and reconstructed physical velocity fields. Coefficient-layout parity remains open because `shenfun` uses an rfft half-spectrum while the jax port uses full-complex Fourier.
+- **KMM PCF** (`channelflow_kmm.py`, `pcf_fluctuations_jax.py`): real biharmonic-`u` + Helmholtz-`g`, vmapped per-mode banded LU, `compute_vw`, base-flow convection. Live `shenfun` integration coverage now compares IMEXRK222 1/5/50-step diagnostics, reconstructed physical velocity fields, and mapped coefficient fields. The coefficient test pads compact jax composite coefficients and slices the nonnegative spanwise modes to match `shenfun`'s rfft half-spectrum storage.
 - **PCF-MHD** (`pcf_mhd_jax.py`, `pcf_mhd_mri_shearpy_jax.py`): A-diffusion + compatible-space curl projections; `divB ≈ 2e-16` (weak). MRI stresses assert only `isfinite`.
 - **Axisymmetric-hydro TC DNS** (`taylor_couette_dns_jax.py`): CNAB2 + per-axial-mode vmapped saddle solve + cylindrical nonlinear + r-weighted energy. **Strong** pointwise `div_linf ≈ 4e-9` (not machine precision). Validated only against the port's *own* jax linear eigenmode (near-tautological), not `shenfun`.
 - **TC linear** (`taylor_couette_linear_jax.py`) and **TC MRI** (`taylor_couette_mri_jax.py`) eigensolvers: conducting + insulating Bessel BCs; one eigenvalue tuple checked vs a frozen literal.
@@ -768,7 +768,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 - **Done after audit:** T3.4 coupled multi-equation IMEX stage helper (`integrators/coupled.py`), T6.3 reusable CNAB2 stepping (`integrators/cnab2.py`), T2.2 named `Helmholtz`/`Biharmonic` constructors (`la/solvers.py`), T1.2 cached `Project`, and T1.6 `K_over_K2`.
 - **Done after audit:** T6.7 r-weighted TC diagnostics are factored into `jaxfun.diagnostics`; TC DNS examples call the reusable helpers.
 
-**B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity fields at 1/5/50 steps, TC linear/MRI stability, and the radial dealiased product. Broader coefficient-level parity for PCF (full-complex↔rfft layout adapter) and DNS trajectories remains open for T1.1, T1.5, T3.2, T3.3, T4.2–T4.5, T4.7, T4.8, T5.3, T5.4, T6.2, T6.4, and T6.6.
+**B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity/coefficient fields at 1/5/50 steps, TC linear/MRI stability, and the radial dealiased product. Broader live parity for PCF-MHD and Taylor-Couette DNS trajectories remains open for T4.7, T4.8, T5.3, T5.4, T6.2, T6.4, and T6.6.
 
 **C. Correctness gaps in the batched solver tier:**
 - **T2.1** pivoting and **T2.3** per-mode constraint pinning exist **only** on the single-`DiaMatrix`/`PinnedSystem` path — **NOT** plumbed into the vmapped `TPMatricesWavenumberSolver` (no `pivot`/`constraints` kwarg) that KMM/biharmonic/TC actually use. KMM/TC pin ad hoc.

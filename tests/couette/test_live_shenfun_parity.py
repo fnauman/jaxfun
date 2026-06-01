@@ -26,7 +26,22 @@ def _keplerian_base():
     return CircularCouette(1.0, 2.0, 1.0, eta**1.5)
 
 
-def test_pcf_fluctuation_matches_live_shenfun_diagnostics_and_velocity():
+def _nested_complex(rows):
+    arr = np.asarray(rows, dtype=float)
+    return arr[..., 0] + 1j * arr[..., 1]
+
+
+def _shenfun_rfft_coeff_layout(coeff, *, radial_n: int, spanwise_n: int):
+    coeff_np = np.asarray(coeff)
+    out = np.zeros(
+        (radial_n, coeff_np.shape[1], spanwise_n // 2 + 1),
+        dtype=complex,
+    )
+    out[: coeff_np.shape[0], :, :] = coeff_np[:, :, : spanwise_n // 2 + 1]
+    return out
+
+
+def test_pcf_fluctuation_matches_live_shenfun_diagnostics_velocity_and_coeffs():
     solver = PlaneCouetteFluctuationJax(
         N=(9, 8, 8),
         family="L",
@@ -34,7 +49,9 @@ def test_pcf_fluctuation_matches_live_shenfun_diagnostics_and_velocity():
         perturbation_amplitude=0.05,
     )
     state0 = solver.initial_state()
-    references = pcf_fluctuation_reference(include_velocity=True)
+    references = pcf_fluctuation_reference(
+        include_velocity=True, include_coefficients=True
+    )
 
     for reference in references:
         state = solver.solve(state0, reference["steps"])
@@ -54,6 +71,21 @@ def test_pcf_fluctuation_matches_live_shenfun_diagnostics_and_velocity():
             assert np.allclose(
                 got_np.real, np.asarray(expected), rtol=1.0e-8, atol=1.0e-10
             )
+
+        ref_coeffs = reference["coefficients"]
+        for got, expected in zip(state.u, ref_coeffs["u"], strict=True):
+            got_layout = _shenfun_rfft_coeff_layout(
+                got, radial_n=solver.N[0], spanwise_n=solver.N[2]
+            )
+            assert np.allclose(
+                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+            )
+        got_g = _shenfun_rfft_coeff_layout(
+            state.g, radial_n=solver.N[0], spanwise_n=solver.N[2]
+        )
+        assert np.allclose(
+            got_g, _nested_complex(ref_coeffs["g"]), rtol=1.0e-8, atol=1.0e-10
+        )
 
 
 def test_tc_linear_matches_live_shenfun_eigenvalues_and_nonmodal():

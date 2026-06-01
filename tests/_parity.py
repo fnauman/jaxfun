@@ -188,6 +188,7 @@ def pcf_fluctuation_reference(
     perturbation_amplitude: float = 0.05,
     family: str = "L",
     include_velocity: bool = False,
+    include_coefficients: bool = False,
 ) -> list[dict]:
     """Run the live shenfun PCF fluctuation reference and return parity rows."""
     return run_shenfun_json(
@@ -249,6 +250,21 @@ def pcf_fluctuation_reference(
                         np.asarray(ubp[i], dtype=float).tolist()
                         for i in range(3)
                     ]
+                if {include_coefficients!r}:
+                    def complex_rows(arr):
+                        arr = np.asarray(arr)
+                        return [
+                            [
+                                [[float(z.real), float(z.imag)] for z in rowz]
+                                for rowz in rowy
+                            ]
+                            for rowy in arr
+                        ]
+
+                    row['coefficients'] = {{
+                        'u': [complex_rows(solver.u_[i]) for i in range(3)],
+                        'g': complex_rows(solver.g_),
+                    }}
                 return row
 
             rows = []
