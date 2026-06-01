@@ -61,6 +61,13 @@ import sympy as sp
 from scipy.linalg import eig
 
 from shenfun import FunctionSpace, TestFunction, TrialFunction, inner, Dx, Array
+from _linear_analysis import (
+    FINITE_CAP,
+    finite_eigensystem,
+    parse_times,
+    print_transient_growth,
+    transient_growth_from_eigs,
+)
 
 # Radial coordinate symbol.  A shenfun FunctionSpace built on ``domain=(R1, R2)``
 # uses the sympy symbol ``x`` for its (physical) coordinate, so cylindrical
@@ -317,6 +324,22 @@ class TaylorCouetteLinear:
         w = self._leading(*self.assemble(m, kz))
         return float(w[0].real) if len(w) else float("nan")
 
+    def energy_matrix(self):
+        """Cylindrical kinetic-energy metric for ``(u_r,u_theta,u_z,p)``."""
+        n = self.n
+        Q = np.zeros((4 * n, 4 * n), dtype=complex)
+        W = self._A(x, 0)
+        W = 0.5 * (W + W.conj().T)
+        for comp in range(3):
+            Q[comp * n:(comp + 1) * n, comp * n:(comp + 1) * n] = W
+        return Q
+
+    def nonmodal_growth(self, m, kz, times, n_modes=None, finite_cap=FINITE_CAP):
+        """Optimal linear transient growth in kinetic-energy norm."""
+        w, V = finite_eigensystem(*self.assemble(m, kz), finite_cap=finite_cap,
+                                  n_return=n_modes)
+        return transient_growth_from_eigs(w, V, self.energy_matrix(), times)
+
     def max_growth_over_kz(self, m, kz_list):
         """Scan kz; return (kz_best, growth_best, all_growths)."""
         g = np.array([self.growth_rate(m, kz) for kz in kz_list])
@@ -405,11 +428,25 @@ def main(argv=None):
     p.add_argument("--kz-min", type=float, default=0.5)
     p.add_argument("--kz-max", type=float, default=8.0)
     p.add_argument("--kz-num", type=int, default=40)
+    p.add_argument("--nonmodal", action="store_true",
+                   help="compute optimal transient growth instead of an eigenvalue scan")
+    p.add_argument("--times", type=str, default="1,5,10,20",
+                   help="comma-separated times for --nonmodal")
+    p.add_argument("--n-modes", type=int, default=None,
+                   help="number of finite eigenmodes retained for --nonmodal")
     args = p.parse_args(argv)
 
     base, solver = _build(args)
     print(base.describe())
     print(f"  nu={args.nu:g}  N={args.N}  family={args.family}  m={args.m}")
+
+    if args.nonmodal:
+        kz = args.kz if args.kz is not None else 3.14 / base.gap
+        rows = solver.nonmodal_growth(args.m, kz, parse_times(args.times),
+                                      n_modes=args.n_modes)
+        print(f"\nkz={kz:g}: hydrodynamic non-modal transient growth (energy norm):")
+        print_transient_growth(rows)
+        return 0
 
     if args.kz is not None:
         w, _ = solver.eigs(args.m, args.kz, n_return=6)

@@ -704,12 +704,10 @@ class TaylorCouetteDNS:
         rpts = np.asarray(rr[0, 0, :])
         phase = np.exp(1j * (m * th + kz * zz))
         for comp in range(3):
-            block = V[comp * n:(comp + 1) * n, which]
-            fr_re = Function(lin.SD); fr_re[:] = 0.0
-            fr_im = Function(lin.SD); fr_im[:] = 0.0
-            fr_re[lin.SD.slice()] = block.real
-            fr_im[lin.SD.slice()] = block.imag
-            prof = np.asarray(fr_re.eval(rpts)) + 1j * np.asarray(fr_im.eval(rpts))
+            fr = Function(lin.SD)
+            fr[:] = 0.0
+            fr[lin.SD.slice()] = V[comp * n:(comp + 1) * n, which]
+            prof = np.asarray(fr.eval(rpts))
             field = (amp * prof[None, None, :] * phase).real
             a = Array(self.TD); a[:] = field
             self.u_hat[comp] = a.forward(Function(self.TD))
@@ -1654,6 +1652,56 @@ class TaylorCouetteMRIDNS:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def _linear_analysis_kz(args, base, mhd=False):
+    if args.kz is not None:
+        return float(args.kz)
+    if args.Lz is not None:
+        return 2.0 * math.pi * args.kz_mode / float(args.Lz)
+    return (3.0 if mhd else 3.13) / base.gap
+
+
+def _run_linear_analysis(args, base):
+    from _linear_analysis import parse_times, print_eigenvalues, print_transient_growth
+
+    # Honour an explicit --m for the linear analysis (the 1D radial eigensolvers
+    # support any azimuthal wavenumber regardless of --Ntheta); default to the
+    # axisymmetric m=0 onset when --m is not given.
+    m = args.m if args.m is not None else 0
+    kz = _linear_analysis_kz(args, base, mhd=args.mhd)
+    if args.mhd:
+        from taylor_couette_mri import TaylorCouetteMRI
+
+        if args.magnetic_bc == "insulating" and m != 0:
+            raise SystemExit("insulating-wall MRI linear analysis is m=0 only; "
+                             "use --magnetic-bc conducting for m!=0")
+        solver = TaylorCouetteMRI(base, B0=args.B0, nu=args.nu,
+                                  eta_mag=args.eta_mag, N=args.Nr,
+                                  family=args.family, magnetic_bc=args.magnetic_bc)
+        label = f"Taylor-Couette MHD/MRI ({args.magnetic_bc} walls)"
+        nonmodal_kw = dict(energy=args.energy)
+    else:
+        from taylor_couette_linear import TaylorCouetteLinear
+
+        solver = TaylorCouetteLinear(base, nu=args.nu, N=args.Nr, family=args.family)
+        label = "Taylor-Couette hydro"
+        nonmodal_kw = {}
+
+    if args.linear_analysis == "eigs":
+        w, _ = solver.eigs(m, kz, n_return=6)
+        if comm.Get_rank() == 0:
+            print(f"{label} linear eigenvalues: m={m}, kz={kz:g}, N={args.Nr}")
+            print_eigenvalues(w)
+        return 0
+
+    rows = solver.nonmodal_growth(m, kz, parse_times(args.times),
+                                  n_modes=args.n_modes, **nonmodal_kw)
+    if comm.Get_rank() == 0:
+        norm = f", {args.energy} energy" if args.mhd else ""
+        print(f"{label} non-modal transient growth: m={m}, kz={kz:g}, N={args.Nr}{norm}")
+        print_transient_growth(rows)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Taylor-Couette hydro DNS "
                                 "(axisymmetric by default; --Ntheta>0 for full 3D)")
@@ -1672,7 +1720,9 @@ def main(argv=None):
     p.add_argument("--family", choices=["L", "C"], default="L")
     p.add_argument("--dealias", type=float, default=1.5)
     p.add_argument("--amp", type=float, default=1.0e-3)
-    p.add_argument("--m", type=int, default=1, help="azimuthal seed wavenumber (3D)")
+    p.add_argument("--m", type=int, default=None,
+                   help="azimuthal wavenumber; DNS 3D seed defaults to 1, "
+                        "--linear-analysis defaults to 0 (both honour an explicit value)")
     p.add_argument("--kz-mode", type=int, default=1)
     p.add_argument("--moderror", type=int, default=50)
     p.add_argument("--seed-random", action="store_true")
@@ -1681,9 +1731,28 @@ def main(argv=None):
                         "by default, --Ntheta>0 selects the full 3D MRI solver")
     p.add_argument("--B0", type=float, default=0.1, help="imposed axial field (MHD)")
     p.add_argument("--eta-mag", type=float, default=1.0e-3, help="resistivity (MHD)")
+    p.add_argument("--linear-analysis", choices=["none", "eigs", "nonmodal"], default="none",
+                   help="run a linear eigenvalue or non-modal analysis and exit")
+    p.add_argument("--magnetic-bc", choices=["conducting", "insulating"],
+                   default="conducting",
+                   help="magnetic wall BC for --mhd --linear-analysis "
+                        "(insulating is m=0 only)")
+    p.add_argument("--energy", choices=["total", "kinetic", "magnetic"],
+                   default="total",
+                   help="energy norm for --mhd --linear-analysis nonmodal")
+    p.add_argument("--kz", type=float, default=None,
+                   help="axial wavenumber for --linear-analysis; overrides --Lz/--kz-mode")
+    p.add_argument("--times", type=str, default="1,5,10,20",
+                   help="comma-separated times for --linear-analysis nonmodal")
+    p.add_argument("--n-modes", type=int, default=None,
+                   help="number of finite eigenmodes retained for non-modal analysis")
     args = p.parse_args(argv)
 
     base = CircularCouette(args.R1, args.R2, args.Omega1, args.Omega2)
+    if args.linear_analysis != "none":
+        return _run_linear_analysis(args, base)
+    # DNS 3D azimuthal seed wavenumber: default 1 when --m is not given.
+    m_seed = args.m if args.m is not None else 1
     if args.mhd:
         if args.Ntheta > 0:
             dns = TaylorCouetteMRIDNS(base, B0=args.B0, nu=args.nu,
@@ -1691,7 +1760,7 @@ def main(argv=None):
                                       Ntheta=args.Ntheta, Nz=args.Nz, Lz=args.Lz,
                                       dt=args.dt, family=args.family,
                                       dealias=args.dealias)
-            seed = lambda: dns.seed_linear_eigenmode(m=args.m, kz_mode=args.kz_mode,
+            seed = lambda: dns.seed_linear_eigenmode(m=m_seed, kz_mode=args.kz_mode,
                                                      amp=args.amp)
         else:
             dns = AxisymmetricMRIDNS(base, B0=args.B0, nu=args.nu,
@@ -1720,7 +1789,7 @@ def main(argv=None):
         if args.seed_random:
             dns.set_random(amp=args.amp)
         else:
-            dns.set_perturbation(amp=args.amp, m=args.m, kz_mode=args.kz_mode)
+            dns.set_perturbation(amp=args.amp, m=m_seed, kz_mode=args.kz_mode)
     else:
         dns = AxisymmetricTCDNS(base, nu=args.nu, Nr=args.Nr, Nz=args.Nz,
                                 Lz=args.Lz, dt=args.dt, family=args.family,

@@ -72,6 +72,13 @@ from scipy.linalg import eig
 from scipy.special import iv, kv
 
 from shenfun import FunctionSpace, TestFunction, TrialFunction, inner, Dx
+from _linear_analysis import (
+    FINITE_CAP,
+    finite_eigensystem,
+    parse_times,
+    print_transient_growth,
+    transient_growth_from_eigs,
+)
 
 from taylor_couette_linear import CircularCouette, x
 
@@ -212,6 +219,16 @@ class TaylorCouetteMRI:
                     out = out + r.diags().toarray()
             else:
                 out = out + res.diags().toarray()
+        return out
+
+    def _dense_inner(self, test_expr, trial_expr):
+        out = np.zeros((self.n, self.n), dtype=complex)
+        res = inner(test_expr, trial_expr)
+        if isinstance(res, list):
+            for r in res:
+                out = out + r.diags().toarray()
+        else:
+            out = out + res.diags().toarray()
         return out
 
     def _lap_terms(self, m, kz):
@@ -462,6 +479,72 @@ class TaylorCouetteMRI:
         w = self._spectrum(*self.assemble(m, kz))
         return float(w[0].real) if len(w) else float("nan")
 
+    def energy_matrix(self, m, kz, kind="total"):
+        r"""Cylindrical (``r``-weighted) perturbation-energy metric.
+
+        ``kind`` selects ``'kinetic'`` (velocity only), ``'magnetic'`` (field
+        only), or ``'total'`` (both).  The magnetic blocks differ by wall BC:
+        conducting walls carry primitive ``(b_r, b_theta, b_z)``; insulating
+        walls carry the poloidal flux ``chi`` (energy
+        ``\int[(kz^2/r)|chi|^2 + (1/r)|chi'|^2]\,dr = \int(|b_r|^2+|b_z|^2)r\,dr``)
+        plus toroidal ``b_theta``.
+        """
+        if kind not in ("total", "kinetic", "magnetic"):
+            raise ValueError("kind must be 'total', 'kinetic', or 'magnetic'")
+        want_kin = kind in ("total", "kinetic")
+        want_mag = kind in ("total", "magnetic")
+        n = self.n
+
+        if self.magnetic_bc == "conducting":
+            Q = np.zeros((7 * n, 7 * n), dtype=complex)
+            idx = dict(ur=0, ut=1, uz=2, p=3, br=4, bt=5, bz=6)
+            names = (["ur", "ut", "uz"] if want_kin else []) + \
+                    (["br", "bt", "bz"] if want_mag else [])
+            for name in names:
+                W = self._blk(self.tv[name], self.tr[name], [(x, 0)])
+                W = 0.5 * (W + W.conj().T)
+                i = idx[name]
+                Q[i * n:(i + 1) * n, i * n:(i + 1) * n] = W
+            return Q
+
+        Schi, Sbth = self._flux_bases(kz)
+        sp_map = dict(ur=self.SDv, ut=self.SDv, uz=self.SDv, p=self.SP,
+                      chi=Schi, bt=Sbth)
+        tv = {s: TestFunction(v) for s, v in sp_map.items()}
+        tr = {s: TrialFunction(v) for s, v in sp_map.items()}
+        idx = dict(ur=0, ut=1, uz=2, p=3, chi=4, bt=5)
+        Q = np.zeros((6 * n, 6 * n), dtype=complex)
+        names = (["ur", "ut", "uz"] if want_kin else []) + \
+                (["bt"] if want_mag else [])
+        for name in names:
+            W = self._blk(tv[name], tr[name], [(x, 0)])
+            W = 0.5 * (W + W.conj().T)
+            i = idx[name]
+            Q[i * n:(i + 1) * n, i * n:(i + 1) * n] = W
+        if want_mag:
+            kz_s = sp.Float(float(kz))
+            chi_metric = self._dense_inner(tv["chi"], (kz_s**2 / x) * tr["chi"])
+            chi_metric += self._dense_inner(Dx(tv["chi"], 0, 1), (1 / x) * Dx(tr["chi"], 0, 1))
+            chi_metric = 0.5 * (chi_metric + chi_metric.conj().T)
+            i = idx["chi"]
+            Q[i * n:(i + 1) * n, i * n:(i + 1) * n] = chi_metric
+        return Q
+
+    def nonmodal_growth(self, m, kz, times, n_modes=None, finite_cap=FINITE_CAP,
+                        energy="total"):
+        """Optimal linear transient growth in the selected energy norm.
+
+        ``energy`` selects ``'total'`` (kinetic+magnetic, default), ``'kinetic'``,
+        or ``'magnetic'``; see :meth:`energy_matrix`.  Because the differential
+        rotation stretches ``b_r`` into ``b_theta``, the magnetic field has its
+        own transient growth, so the total-energy gain need not coincide with the
+        purely kinetic one even at modest fields.
+        """
+        w, V = finite_eigensystem(*self.assemble(m, kz), finite_cap=finite_cap,
+                                  n_return=n_modes)
+        return transient_growth_from_eigs(w, V,
+                                          self.energy_matrix(m, kz, energy), times)
+
     def max_growth_over_kz(self, m, kz_list):
         g = np.array([self.growth_rate(m, kz) for kz in kz_list])
         i = int(np.argmax(g))
@@ -595,6 +678,15 @@ def main(argv=None):
     p.add_argument("--kz-min", type=float, default=0.5)
     p.add_argument("--kz-max", type=float, default=8.0)
     p.add_argument("--kz-num", type=int, default=30)
+    p.add_argument("--nonmodal", action="store_true",
+                   help="compute optimal transient growth instead of an eigenvalue scan")
+    p.add_argument("--times", type=str, default="1,5,10,20",
+                   help="comma-separated times for --nonmodal")
+    p.add_argument("--n-modes", type=int, default=None,
+                   help="number of finite eigenmodes retained for --nonmodal")
+    p.add_argument("--energy", choices=["total", "kinetic", "magnetic"],
+                   default="total",
+                   help="energy norm for --nonmodal (kinetic+magnetic by default)")
     p.add_argument("--local-check", action="store_true",
                    help="print the ideal local Keplerian MRI optimum and exit")
     args = p.parse_args(argv)
@@ -616,6 +708,14 @@ def main(argv=None):
     print(f"  B0={args.B0:g} nu={args.nu:g} eta_mag={args.eta_mag:g} "
           f"Pm={solver.Pm:g} walls={args.magnetic_bc}")
     print(f"  Re={solver.Re:.3g} Rm={solver.Rm:.3g} S(Lundquist)={solver.S:.3g} Ha={solver.Ha:.3g}")
+
+    if args.nonmodal:
+        kz = args.kz if args.kz is not None else 3.0 / base.gap
+        rows = solver.nonmodal_growth(args.m, kz, parse_times(args.times),
+                                      n_modes=args.n_modes, energy=args.energy)
+        print(f"\nkz={kz:g}: MHD/MRI non-modal transient growth ({args.energy} energy):")
+        print_transient_growth(rows)
+        return 0
 
     if args.kz is not None:
         w, _ = solver.eigs(args.m, args.kz, n_return=6)

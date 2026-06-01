@@ -607,8 +607,63 @@ def _parse_cli(params):
     parser.add_argument('--ssp-stride', type=int, default=params['ssp_stride'], help='Quiver stride for SSP rolls')
     parser.add_argument('--plot-format', type=str, default=params['plot_format'])
     parser.add_argument('--plot-dpi', type=int, default=params['plot_dpi'])
+    parser.add_argument('--linear', choices=['dns', 'eigs', 'nonmodal'], default='dns',
+                        help='run a linear eigenvalue or non-modal analysis instead of DNS')
+    parser.add_argument('--linear-nx', type=int, default=params['N'][0],
+                        help='wall-normal collocation points for linear analysis')
+    parser.add_argument('--ky', type=float, default=1.0, help='streamwise linear-analysis wavenumber')
+    parser.add_argument('--kz', type=float, default=1.0, help='spanwise linear-analysis wavenumber')
+    parser.add_argument('--linear-times', type=str, default='1,5,10,20',
+                        help='comma-separated times for non-modal transient growth')
+    parser.add_argument('--linear-n-return', type=int, default=8,
+                        help='number of leading eigenvalues to print')
+    parser.add_argument('--linear-n-modes', type=int, default=None,
+                        help='number of finite modes retained for non-modal analysis')
+    parser.add_argument('--linear-finite-cap', type=float, default=1.0e8,
+                        help='discard generalized eigenvalues above this magnitude')
     args = parser.parse_args()
     return vars(args)
+
+
+def _run_linear_variant(params):
+    from _linear_analysis import parse_times, print_eigenvalues, print_transient_growth
+    from _pcf_linear import PlaneCouetteLinear
+
+    lin = PlaneCouetteLinear.couette(
+        nx=params['linear_nx'],
+        Re=params['Re'],
+        U_wall=params['U_wall'],
+        mhd=False,
+    )
+    ky = params['ky']
+    kz = params['kz']
+    if params['linear'] == 'eigs':
+        w, _ = lin.eigs(ky, kz, n_return=params['linear_n_return'],
+                        finite_cap=params['linear_finite_cap'])
+        if comm.Get_rank() == 0:
+            print(f"Plane Couette hydro linear eigenvalues: Re={params['Re']:g}, ky={ky:g}, kz={kz:g}")
+            print_eigenvalues(w)
+        return {"eigenvalues": [(float(s.real), float(s.imag)) for s in w]}
+
+    rows = lin.nonmodal_growth(
+        ky,
+        kz,
+        parse_times(params['linear_times']),
+        n_modes=params['linear_n_modes'],
+        finite_cap=params['linear_finite_cap'],
+    )
+    if comm.Get_rank() == 0:
+        print(f"Plane Couette hydro non-modal growth: Re={params['Re']:g}, ky={ky:g}, kz={kz:g}")
+        print_transient_growth(rows)
+    return {"transient_growth": rows}
+
+
+def _strip_linear_keys(params):
+    for key in (
+        'linear', 'linear_nx', 'ky', 'kz', 'linear_times',
+        'linear_n_return', 'linear_n_modes', 'linear_finite_cap',
+    ):
+        params.pop(key, None)
 
 
 def run_pcf_fluctuation():
@@ -642,6 +697,9 @@ def run_pcf_fluctuation():
         plot_dpi=150,
     )
     params.update(_parse_cli(params))
+    if params['linear'] != 'dns':
+        return _run_linear_variant(params)
+    _strip_linear_keys(params)
     if comm.Get_rank() == 0:
         print('Simulation parameters:')
         [print(f'  {k}: {v}') for k, v in params.items()]
@@ -662,6 +720,7 @@ def run_pcf_fluctuation():
     finally:
         if shenfun_cleanup is not None:
             shenfun_cleanup(vars(solver))
+    return None
 
 
 if __name__ == '__main__':

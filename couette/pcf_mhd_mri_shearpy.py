@@ -472,7 +472,73 @@ def _parse_args(defaults):
     p.add_argument("--assert-every-step", action="store_true")
     p.add_argument("--save-profiles", type=str, default=None,
                    help="path to write x-resolved mean/stress profiles (.npz) at end")
+    p.add_argument("--linear", choices=["dns", "eigs", "nonmodal"], default="dns",
+                   help="run a linear eigenvalue or non-modal analysis instead of DNS")
+    p.add_argument("--linear-nx", type=int, default=defaults["N"][0],
+                   help="wall-normal collocation points for linear analysis")
+    p.add_argument("--ky", type=float, default=0.0, help="azimuthal/streamwise linear-analysis wavenumber")
+    p.add_argument("--kz", type=float, default=2.0 * math.pi / defaults["domain"][2][1],
+                   help="vertical/spanwise linear-analysis wavenumber")
+    p.add_argument("--linear-times", type=str, default="1,5,10,20",
+                   help="comma-separated times for non-modal transient growth")
+    p.add_argument("--linear-n-return", type=int, default=8,
+                   help="number of leading eigenvalues to print")
+    p.add_argument("--linear-n-modes", type=int, default=None,
+                   help="number of finite modes retained for non-modal analysis")
+    p.add_argument("--linear-finite-cap", type=float, default=1.0e8,
+                   help="discard generalized eigenvalues above this magnitude")
+    p.add_argument("--linear-magnetic-bc", choices=["conducting", "dirichlet"],
+                   default="conducting")
+    p.add_argument("--linear-energy", choices=["total", "kinetic", "magnetic"],
+                   default="total",
+                   help="energy norm for --linear nonmodal (kinetic+magnetic by default)")
     return p.parse_args()
+
+
+def _run_linear_variant(args, params):
+    from _linear_analysis import parse_times, print_eigenvalues, print_transient_growth
+    from _pcf_linear import PlaneCouetteLinear
+
+    lin = PlaneCouetteLinear.shearpy(
+        nx=args.linear_nx,
+        Re=params["Re"],
+        Rm=params["Rm"],
+        shear_rate=params["shear_rate"],
+        omega=params["omega"],
+        by=params["by"],
+        bz=params["bz"],
+        velocity_scale=params["velocity_scale"],
+        magnetic_bc=args.linear_magnetic_bc,
+    )
+    if args.linear == "eigs":
+        w, _ = lin.eigs(args.ky, args.kz, n_return=args.linear_n_return,
+                        finite_cap=args.linear_finite_cap)
+        if comm.Get_rank() == 0:
+            print(
+                f"Plane Couette MRI linear eigenvalues: S={params['shear_rate']:g}, "
+                f"Omega={params['omega']:g}, ky={args.ky:g}, kz={args.kz:g}, "
+                f"B0=(0,{params['by']:g},{params['bz']:g})"
+            )
+            print_eigenvalues(w)
+        return {"eigenvalues": [(float(s.real), float(s.imag)) for s in w]}
+
+    rows = lin.nonmodal_growth(
+        args.ky,
+        args.kz,
+        parse_times(args.linear_times),
+        n_modes=args.linear_n_modes,
+        finite_cap=args.linear_finite_cap,
+        energy=args.linear_energy,
+    )
+    if comm.Get_rank() == 0:
+        print(
+            f"Plane Couette MRI non-modal growth ({args.linear_energy} energy): "
+            f"S={params['shear_rate']:g}, "
+            f"Omega={params['omega']:g}, ky={args.ky:g}, kz={args.kz:g}, "
+            f"B0=(0,{params['by']:g},{params['bz']:g})"
+        )
+        print_transient_growth(rows)
+    return {"transient_growth": rows}
 
 
 def run(argv=None):
@@ -540,6 +606,9 @@ def run(argv=None):
     params["store_history"] = args.store_history
     end_time = float(args.end_time)
     params.pop("end_time", None)
+
+    if args.linear != "dns":
+        return _run_linear_variant(args, params)
 
     if comm.Get_rank() == 0:
         print("Simulation parameters:")
