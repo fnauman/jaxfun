@@ -749,7 +749,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 
 | Plan ref | Item | Evidence | Caveat |
 |---|---|---|---|
-| T0.5 | tuple→dict BC adapter (`bc=(0,0,0,0)`/`(0,0)`) + biharmonic | `galerkin/functionspace.py`; `test_functionspace_couette_compat.py` | No stencil-equality check vs `shenfun` `ShenBiharmonic`/`ShenDirichlet`; a silent N/D 4-tuple transposition would still pass. Add the 1e-13 stencil cross-check. |
+| T0.5 | tuple→dict BC adapter (`bc=(0,0,0,0)`/`(0,0)`) + biharmonic | `galerkin/functionspace.py`; `test_functionspace_couette_compat.py` | Live `shenfun` stencil parity now compares Legendre/Chebyshev `ShenDirichlet` and `ShenBiharmonic` compact rows to 1e-13. |
 | T1.4 | `Dx(u, axis, k)` wrapper | `operators.py`; `test_dx_operator.py` | matrices not compared to `shenfun` |
 | T2.4 | dense `generalized_eig` + singular-`M` filtering | `la/eig.py`; `test_eig.py` | only a 2×2 toy test; `finite_cap=1e6` here vs reference `FINITE_CAP=1e8` — **keep these two caps distinct & documented** (modal filter vs non-modal cap) |
 | T5.1 | radial symbol + explicit `1/r` form assembly | `taylor_couette_linear_jax.py` | — |
@@ -769,7 +769,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 - **Done after audit:** T3.4 coupled multi-equation IMEX stage helper (`integrators/coupled.py`), T6.3 reusable CNAB2 stepping (`integrators/cnab2.py`), T2.2 named `Helmholtz`/`Biharmonic` constructors (`la/solvers.py`), T1.2 cached `Project`, and T1.6 `K_over_K2`.
 - **Done after audit:** T6.7 r-weighted TC diagnostics are factored into `jaxfun.diagnostics`; TC DNS examples call the reusable helpers.
 
-**B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity/coefficient fields at 1/5/50 steps, both PCF-MHD variants' diagnostics/coefficient fields at 1/5/50 steps, axisymmetric and full-3D hydro/MHD TC DNS diagnostics/coefficient fields at 1/5/50 steps, TC linear/MRI eigenvalues plus non-modal growth, and the radial dealiased product. Remaining validation work is broader-size/dealiased production coverage and low-level basis/operator stencil cross-checking, not an uncovered Couette variant from the requested list.
+**B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity/coefficient fields at 1/5/50 steps, both PCF-MHD variants' diagnostics/coefficient fields at 1/5/50 steps, axisymmetric and full-3D hydro/MHD TC DNS diagnostics/coefficient fields at 1/5/50 steps, TC linear/MRI eigenvalues plus non-modal growth, and the radial dealiased product. Remaining validation work is broader-size/dealiased production coverage and low-level operator stencil cross-checking; the tuple-BC basis stencil check now covers `ShenDirichlet`/`ShenBiharmonic` parity.
 
 **C. Correctness gaps in the batched solver tier:**
 - **T2.1** pivoting and **T2.3** per-mode constraint pinning exist **only** on the single-`DiaMatrix`/`PinnedSystem` path — **NOT** plumbed into the vmapped `TPMatricesWavenumberSolver` (no `pivot`/`constraints` kwarg) that KMM/biharmonic/TC actually use. KMM/TC pin ad hoc.

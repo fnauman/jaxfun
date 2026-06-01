@@ -68,6 +68,31 @@ def complex_array(rows: Any) -> np.ndarray:
     return arr[:, 0] + 1j * arr[:, 1]
 
 
+def shenfun_basis_stencils(*, n: int = 8) -> dict[str, dict]:
+    """Return live shenfun Dirichlet/Biharmonic basis stencil matrices."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            from shenfun import FunctionSpace
+
+            rows = {{}}
+            for family in ('L', 'C'):
+                for bc in ((0, 0), (0, 0, 0, 0)):
+                    space = FunctionSpace({int(n)!r}, family, bc=bc)
+                    stencil = space.stencil_matrix().diags('csr').toarray()
+                    rows[f'{{family}}_{{len(bc)}}'] = {{
+                        'type': type(space).__name__,
+                        'dim': int(space.dim()),
+                        'shape': list(stencil.shape),
+                        'stencil': stencil.tolist(),
+                    }}
+            print(json.dumps(rows))
+            """
+        )
+    )
+
+
 def tc_linear_eigenvalues(*, n: int = 12, m: int = 0, kz: float = 3.0) -> np.ndarray:
     rows = run_shenfun_json(
         textwrap.dedent(
