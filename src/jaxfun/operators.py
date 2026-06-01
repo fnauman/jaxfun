@@ -592,6 +592,26 @@ def curl(v: VectorLike) -> VectorLike:
     )
 
 
+def Dx(expr: Expr, axis: int, k: int = 1) -> Derivative:
+    """Return the k-th partial derivative along a coordinate axis.
+
+    This is the shenfun-style spelling used throughout the Couette reference
+    scripts.  It delegates to jaxfun's symbolic derivative wrapper.
+    """
+    expr = sp.sympify(expr)
+    functionspace = getattr(expr, "functionspace", None)
+    if functionspace is not None:
+        coord = functionspace.system.base_scalars()[axis]
+    else:
+        systems = _get_coord_systems(expr)
+        if len(systems) != 1:
+            raise ValueError(
+                "Dx needs an expression with exactly one coordinate system"
+            )
+        coord = next(iter(systems)).base_scalars()[axis]
+    return Derivative(expr, (coord, k))
+
+
 class Grad(Gradient):
     """Unevaluated gradient wrapper with optional transpose flag.
 

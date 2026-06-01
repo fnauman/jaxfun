@@ -6,6 +6,7 @@ from .operators import (
     Curl as Curl,
     Div as Div,
     Dot as Dot,
+    Dx as Dx,
     Grad as Grad,
     Outer as Outer,
     cross as cross,

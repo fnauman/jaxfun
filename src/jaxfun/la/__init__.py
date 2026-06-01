@@ -5,6 +5,10 @@ from .diamatrix import (
     diags as diags,
     diakron as diakron,
 )
+from .eig import (
+    finite_eigenvalues as finite_eigenvalues,
+    generalized_eig as generalized_eig,
+)
 from .matrix import Matrix as Matrix
 from .matrixprotocol import BaseMatrix as BaseMatrix
 from .operators import (

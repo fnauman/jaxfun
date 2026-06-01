@@ -13,6 +13,22 @@ from jaxfun.galerkin.arguments import ArgumentTag, JAXFunction, get_arg
 from jaxfun.typing import Array, FunctionSpaceType, Padding
 from jaxfun.utils import lambdify
 
+
+def physical_cross(
+    a: tuple[Array, Array, Array], b: tuple[Array, Array, Array]
+) -> tuple[Array, Array, Array]:
+    """Return the pointwise cross product of two physical vector fields.
+
+    Reference: the PCF MHD Couette scripts use this primitive for Lorentz
+    forces J x B and electromotive terms U x B.
+    """
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
 type NodeValueCache = dict[sp.Basic, Array]
 type NodeEvaluator = Callable[[NodeValueCache, Padding], Array]
 

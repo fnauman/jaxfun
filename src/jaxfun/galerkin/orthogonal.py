@@ -62,10 +62,14 @@ class OrthogonalSpace(BaseSpace):
         system: CoordSys | None = None,
         name: str = "OrthogonalSpace",
         fun_str: str = "psi",
+        num_dofs: int | None = None,
         **kw,
     ) -> None:
         self.N: int = N
         self._num_quad_points: int = N
+        self._num_dofs: int = N if num_dofs is None else int(num_dofs)
+        if self._num_dofs < 0 or self._num_dofs > N or (N > 0 and self._num_dofs == 0):
+            raise ValueError("num_dofs must satisfy 0 < num_dofs <= N for N > 0")
         if domain is None:
             domain = self.reference_domain
         self._domain: Domain = Domain(*domain)
@@ -167,7 +171,7 @@ class OrthogonalSpace(BaseSpace):
         Returns:
             Array shape (len(X), N) with k-th derivatives of basis functions.
         """
-        return jacn(self.eval_basis_functions, k)(X)
+        return jacn(self.eval_basis_functions, k)(X)[..., : self.num_dofs]
 
     @jax.jit(static_argnums=(0, 2, 3))
     def evaluate_mesh(
@@ -240,17 +244,29 @@ class OrthogonalSpace(BaseSpace):
     def mass_matrix(self) -> DiaMatrix:
         """Return diagonal mass matrix (orthogonality) in sparse format."""
         return diags(
-            [self.norm_squared() / float(self.domain_factor)],
+            [self.norm_squared()[: self.num_dofs] / float(self.domain_factor)],
             offsets=(0,),
-            shape=(self.N, self.N),
+            shape=(self.num_dofs, self.num_dofs),
         )
+
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Return physical-domain quadrature weights for scalar integration."""
+        xj, wj = self.quad_points_and_weights(N)
+        weights = wj / float(self.domain_factor)
+        sg = self.system.sg
+        if sp.sympify(sg).is_number:
+            return weights * float(sg)
+        x = self.system.base_scalars()[0]
+        sg_values = lambdify(x, self.map_expr_true_domain(sg))(xj)
+        return weights * sg_values
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:
         """Forward projection (samples -> coefficients) using orthogonality."""
         # u should be a padded array of length >= self.N
         L = self.scalar_product(u)
-        A = self.norm_squared() / float(self.domain_factor)
+        A = self.norm_squared()[: self.num_dofs] / float(self.domain_factor)
         return L / A
 
     @jax.jit(static_argnums=0)
@@ -266,7 +282,7 @@ class OrthogonalSpace(BaseSpace):
             x = self.system.base_scalars()[0]
             sg = lambdify(x, self.map_expr_true_domain(sg))(xj)
             wj = wj * sg
-        return (u * wj) @ jnp.conj(Pi)  # Truncated to (self.N,)
+        return (u * wj) @ jnp.conj(Pi)
 
     @overload
     def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
@@ -296,10 +312,24 @@ class OrthogonalSpace(BaseSpace):
         """Apply trial-side stencil (identity in pure orthogonal space)."""
         return a
 
+    def get_dealiased(self, padding_factor: float = 1.5) -> Self:
+        """Return a copy using padded quadrature points for pseudo-spectral products.
+
+        Modal dimensions are unchanged; only the physical transform length is
+        increased to floor(padding_factor * num_quad_points).
+        """
+        import copy
+
+        out = copy.deepcopy(self)
+        out._num_quad_points = max(
+            self.num_quad_points, int(padding_factor * self.num_quad_points)
+        )
+        return out
+
     @property
     def dim(self) -> int:
         """Return total number of raw modes N."""
-        return self.N
+        return self.num_dofs
 
     @property
     def dims(self) -> int:
@@ -309,7 +339,7 @@ class OrthogonalSpace(BaseSpace):
     @property
     def num_dofs(self) -> int:
         """Return number of active degrees of freedom."""
-        return self.dim
+        return self._num_dofs
 
     @property
     def rank(self) -> int:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import math
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
 from typing import NoReturn, TypeGuard, cast
@@ -178,6 +179,48 @@ class TensorProductSpace:
             list(itertools.product(*[m.flatten() for m in mesh])), dtype=mesh[0].dtype
         )
 
+    def wavenumbers(
+        self, *, scaled: bool = True, broadcast: bool = True
+    ) -> tuple[Array, ...]:
+        """Return per-axis Fourier wavenumber grids for this tensor space.
+
+        Non-Fourier axes are returned as zeros.  When scaled is true,
+        Fourier wavenumbers are multiplied by the true-domain derivative scale
+        2*pi / L.  This mirrors the scaled local wavenumber grids used by
+        shenfun's Couette KMM reconstruction.
+        """
+        grids = []
+        for axis, space in enumerate(self.basespaces):
+            if hasattr(space, "wavenumbers"):
+                k = space.wavenumbers()
+                if scaled:
+                    k = k * float(space.domain_factor)
+            else:
+                k = jnp.zeros(space.num_dofs)
+            grids.append(self.broadcast_to_ndims(k, axis) if broadcast else k)
+        return tuple(grids)
+
+    local_wavenumbers = wavenumbers
+
+    def get_mask_nyquist(self) -> Array:
+        """Return a boolean mask for Fourier Nyquist modes.
+
+        Reference: shenfun's ChannelFlow KMM masks Nyquist modes after pseudo
+        spectral products; see couette/ChannelFlow.py:94 and :224.
+        """
+        mask = jnp.zeros(self.num_dofs, dtype=bool)
+        for axis, space in enumerate(self.basespaces):
+            if not hasattr(space, "wavenumbers") or space.N % 2:
+                continue
+            k = space.wavenumbers()
+            axis_mask = jnp.abs(k) == (space.N // 2)
+            mask = mask | self.broadcast_to_ndims(axis_mask, axis)
+        return mask
+
+    def mask_nyquist(self, coeffs: Array) -> Array:
+        """Return coeffs with Fourier Nyquist modes set to zero."""
+        return jnp.where(self.get_mask_nyquist(), 0, coeffs)
+
     def cartesian_mesh(
         self,
         kind: MeshKind | str = MeshKind.QUADRATURE,
@@ -311,6 +354,29 @@ class TensorProductSpace:
             return self._spmd_local_fn_cache[cache_key](c, C[0], *C[1:])
 
         return self._evaluate_single_device(x, c)
+
+    def get_dealiased(
+        self, padding_factor: float | Sequence[float] = 1.5
+    ) -> TensorProductSpace:
+        """Return a tensor space with padded quadrature counts.
+
+        Reference: shenfun TensorProductSpace.get_dealiased used by the Couette
+        pseudo-spectral nonlinear terms.  Modal dimensions are unchanged.
+        """
+        if isinstance(padding_factor, int | float):
+            factors = (float(padding_factor),) * len(self)
+        else:
+            factors = tuple(float(pf) for pf in padding_factor)
+        if len(factors) != len(self):
+            raise ValueError("padding_factor length must match tensor rank")
+        return TensorProductSpace(
+            tuple(
+                space.get_dealiased(pf)
+                for space, pf in zip(self.basespaces, factors, strict=True)
+            ),
+            system=self.system,
+            name=self.name + "p",
+        )
 
     def get_orthogonal(self) -> TensorProductSpace:
         """Return underlying orthogonal basis instance."""
@@ -500,6 +566,131 @@ class TensorProductSpace:
         return z
 
 
+class CoupledSpace:
+    """Mixed scalar tensor-product space for coupled systems.
+
+    This mirrors the part of shenfun's CompositeSpace needed by the
+    Taylor-Couette DNS unknown (u_r, u_theta, u_z, p): components may have
+    different tensor spaces and coefficient shapes, and fields are represented
+    as pytrees of component arrays instead of stacked arrays.
+    """
+
+    is_transient = False
+
+    def __init__(
+        self, tensorspaces: Sequence[TensorProductSpace], name: str = "CoupledSpace"
+    ) -> None:
+        if len(tensorspaces) == 0:
+            raise ValueError("CoupledSpace needs at least one component space")
+        self.tensorspaces = tuple(tensorspaces)
+        self.system: CoordSys = self.tensorspaces[0].system
+        if any(space.system != self.system for space in self.tensorspaces):
+            raise ValueError("All component spaces must share a coordinate system")
+        self.name = name
+        self.tensorname = multiplication_sign.join(
+            space.name for space in self.tensorspaces
+        )
+
+    def __len__(self) -> int:
+        """Return number of coupled scalar components."""
+        return len(self.tensorspaces)
+
+    def __iter__(self) -> Iterator[TensorProductSpace]:
+        return iter(self.tensorspaces)
+
+    def __getitem__(self, i: int) -> TensorProductSpace:
+        return self.tensorspaces[i]
+
+    @property
+    def rank(self) -> int:
+        """Coupled scalar systems are not geometric vectors."""
+        return 0
+
+    @property
+    def dims(self) -> int:
+        """Return spatial dimension of each component space."""
+        return self.tensorspaces[0].dims
+
+    @property
+    def dim(self) -> int:
+        """Return total active degrees of freedom across all components."""
+        return sum(self.block_sizes)
+
+    @property
+    def block_sizes(self) -> tuple[int, ...]:
+        """Return flattened active size of each component block."""
+        return tuple(math.prod(space.num_dofs) for space in self)
+
+    @property
+    def block_slices(self) -> tuple[slice, ...]:
+        """Return flat slices for each component block."""
+        starts = [0]
+        for size in self.block_sizes[:-1]:
+            starts.append(starts[-1] + size)
+        return tuple(
+            slice(start, start + size)
+            for start, size in zip(starts, self.block_sizes, strict=True)
+        )
+
+    @property
+    def num_dofs(self) -> tuple[tuple[int, ...], ...]:
+        """Return active coefficient shapes per component."""
+        return tuple(space.num_dofs for space in self)
+
+    @property
+    def num_quad_points(self) -> tuple[tuple[int, ...], ...]:
+        """Return quadrature shapes per component."""
+        return tuple(space.num_quad_points for space in self)
+
+    @property
+    def is_orthogonal(self) -> bool:
+        return all(space.is_orthogonal for space in self)
+
+    def shape(self) -> tuple[tuple[int, ...], ...]:
+        """Return raw modal shape for each component."""
+        return tuple(space.shape() for space in self)
+
+    def flatten(self, coeffs: Sequence[Array]) -> Array:
+        """Pack component coefficient arrays into one flat vector."""
+        if len(coeffs) != len(self):
+            raise ValueError("Coefficient component count does not match CoupledSpace")
+        return jnp.concatenate([jnp.ravel(c) for c in coeffs])
+
+    def unflatten(self, coeffs: Array) -> tuple[Array, ...]:
+        """Unpack one flat vector into component coefficient arrays."""
+        flat = jnp.ravel(coeffs)
+        if flat.size != self.dim:
+            raise ValueError(f"Expected flat size {self.dim}, got {flat.size}")
+        return tuple(
+            flat[s].reshape(space.num_dofs)
+            for s, space in zip(self.block_slices, self, strict=True)
+        )
+
+    def forward(self, values: Sequence[Array]) -> tuple[Array, ...]:
+        """Forward-transform each component independently."""
+        return tuple(
+            space.forward(value) for space, value in zip(self, values, strict=True)
+        )
+
+    def scalar_product(self, values: Sequence[Array]) -> tuple[Array, ...]:
+        """Return scalar products for each component independently."""
+        return tuple(
+            space.scalar_product(value)
+            for space, value in zip(self, values, strict=True)
+        )
+
+    def backward(
+        self,
+        coeffs: Sequence[Array],
+        N: tuple[tuple[int | None, ...], ...] | None = None,
+    ) -> tuple[Array, ...]:
+        """Backward-transform each component independently."""
+        return tuple(
+            space.backward(coeff, N=N[i] if N is not None else None)
+            for i, (space, coeff) in enumerate(zip(self, coeffs, strict=True))
+        )
+
+
 class VectorTensorProductSpace:
     """Vector-valued tensor product space.
 
@@ -555,6 +746,14 @@ class VectorTensorProductSpace:
         """Return component tensor space i."""
         return self.tensorspaces[i]
 
+    @staticmethod
+    def _stack_or_tuple(coeffs: list[Array]) -> Array | tuple[Array, ...]:
+        """Stack equal-shaped vector components, otherwise return a pytree tuple."""
+        shapes = [tuple(coeff.shape) for coeff in coeffs]
+        if all(shape == shapes[0] for shape in shapes[1:]):
+            return jnp.stack(coeffs)
+        return tuple(coeffs)
+
     @property
     def rank(self) -> int:
         """Return tensor rank (1 for vector fields)."""
@@ -571,18 +770,24 @@ class VectorTensorProductSpace:
         return sum([space.dim for space in self.tensorspaces])
 
     @property
-    def num_dofs(self) -> tuple[int, ...]:
-        """Return tuple of active degrees of freedom per axis."""
-        return (self.dims,) + self.tensorspaces[0].num_dofs
+    def num_dofs(self) -> tuple[int, ...] | tuple[tuple[int, ...], ...]:
+        """Return active degrees of freedom, preserving ragged components."""
+        dofs = tuple(space.num_dofs for space in self.tensorspaces)
+        if all(dof == dofs[0] for dof in dofs[1:]):
+            return (self.dims,) + dofs[0]
+        return dofs
 
     @property
     def is_orthogonal(self) -> bool:
         """Return True if underlying bases are all orthogonal."""
         return all(space.is_orthogonal for space in self.tensorspaces)
 
-    def shape(self) -> tuple[int, ...]:
-        """Return raw modal shape (N0, N1, ...)."""
-        return (self.dims,) + self.tensorspaces[0].shape()
+    def shape(self) -> tuple[int, ...] | tuple[tuple[int, ...], ...]:
+        """Return raw modal shape, preserving ragged components."""
+        shapes = tuple(space.shape() for space in self.tensorspaces)
+        if all(shape == shapes[0] for shape in shapes[1:]):
+            return (self.dims,) + shapes[0]
+        return shapes
 
     def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate vector expansion at scattered points.
@@ -599,7 +804,7 @@ class VectorTensorProductSpace:
             ci = c[i]
             vi = space.evaluate(x, ci)
             vals.append(vi)
-        return jnp.array(vals)
+        return self._stack_or_tuple(vals)
 
     def evaluate_mesh(
         self,
@@ -621,7 +826,7 @@ class VectorTensorProductSpace:
         for i, space in enumerate(self.tensorspaces):
             ci = space.evaluate_mesh(u[i], kind=kind, N=N[i] if N is not None else None)
             coeffs.append(ci)
-        return jnp.stack(coeffs)
+        return self._stack_or_tuple(coeffs)
 
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation.
@@ -636,7 +841,7 @@ class VectorTensorProductSpace:
         for i, space in enumerate(self.tensorspaces):
             ci = space.forward(u[i])
             coeffs.append(ci)
-        return jnp.stack(coeffs)
+        return self._stack_or_tuple(coeffs)
 
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable).
@@ -650,7 +855,7 @@ class VectorTensorProductSpace:
         for i, space in enumerate(self.tensorspaces):
             ci = space.scalar_product(u[i])
             coeffs.append(ci)
-        return jnp.stack(coeffs)
+        return self._stack_or_tuple(coeffs)
 
     def backward(
         self,
@@ -670,7 +875,7 @@ class VectorTensorProductSpace:
         for i, space in enumerate(self.tensorspaces):
             ci = space.backward(u[i], N=N[i] if N is not None else None)
             coeffs.append(ci)
-        return jnp.stack(coeffs)
+        return self._stack_or_tuple(coeffs)
 
     def backward_primitive(
         self,
@@ -692,7 +897,7 @@ class VectorTensorProductSpace:
         for i, space in enumerate(self.tensorspaces):
             ci = space.backward_primitive(u[i], k=k, N=N[i] if N is not None else None)
             coeffs.append(ci)
-        return jnp.stack(coeffs)
+        return self._stack_or_tuple(coeffs)
 
     def to_orthogonal(self, c: Array) -> Array:
         """Convert coefficients to orthogonal basis.
@@ -707,7 +912,7 @@ class VectorTensorProductSpace:
         for i, space in enumerate(self.tensorspaces):
             ci = space.to_orthogonal(c[i])
             coeffs.append(ci)
-        return jnp.stack(coeffs)
+        return self._stack_or_tuple(coeffs)
 
     def from_orthogonal(self, c: Array) -> Array:
         """Convert coefficients from orthogonal basis.
@@ -722,7 +927,16 @@ class VectorTensorProductSpace:
         for i, space in enumerate(self.tensorspaces):
             ci = space.from_orthogonal(c[i])
             coeffs.append(ci)
-        return jnp.stack(coeffs)
+        return self._stack_or_tuple(coeffs)
+
+    def get_dealiased(
+        self, padding_factor: float | Sequence[float] = 1.5
+    ) -> VectorTensorProductSpace:
+        """Return component tensor spaces with padded quadrature counts."""
+        return VectorTensorProductSpace(
+            tuple(space.get_dealiased(padding_factor) for space in self.tensorspaces),
+            name=self.name + "p",
+        )
 
     def get_orthogonal(self) -> VectorTensorProductSpace:
         orthogonal_spaces = [space.get_orthogonal() for space in self.tensorspaces]

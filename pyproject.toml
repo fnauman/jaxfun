@@ -24,7 +24,13 @@ dependencies = [
   "optax>=0.2.6",
   "pre-commit>=4.3",
   "pytest-xdist[psutil]>=3.8",
+  "scipy>=1.14",
   "sympy>=1.14",
+]
+
+[project.optional-dependencies]
+cuda13 = [
+  "jax[cuda13]>=0.10.1",
 ]
 
 [tool.pytest.ini_options]

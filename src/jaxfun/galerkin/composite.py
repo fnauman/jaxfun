@@ -85,7 +85,8 @@ class BoundaryConditions(dict):
         """Return True if all boundary values (incl. Robin) equal zero."""
         for val in self.values():
             for v in val.values():
-                if v != 0:
+                value = v[1] if isinstance(v, tuple | list) else v
+                if value != 0:
                     return False
         return True
 
@@ -94,8 +95,8 @@ class BoundaryConditions(dict):
         bc = {}
         for k, v in self.items():
             bc[k] = {}
-            for s in v:
-                bc[k][s] = 0
+            for s, value in v.items():
+                bc[k][s] = (value[0], 0) if isinstance(value, tuple | list) else 0
         return BoundaryConditions(bc)
 
 
@@ -324,6 +325,11 @@ class Composite(OrthogonalSpace):
     def dim(self) -> int:
         """Return dimension of composite space."""
         return self.orthogonal.dim - self.stencil_width()
+
+    @property
+    def num_dofs(self) -> int:
+        """Return number of active constrained coefficients."""
+        return self.dim
 
     def get_homogeneous(self) -> Composite:
         """Return new Composite with homogeneous boundary values."""

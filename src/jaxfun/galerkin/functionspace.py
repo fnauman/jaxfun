@@ -23,6 +23,7 @@ Keys like "D", "N", "N2", "R", "W" correspond to Dirichlet, Neuman with first/se
 derivatives, Robin, weighted, etc., as interpreted by BoundaryConditions.
 """
 
+from collections.abc import Sequence
 from typing import overload
 
 from jaxfun.coordinates import CoordSys
@@ -36,6 +37,33 @@ from .composite import (
 )
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
+
+
+def _tuple_boundary_conditions(values: Sequence[FloatLike]) -> dict:
+    """Return shenfun-style tuple boundary conditions as a jaxfun dict.
+
+    bc=(a, b) means left/right Dirichlet values.
+    bc=(a, b, c, d) means left Dirichlet/Neumann and right
+    Dirichlet/Neumann values, matching the clamped bases used by shenfun's
+    Couette KMM scripts.
+    """
+    values = tuple(values)
+    if len(values) == 2:
+        return {"left": {"D": values[0]}, "right": {"D": values[1]}}
+    if len(values) == 4:
+        return {
+            "left": {"D": values[0], "N": values[1]},
+            "right": {"D": values[2], "N": values[3]},
+        }
+    raise ValueError("shenfun-style tuple boundary conditions must have length 2 or 4")
+
+
+def _normalize_boundary_conditions(
+    bcs: BoundaryConditions | dict | Sequence[FloatLike],
+):
+    if isinstance(bcs, BoundaryConditions | dict):
+        return bcs
+    return _tuple_boundary_conditions(bcs)
 
 
 @overload
@@ -53,7 +81,7 @@ def FunctionSpace[T: OrthogonalSpace](
 def FunctionSpace(
     N: int,
     space: type[OrthogonalSpace],
-    bcs: BoundaryConditions | dict,
+    bcs: BoundaryConditions | dict | Sequence[FloatLike],
     domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
     name: str | None = None,
@@ -63,7 +91,7 @@ def FunctionSpace(
 def FunctionSpace(
     N: int,
     space: type[OrthogonalSpace],
-    bcs: BoundaryConditions | dict | None = None,
+    bcs: BoundaryConditions | dict | Sequence[FloatLike] | None = None,
     domain: Domain | tuple[FloatLike, FloatLike] | None = None,
     system: CoordSys | None = None,
     name: str | None = None,
@@ -130,8 +158,13 @@ def FunctionSpace(
     if fun_str is not None:
         kw.update(fun_str=fun_str)
 
+    if "bc" in kw:
+        if bcs is not None:
+            raise TypeError("Pass either bcs=... or bc=..., not both")
+        bcs = kw.pop("bc")
+
     if bcs is not None:
-        bcs = BoundaryConditions(bcs, domain=domain)
+        bcs = BoundaryConditions(_normalize_boundary_conditions(bcs), domain=domain)
         assert issubclass(space, Jacobi)
 
         compspace = (
@@ -169,4 +202,4 @@ def FunctionSpace(
         C.name += "0"
         return DirectSum(C, B)
 
-    return space(N, domain=domain, **kw)
+    return space(N, domain=domain, system=system, **kw)

@@ -19,6 +19,7 @@ from jaxfun.la import (
 )
 from jaxfun.typing import (
     CoeffDict,
+    FunctionSpaceType,
     GalerkinAssembledForm,
     InnerItems,
     InnerKind,
@@ -48,6 +49,7 @@ from .forms import (
 )
 from .orthogonal import OrthogonalSpace
 from .tensorproductspace import (
+    CoupledSpace,
     DirectSumTPS,
     TensorProductSpace,
     VectorTensorProductSpace,
@@ -188,6 +190,52 @@ def inner(
     if kind is None:
         return result
     return _validate_inner_kind(result, kind)
+
+
+def _axis_integration_weights(space: OrthogonalSpace, N: int | None = None) -> Array:
+    _, weights = space.quad_points_and_weights(N)
+    return weights / float(space.domain_factor)
+
+
+def integrate(
+    u: Array | tuple[Array, ...] | list[Array], V: FunctionSpaceType
+) -> Array:
+    """Integrate physical-space values over a Galerkin function space.
+
+    This mirrors the inner(1, f) diagnostic path used by the Couette
+    reference scripts, without assembling a test-function form.  For Cartesian
+    Taylor-Couette spaces, cylindrical r weights must be included in u
+    explicitly, matching couette/taylor_couette_dns.py.
+    """
+    if isinstance(V, VectorTensorProductSpace | CoupledSpace):
+        components = (
+            u if isinstance(u, tuple | list) else tuple(u[i] for i in range(len(V)))
+        )
+        total = jnp.asarray(0, dtype=jnp.asarray(components[0]).dtype)
+        for ui, Vi in zip(components, V, strict=True):
+            total = total + integrate(ui, Vi)
+        return total
+
+    values = jnp.asarray(u)
+    if isinstance(V, OrthogonalSpace):
+        weights = V.integration_weights(int(values.shape[0]))
+        return jnp.sum(values * weights)
+
+    if isinstance(V, TensorProductSpace):
+        counts = tuple(int(values.shape[axis]) for axis in range(len(V)))
+        weighted = values
+        sg = V.system.sg
+        if sg != 1:
+            sg_values = lambdify(V.system.base_scalars(), sg, modules="jax")(
+                *V.mesh(N=counts)
+            )
+            weighted = weighted * sg_values
+        for axis, space in enumerate(V.basespaces):
+            weights = _axis_integration_weights(space, counts[axis])
+            weighted = weighted * V.broadcast_to_ndims(weights, axis)
+        return jnp.sum(weighted)
+
+    raise TypeError(f"integrate does not support space type {type(V).__name__}")
 
 
 def _coerce_inner_kind(kind: InnerKind | str) -> InnerKind:

@@ -224,6 +224,51 @@ def split_coeff(c0: sp.Expr | float) -> CoeffDict:
     return coeffs
 
 
+def _fold_coordinate_coefficients(
+    d: InnerResultDict, system: CoordSys
+) -> InnerResultDict:
+    """Move same-coordinate factors out of coeff and into form factors.
+
+    SymPy may leave a trial basis from a different 1D space in coeff for
+    Petrov-Galerkin products such as v_D(x) * p_P(x).  Matrix assembly
+    expects all coordinate-dependent factors, including basis functions, under
+    their coordinate key and coeff to be coordinate independent.
+    """
+    coeff = sp.sympify(d.get("coeff", 1))
+    if coeff == 1:
+        return d
+
+    base_scalars = tuple(system.base_scalars())
+    kept = []
+    changed = False
+    for factor in sp.Mul.make_args(coeff):
+        symbols = factor.free_symbols
+        replacements = {
+            symbol: scalar
+            for scalar in base_scalars
+            for symbol in symbols
+            if symbol != scalar and getattr(symbol, "name", None) == scalar.name
+        }
+        if replacements:
+            factor = factor.xreplace(replacements)
+            symbols = factor.free_symbols
+        matches = [scalar for scalar in base_scalars if scalar in symbols]
+        if not matches and len(base_scalars) == 1:
+            test, trial = get_basisfunctions(factor)
+            if test is not None or trial is not None:
+                matches = [base_scalars[0]]
+        if len(matches) == 1:
+            scalar = matches[0]
+            d[scalar] = d.get(scalar, sp.Integer(1)) * factor
+            changed = True
+        else:
+            kept.append(factor)
+
+    if changed:
+        d["coeff"] = sp.Mul(*kept) if kept else sp.Integer(1)
+    return d
+
+
 def split(forms: sp.Expr) -> ResultDict:
     """Split a full weak form expression into linear and bilinear parts.
 
@@ -293,7 +338,7 @@ def split(forms: sp.Expr) -> ResultDict:
                     d["coeff"] = jaxc[0]
         if d is None:
             raise RuntimeError("Could not split form")
-        return d
+        return _fold_coordinate_coefficients(d, V.system)
 
     result = ResultDict(linear=[], bilinear=[])
     for arg in sp.Add.make_args(forms):
