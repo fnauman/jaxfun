@@ -17,6 +17,7 @@ from jax import Array
 from jaxfun import Domain
 from jaxfun.galerkin import (
     FunctionSpace,
+    K_over_K2,
     TensorProduct,
     TestFunction,
     TrialFunction,
@@ -27,6 +28,7 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.integrators import IMEXRK222, PDEIMEXRK
+from jaxfun.la.solvers import Biharmonic, Helmholtz
 
 type Velocity = tuple[Array, Array, Array]
 
@@ -103,11 +105,7 @@ class KMM:
         )
 
         self.K = self.TD.local_wavenumbers(scaled=True)
-        k2 = self.K[1] * self.K[1] + self.K[2] * self.K[2]
-        self.K_over_K2 = (
-            self.K[1] / jnp.where(k2 == 0, 1, k2),
-            self.K[2] / jnp.where(k2 == 0, 1, k2),
-        )
+        self.K_over_K2 = K_over_K2(self.K, axes=(1, 2))
         self.X = self.TD.mesh()
         self.Xp = self.TDp.mesh()
 
@@ -147,8 +145,22 @@ class KMM:
         self.Lu = inner(vb * (self.nu * self._lap(lap_ub, coords)), sparse=True)
         self.Mg = inner(vh * hb, sparse=True)
         self.Lg = inner(vh * (self.nu * lap_hb), sparse=True)
-        self.Su = self.Mu - (self.dt * self._gamma) * self.Lu
-        self.Sg = self.Mg - (self.dt * self._gamma) * self.Lg
+        self.Su = Biharmonic(
+            vb,
+            ub,
+            coeff=self.dt * self._gamma,
+            diffusivity=self.nu,
+            coords=coords,
+            sparse=True,
+        )
+        self.Sg = Helmholtz(
+            vh,
+            hb,
+            coeff=self.dt * self._gamma,
+            diffusivity=self.nu,
+            coords=coords,
+            sparse=True,
+        )
 
         u0 = TrialFunction(self.D00, name="u0")
         v0 = TestFunction(self.D00, name="v0")

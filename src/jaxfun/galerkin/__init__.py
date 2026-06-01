@@ -20,6 +20,7 @@ from .inner import inner as inner, inner_items as inner_items, integrate as inte
 from .tensorproductspace import (
     CoupledSpace as CoupledSpace,
     DirectSumTPS as DirectSumTPS,
+    K_over_K2 as K_over_K2,
     TensorProduct as TensorProduct,
     TensorProductSpace as TensorProductSpace,
     VectorTensorProductSpace as VectorTensorProductSpace,

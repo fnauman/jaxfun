@@ -47,6 +47,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.integrators.cnab2 import cnab2_rhs, scan_steps
 
 type Velocity = tuple[Array, Array, Array]
 
@@ -62,6 +63,7 @@ def _require_resolved_m(m: int, ntheta: int) -> None:
         )
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class AxisymmetricTCState:
     """Coefficient state for the axisymmetric TC DNS solver."""
@@ -69,12 +71,21 @@ class AxisymmetricTCState:
     u: Velocity
     p: Array
     nonlinear_old: Velocity
-    have_old: bool = False
+    have_old: bool | Array = False
+
+    def tree_flatten(self):
+        return (self.u, self.p, self.nonlinear_old, jnp.asarray(self.have_old)), None
+
+    @classmethod
+    def tree_unflatten(cls, _aux_data, children):
+        u, p, nonlinear_old, have_old = children
+        return cls(u=u, p=p, nonlinear_old=nonlinear_old, have_old=have_old)
 
 
 MHDFields = tuple[Array, Array, Array, Array, Array, Array]
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class AxisymmetricMRIState:
     """Coefficient state for axisymmetric TC-MHD DNS."""
@@ -82,7 +93,15 @@ class AxisymmetricMRIState:
     x: MHDFields
     p: Array
     nonlinear_old: MHDFields
-    have_old: bool = False
+    have_old: bool | Array = False
+
+    def tree_flatten(self):
+        return (self.x, self.p, self.nonlinear_old, jnp.asarray(self.have_old)), None
+
+    @classmethod
+    def tree_unflatten(cls, _aux_data, children):
+        x, p, nonlinear_old, have_old = children
+        return cls(x=x, p=p, nonlinear_old=nonlinear_old, have_old=have_old)
 
 
 class AxisymmetricTCDNSJax:
@@ -430,10 +449,7 @@ class AxisymmetricTCDNSJax:
         """Advance one CNAB2 step with an IMEX-Euler bootstrap."""
         n_hat = self.nonlinear(state)
         rhs_v = self._apply_lexp(state.u)
-        rhs_u = []
-        for rhs_i, n_i, old_i in zip(rhs_v, n_hat, state.nonlinear_old, strict=True):
-            nonlinear_i = 1.5 * n_i - 0.5 * old_i if state.have_old else n_i
-            rhs_u.append(rhs_i - nonlinear_i)
+        rhs_u = cnab2_rhs(rhs_v, n_hat, state.nonlinear_old, state.have_old)
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_u, rhs_p))
         sol = self.VQ.unflatten(self._solve_limp(rhs))
@@ -445,9 +461,7 @@ class AxisymmetricTCDNSJax:
         )
 
     def solve(self, state: AxisymmetricTCState, steps: int) -> AxisymmetricTCState:
-        for _ in range(int(steps)):
-            state = self.step(state)
-        return state
+        return scan_steps(self.step, state, steps)
 
     def velocity_physical(self, state: AxisymmetricTCState) -> Velocity:
         return tuple(self.TD.backward(ui) for ui in state.u)  # ty: ignore[return-value]
@@ -1085,10 +1099,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
     def step(self, state: AxisymmetricMRIState) -> AxisymmetricMRIState:
         n_hat = self.nonlinear(state)
         rhs_e = self._apply_lexp_mhd(state.x)
-        rhs_x = []
-        for rhs_i, n_i, old_i in zip(rhs_e, n_hat, state.nonlinear_old, strict=True):
-            nonlinear_i = 1.5 * n_i - 0.5 * old_i if state.have_old else n_i
-            rhs_x.append(rhs_i - nonlinear_i)
+        rhs_x = cnab2_rhs(rhs_e, n_hat, state.nonlinear_old, state.have_old)
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
         sol = self.VQ.unflatten(self._solve_limp(rhs))
@@ -1096,9 +1107,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         return AxisymmetricMRIState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
 
     def solve(self, state: AxisymmetricMRIState, steps: int) -> AxisymmetricMRIState:
-        for _ in range(int(steps)):
-            state = self.step(state)
-        return state
+        return scan_steps(self.step, state, steps)
 
     def seed_linear_eigenmode(
         self, kz_mode: int = 1, amp: float = 1.0e-6, which: int = 0

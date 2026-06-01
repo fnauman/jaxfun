@@ -33,6 +33,28 @@ multiplication_sign = "\u00d7"
 IndivisibleError = ValueError
 
 
+def K_over_K2(
+    K: Sequence[Array], axes: Sequence[int] | None = None
+) -> tuple[Array, ...]:
+    """Return Fourier ``K_i / |K|^2`` factors with the zero mode guarded.
+
+    This is the coefficient-space helper used by the Couette KMM
+    velocity-vorticity reconstruction in ``couette/ChannelFlow.py:168-171``.
+    Non-Fourier axes in ``K`` are usually all-zero grids; pass *axes* to select
+    only the periodic directions.
+    """
+    selected = (
+        tuple(range(len(K))) if axes is None else tuple(int(axis) for axis in axes)
+    )
+    if not selected:
+        raise ValueError("At least one wavenumber axis is required")
+    k2 = jnp.zeros_like(K[selected[0]])
+    for axis in selected:
+        k2 = k2 + K[axis] * K[axis]
+    denom = jnp.where(k2 == 0, 1, k2)
+    return tuple(K[axis] / denom for axis in selected)
+
+
 class TensorProductSpace:
     """d-dimensional tensor product of 1D BaseSpace instances.
 

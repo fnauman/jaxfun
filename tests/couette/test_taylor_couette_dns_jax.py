@@ -46,7 +46,7 @@ def test_tc_dns_eigenmode_growth_matches_linear_solver_x64() -> None:
         CircularCouette(), nu=0.002, Nr=12, Nz=8, dt=1.0e-3, dealias=1.0
     )
     state, eig = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-8)
-    rate, out = solver.growth_rate(state, steps=10)
+    rate, out = solver.growth_rate(state, steps=100)
 
     assert jnp.allclose(rate, eig.real, rtol=1.0e-7, atol=1.0e-7)
     assert float(solver.continuity_residual_l2(out)) < 1.0e-18
@@ -104,7 +104,7 @@ def test_tc_dns_3d_eigenmode_growth_matches_linear_solver_x64() -> None:
         dealias=1.0,
     )
     state, eig = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1.0e-8)
-    rate, out = solver.growth_rate(state, steps=3)
+    rate, out = solver.growth_rate(state, steps=100)
 
     assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)
     assert float(solver.continuity_residual_l2(out)) < 1.0e-18
@@ -153,7 +153,7 @@ def test_tc_mri_dns_eigenmode_growth_matches_linear_solver_x64() -> None:
         dealias=1.0,
     )
     state, eig = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-8)
-    rate, out = solver.growth_rate(state, steps=3)
+    rate, out = solver.growth_rate(state, steps=100)
     diag = solver.diagnostics(out)
 
     assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)
@@ -201,7 +201,7 @@ def test_tc_mri_dns_3d_eigenmode_growth_matches_linear_solver_x64() -> None:
         dealias=1.0,
     )
     state, eig = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1.0e-8)
-    rate, out = solver.growth_rate(state, steps=3)
+    rate, out = solver.growth_rate(state, steps=100)
     diag = solver.diagnostics(out)
 
     assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)

@@ -929,6 +929,15 @@ class TPMatricesWavenumberSolver:
         for _new_pos, _old_pos in enumerate(_axes_order):
             _inv_perm[_old_pos] = _new_pos
 
+        @jax.jit
+        def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
+            rhs_2d = jnp.transpose(rhs, _axes_order).reshape(_n_F, _n_P)
+            sol_2d = _vmap_fn(L, U, rhs_2d)
+            sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
+            return jnp.transpose(sol_perm, _inv_perm)
+
+        self._solve_jit = partial(_solve_jit, _local_L, _local_U)
+
         if len(jax.devices()) > 1:
             # One JIT per local device, each closing over that device's L/U
             # slice.  All JITs are dispatched independently so XLA can
@@ -960,17 +969,6 @@ class TPMatricesWavenumberSolver:
                 for d in range(_n_local)
             ]
 
-        else:
-
-            @jax.jit
-            def _solve_jit(L: Array, U: Array, rhs: Array) -> Array:
-                rhs_2d = jnp.transpose(rhs, _axes_order).reshape(_n_F, _n_P)
-                sol_2d = _vmap_fn(L, U, rhs_2d)
-                sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
-                return jnp.transpose(sol_perm, _inv_perm)
-
-            self._solve_jit = partial(_solve_jit, _local_L, _local_U)
-
     def solve(self, rhs: Array) -> Array:
         """Solve the wavenumber-loop system for RHS ``rhs``.
 
@@ -990,17 +988,22 @@ class TPMatricesWavenumberSolver:
         Returns:
             Solution with the same shape and sharding as ``rhs``.
         """
-        if len(rhs.devices()) > 1:
-            # Dispatch one JIT per local device (JAX async — XLA schedules
-            # them concurrently).  Each JIT is communication-free and closes
-            # over its own L/U slice already placed on that device.
-            results = [
-                self._local_solve_jits[d](rhs.addressable_data(d))
-                for d in range(jax.local_device_count())
-            ]
-            return jax.make_array_from_single_device_arrays(
-                rhs.shape, rhs.sharding, results
-            )
+        if len(jax.devices()) > 1:
+            try:
+                is_sharded_rhs = len(rhs.devices()) > 1
+            except jax.errors.ConcretizationTypeError:
+                is_sharded_rhs = False
+            if is_sharded_rhs:
+                # Dispatch one JIT per local device (JAX async — XLA schedules
+                # them concurrently).  Each JIT is communication-free and closes
+                # over its own L/U slice already placed on that device.
+                results = [
+                    self._local_solve_jits[d](rhs.addressable_data(d))
+                    for d in range(jax.local_device_count())
+                ]
+                return jax.make_array_from_single_device_arrays(
+                    rhs.shape, rhs.sharding, results
+                )
 
         return self._solve_jit(rhs)
 
