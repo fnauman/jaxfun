@@ -411,16 +411,21 @@ class TensorProductSpace:
         self,
         c: Array,
         N: tuple[int | None, ...] | None = None,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
     ) -> Array:
         """Backward transform.
 
         Args:
             c: Coefficient array.
             N: Optional per-axis counts (defaults each to space.num_quad_points).
+            kind: Mesh kind for evaluation; use ``"uniform"`` for output grids.
 
         Returns:
-            Array of backward transform values on quadrature mesh.
+            Array of backward transform values on the requested mesh.
         """
+        kind = MeshKind(kind)
+        if kind is not MeshKind.QUADRATURE:
+            return self.evaluate_mesh(c, kind=kind, N=N)
         N = tuple(
             self.basespaces[ax].num_quad_points if N is None else N[ax]
             for ax in range(len(self))

@@ -27,7 +27,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators import IMEXRK222, PDEIMEXRK
+from jaxfun.integrators import IMEXRK222, PDEIMEXRK, ars_stage_rhs
 from jaxfun.la.solvers import Biharmonic, Helmholtz
 
 type Velocity = tuple[Array, Array, Array]
@@ -280,44 +280,27 @@ class KMM:
 
         u_stage = state.u
         g_stage = state.g
-        nonlinear_u: list[Array] = []
-        nonlinear_g: list[Array] = []
-        nonlinear_v: list[Array] = []
-        nonlinear_w: list[Array] = []
-        linear_u: list[Array] = []
-        linear_g: list[Array] = []
-        linear_v: list[Array] = []
-        linear_w: list[Array] = []
+        base_rhs = (u0_rhs, g0_rhs, v00_rhs0, w00_rhs0)
+        nonlinear_history: list[tuple[Array, Array, Array, Array]] = []
+        linear_history: list[tuple[Array, Array, Array, Array]] = []
 
         for rk in range(steps):
             H = self.convection(KMMState(u=u_stage, g=g_stage))
-            Nu, Ng, Nv, Nw = self._nonlinear_rhs(H)
-            nonlinear_u.append(Nu)
-            nonlinear_g.append(Ng)
-            nonlinear_v.append(Nv)
-            nonlinear_w.append(Nw)
-
-            rhs_u = u0_rhs
-            rhs_g = g0_rhs
-            rhs_v = v00_rhs0
-            rhs_w = w00_rhs0
-            for j in range(rk + 1):
-                rhs_u = rhs_u + self.dt * b[rk + 1, j] * nonlinear_u[j]
-                rhs_g = rhs_g + self.dt * b[rk + 1, j] * nonlinear_g[j]
-                rhs_v = rhs_v + self.dt * b[rk + 1, j] * nonlinear_v[j]
-                rhs_w = rhs_w + self.dt * b[rk + 1, j] * nonlinear_w[j]
+            nonlinear_history.append(self._nonlinear_rhs(H))
 
             if rk > 0:
-                linear_u.append(self.Lu @ u_stage[0])
-                linear_g.append(self.Lg @ g_stage)
-                linear_v.append(self.L00 @ u_stage[1][:, 0, 0])
-                linear_w.append(self.L00 @ u_stage[2][:, 0, 0])
-                for j in range(rk):
-                    rhs_u = rhs_u + self.dt * a[rk + 1, j + 1] * linear_u[j]
-                    rhs_g = rhs_g + self.dt * a[rk + 1, j + 1] * linear_g[j]
-                    rhs_v = rhs_v + self.dt * a[rk + 1, j + 1] * linear_v[j]
-                    rhs_w = rhs_w + self.dt * a[rk + 1, j + 1] * linear_w[j]
+                linear_history.append(
+                    (
+                        self.Lu @ u_stage[0],
+                        self.Lg @ g_stage,
+                        self.L00 @ u_stage[1][:, 0, 0],
+                        self.L00 @ u_stage[2][:, 0, 0],
+                    )
+                )
 
+            rhs_u, rhs_g, rhs_v, rhs_w = ars_stage_rhs(
+                base_rhs, nonlinear_history, linear_history, a, b, self.dt, rk
+            )
             u0_new = self.Su.solve(self.TB.mask_nyquist(rhs_u))
             g_new = self.Sg.solve(self.TD.mask_nyquist(rhs_g))
             v00_new = self.S00.solve(rhs_v)

@@ -5,6 +5,7 @@ from .cnab2 import (
     cnab2_rhs as cnab2_rhs,
     scan_steps as scan_steps,
 )
+from .coupled import ars_stage_rhs as ars_stage_rhs
 from .etdrk4 import ETDRK4 as ETDRK4
 from .imex_rk import (
     IMEXRK011 as IMEXRK011,
