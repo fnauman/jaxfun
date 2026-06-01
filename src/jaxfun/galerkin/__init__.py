@@ -10,7 +10,9 @@ from . import (
     orthogonal as orthogonal,
 )
 from .arguments import (
+    Array as Array,
     JAXFunction as JAXFunction,
+    PhysicalArray as PhysicalArray,
     TestFunction as TestFunction,
     TrialFunction as TrialFunction,
 )

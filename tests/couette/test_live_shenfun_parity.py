@@ -1,13 +1,19 @@
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from examples.taylor_couette_linear_jax import CircularCouette, TaylorCouetteLinearJax
 from examples.taylor_couette_mri_jax import TaylorCouetteMRIJax
+from jaxfun import Domain
+from jaxfun.galerkin import FunctionSpace, TensorProduct
+from jaxfun.galerkin.Fourier import Fourier
+from jaxfun.galerkin.Legendre import Legendre
 from tests._parity import (
     tc_linear_eigenvalues,
     tc_linear_nonmodal,
     tc_mri_eigenvalues,
     tc_mri_nonmodal,
+    tc_radial_dealias_product,
 )
 
 pytestmark = pytest.mark.integration
@@ -67,3 +73,21 @@ def test_tc_mri_matches_live_shenfun_eigenvalues_and_nonmodal(magnetic_bc):
     for row, ref in zip(rows, ref_rows, strict=True):
         assert row["t"] == pytest.approx(ref["t"], abs=0.0)
         assert row["gain"] == pytest.approx(ref["gain"], rel=1.0e-8, abs=1.0e-8)
+
+
+def test_radial_polynomial_dealiasing_matches_live_shenfun_product():
+    n = 8
+    F = FunctionSpace(n, Fourier, domain=Domain(0.0, 2.0 * np.pi))
+    S = FunctionSpace(n, Legendre, domain=Domain(1.0, 2.0))
+    T = TensorProduct(F, S)
+    Tp = T.get_dealiased((1.5, 1.5))
+    u = jnp.zeros(T.num_dofs, dtype=complex)
+    v = jnp.zeros(T.num_dofs, dtype=complex)
+    u = u.at[0, 1].set(0.5).at[1, 2].set(0.75 + 0.25j)
+    v = v.at[0, 3].set(-0.4).at[1, 1].set(-0.2 + 0.1j)
+
+    h = Tp.forward(Tp.backward(u) * Tp.backward(v))
+
+    assert np.allclose(
+        h, tc_radial_dealias_product(n=n), rtol=1.0e-12, atol=1.0e-12
+    )

@@ -136,3 +136,44 @@ def tc_mri_nonmodal(
             """
         )
     )
+
+
+def tc_radial_dealias_product(*, n: int = 8) -> np.ndarray:
+    """Reference padded radial/Fourier product projected with shenfun."""
+    rows = run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from shenfun import (
+                Array,
+                Function,
+                FunctionSpace,
+                TensorProductSpace,
+                comm,
+            )
+            F = FunctionSpace({n}, 'F', dtype='D', domain=(0, 2*np.pi))
+            S = FunctionSpace({n}, 'L', domain=(1.0, 2.0))
+            T = TensorProductSpace(comm, (F, S), dtype='D')
+            Tp = T.get_dealiased((1.5, 1.5))
+            u = Function(T)
+            v = Function(T)
+            # Avoid the Fourier Nyquist mode; jaxfun masks it in solver products.
+            u[0, 1] = 0.5
+            u[1, 2] = 0.75 + 0.25j
+            v[0, 3] = -0.4
+            v[1, 1] = -0.2 + 0.1j
+            hp = Array(
+                Tp,
+                buffer=np.array(Tp.backward(u)) * np.array(Tp.backward(v)),
+            )
+            h = Tp.forward(hp)
+            print(json.dumps([
+                [[float(z.real), float(z.imag)] for z in row]
+                for row in np.asarray(h)
+            ]))
+            """
+        )
+    )
+    arr = np.asarray(rows, dtype=float)
+    return arr[..., 0] + 1j * arr[..., 1]

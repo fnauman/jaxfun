@@ -381,11 +381,11 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 - **Build:** `local_wavenumbers(scaled=True, broadcast=True)` giving the broadcast `K[i]` grids, and a helper `K_over_K2(K)` = `K[i+1]/where(K2==0,1,K2)` for the `compute_vw` reconstruction (guards the singular `(0,0)` mode).
 - **Accept:** `K` matches `shenfun`'s `TD.local_wavenumbers(scaled=True)`; `K_over_K2` finite everywhere and matches `ChannelFlow.py:168–171`.
 
-#### [T1.7] Physical `Array` wrapper dual to `JAXFunction` — *missing/M* · `galerkin/arguments.py`
+#### [T1.7] Physical `Array` wrapper dual to `JAXFunction` — *done/M* · `galerkin/arguments.py`
 - **Why:** `shenfun` distinguishes `Function` (spectral coefficients) from `Array` (physical-space values, with `.forward()`). KMM and TC build physical products as `Array`s then `forward` them.
-- **Build:** an `Array(space, values)` wrapper carrying its space and a `.forward() -> JAXFunction` (and `JAXFunction.backward() -> Array`, likely already present). Register as a pytree.
+- **Build:** implemented as `PhysicalArray`/`Array`, carrying physical values and its function space; `.forward()` returns a `JAXFunction`; `.coefficients()` exposes raw coefficients; registered as a pytree.
 - **Depends on:** T0.2.
-- **Accept:** round-trip `Array(T, f).forward().backward()` ≈ `f` to 1e-12; component-0 (biharmonic) and component-1 (Dirichlet) arrays match `shenfun` `Function(VectorSpace([TB,TD,TD]))` for the same physical field.
+- **Accept:** covered by `tests/galerkin/test_arguments_extras.py` for tensor/scalar round-trips and pytree restoration. Live vector-space parity remains a broader validation item.
 
 #### [T1.8] `get_dealiased` / padded forward–backward pair (3/2 rule) — *partial/L* · `orthogonal.py`,`Fourier.py`,`tensorproductspace.py`
 - **Why:** convection is dealiased on a 1.5×-padded grid. The per-axis padding *mechanics* exist (`Fourier.backward` mid-array zero-pad; polynomial `backward(c,N)` over-sampling) but there is **no `get_dealiased()` convenience** and no cached padded space.
@@ -557,10 +557,10 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 - **Depends on:** T1.8, T6.5.
 - **Accept:** nonlinear coefficients match `shenfun` for a seeded eigenmode to 1e-10.
 
-#### [T6.5] Radial polynomial dealiasing parity spike — *missing/M* · `orthogonal.py` (+ test)
+#### [T6.5] Radial polynomial dealiasing parity spike — *done/M* · `orthogonal.py` (+ test)
 - **Why (highest TC numerical risk):** TC pads the **radial polynomial** axis. `shenfun` zero-pads the *orthogonal* coefficients then re-applies the composite stencil; `jaxfun`'s polynomial `backward(c,N)` over-samples on a *finer Gauss mesh* — a *different* physical mesh. A product formed on `jaxfun`'s grid then truncated must still equal `shenfun`'s to round-off.
 - **Build:** a focused spike: form a quadratic product of band-limited radial fields both ways (`jaxfun` finer-Gauss vs `shenfun` padded-DCT-on-orthogonal-coeffs), truncate, compare. If they diverge, implement the coefficient-zero-pad-on-orthogonal-then-restencil path to match `shenfun`.
-- **Accept:** dealiased radial product matches `shenfun` `T0.get_dealiased((1.5,1.5))` to 1e-12.
+- **Accept:** `tests/couette/test_live_shenfun_parity.py::test_radial_polynomial_dealiasing_matches_live_shenfun_product` matches live `shenfun` to 1e-12 away from the full-complex Fourier Nyquist convention; solver products mask Nyquist.
 
 #### [T6.6] TC DNS example + eigenmode-seeded parity — *missing/M* · `examples/taylor_couette_dns_jax.py`
 - **Build:** the `AxisymmetricTCDNS` analog assembling `Limp`/`Lexp` (T6.1/T6.2), CNAB2 stepping (T6.3), cylindrical nonlinear (T6.4), `r`-weighted diagnostics (T6.7). Seed the leading eigenmode from T5.3 to validate the growth rate.
@@ -576,12 +576,12 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 
 ### M7 — I/O, diagnostics cadence & multi-backend
 
-#### [T7.1] HDF5 field output + checkpoint/restart + XDMF — *missing/M* · `src/jaxfun/io/__init__.py`
-- **Build:** an optional-`h5py` writer: physical-field snapshots on a uniform mesh (`backward(mesh='uniform')`, T1.9), spectral-coefficient checkpoints (pytree → HDF5 datasets keyed by field/step + `t/tstep` attrs, mirroring `shenfun`'s nested `{step:{field:[array]}}`), restart that rebuilds derived fields (`g_`) analytically, and a `generate_xdmf` helper. Single-device (no MPI-IO). Keep all I/O on the host outside jitted regions.
-- **Accept:** write→read round-trip exact; checkpoint→restart continues bit-identically for 20 steps; an HDF5 snapshot matches `shenfun`'s `file_u` on the same uniform mesh to 1e-12.
+#### [T7.1] HDF5 field output + checkpoint/restart + XDMF — *done/M* · `src/jaxfun/io/__init__.py`
+- **Build:** implemented optional `h5py` writer under the `io` extra: uniform snapshots from `JAXFunction`/physical `Array`/raw coefficient+space pairs, exact pytree checkpoints with `t/tstep` attrs, `read_checkpoint`, and `generate_xdmf`. Single-device host IO only.
+- **Accept:** `tests/io/test_hdf5.py` covers exact write→read, bit-identical restart continuation for 20 steps, uniform snapshot output, and XDMF generation. Live `shenfun` file-output parity remains unclaimed.
 
-#### [T7.2] Host-callback diagnostic/IO cadence — *missing item* · `examples/`
-- **Build:** a cadence mechanism (`moderror`/`modsave`/`checkevery`) that runs diagnostics/IO via `jax.debug.callback`/host callbacks at intervals **without** breaking the jitted `fori_loop` (keep device→host transfers out of the hot loop; e.g. step in jitted blocks of `N`, transfer between blocks). Optional cooperative `killshenfun`-style graceful stop.
+#### [T7.2] Host-callback diagnostic/IO cadence — *partial/M* · `src/jaxfun/io/__init__.py`, `examples/`
+- **Build:** generic `Cadence` + `run_with_cadence(advance, state, ...)` runs compiled stepping blocks and invokes diagnostics/snapshot/checkpoint callbacks on exact host-side cadence boundaries. Example CLI wiring and graceful-stop behavior are still open.
 - **Accept:** a 200-step run with `moderror=10` produces diagnostics identical to a run that transfers every step, with no recompilation per interval.
 
 #### [T7.3] MPI→sharding: remove rank gating, sharded reductions, multi-device parity — *partial/L* · `examples/`, `sharding.py`
@@ -741,6 +741,8 @@ for each (m, k_z):
 
 This part supersedes Part I's status claims. It is based on a full audit of branch `couette-jax-implementation`. **Golden rule for this part:** an item marked *done/partial* is **internally self-consistent only**; the phrase "**not shenfun-validated**" means no test compares it to a live `shenfun` run (see the M0b blocker). Do not silently upgrade "done" to "parity-validated" downstream.
 
+> **Implementation update (2026-06-01):** after this audit, the branch added the reusable CNAB2/coupled-IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, physical `Array`, optional HDF5/checkpoint/XDMF IO, host-side cadence runner, differentiability checks, and live `shenfun` parity coverage for TC linear/MRI and the radial dealiased product. Older status tables below are retained for context where not explicitly updated.
+
 ## 11. Status review
 
 ### 11.1 Implemented & internally tested — *NOT shenfun-validated*
@@ -763,42 +765,30 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 ### 11.2 Partial — finish these (grouped)
 
 **A. Refactor inline example code into reusable library modules** (the MHD/3D quadrants must *reuse*, not re-inline):
-- **T3.4** coupled multi-equation IMEX driver → `integrators/coupled.py` (currently hand-rolled in `channelflow_kmm.py`).
-- **T6.3** CNAB2 → `integrators/cnab2.py` (inline in TC DNS example; also the time loop is an **un-jitted Python `for`-loop** — violates engineering rule §4.5; use `lax.scan`).
-- **T2.2** named `Helmholtz`/`Biharmonic` constructors → `la/solvers.py` (KMM hand-assembles).
-- **T1.2** cached `Project` object (only per-call `project()` exists, re-factorizes every call).
-- **T6.7** r-weighted diagnostics → `diagnostics.py`; **T1.6** `K_over_K2` helper → `tensorproductspace.py` (inline in `channelflow_kmm.py:105`).
+- **Done after audit:** T3.4 coupled multi-equation IMEX stage helper (`integrators/coupled.py`), T6.3 reusable CNAB2 stepping (`integrators/cnab2.py`), T2.2 named `Helmholtz`/`Biharmonic` constructors (`la/solvers.py`), T1.2 cached `Project`, and T1.6 `K_over_K2`.
+- **Still open:** T6.7 should be factored into a reusable `diagnostics.py` module; current TC examples carry the r-weighted diagnostics inline.
 
-**B. Validation gaps** (all blocked on M0b): T1.1, T1.5, T3.2, T3.3, T4.2–T4.5, T4.7, T4.8, T5.3, T5.4, T6.2, T6.4, T6.6 — implemented but compared only to self-captured literals / invariants. Need live `shenfun` coefficient parity.
+**B. Validation gaps:** live `shenfun` parity now covers TC linear/MRI stability and the radial dealiased product. Broader coefficient-level parity for PCF and DNS trajectories remains open for T1.1, T1.5, T3.2, T3.3, T4.2–T4.5, T4.7, T4.8, T5.3, T5.4, T6.2, T6.4, and T6.6.
 
 **C. Correctness gaps in the batched solver tier:**
 - **T2.1** pivoting and **T2.3** per-mode constraint pinning exist **only** on the single-`DiaMatrix`/`PinnedSystem` path — **NOT** plumbed into the vmapped `TPMatricesWavenumberSolver` (no `pivot`/`constraints` kwarg) that KMM/biharmonic/TC actually use. KMM/TC pin ad hoc.
 - **T3.1** `build_implicit_operator(c,dt)` / `apply_linear_scalar_product` are not the named `base.py` API; each IMEX scheme re-derives `S=M−c·dt·L` inline.
-- **T1.8/T6.5** radial polynomial dealiasing over-samples Gauss points (a *different* physical mesh than `shenfun`'s padded-DCT) — unvalidated, and the TC DNS default `dealias=1.5` exercises it.
+- **T1.8/T6.5** radial polynomial dealiasing now has a live `shenfun` regression for a padded radial/Fourier quadratic product. The remaining convention caveat is the full-complex Fourier Nyquist mode; solver nonlinear products call `mask_nyquist`.
 
 ### 11.3 Missing — not started
 
 | Plan ref | Item | Note |
 |---|---|---|
-| **T0.1** | float64 at library import | `src/jaxfun/__init__.py` has no `jax_enable_x64`; x64 gated on conftest `--float64` (default off) → **all parity tests skip by default**. *Top blocker.* |
-| **T0.4** | live `shenfun` parity harness (`tests/_parity.py`, `compare_to_shenfun`) | absent; no test imports `shenfun` |
-| T1.2 | cached `Project` class | only per-call `project()` |
-| T1.7 | physical `Array` wrapper | examples pass bare arrays |
-| T1.9 | `backward(mesh='uniform')` | needed for I/O |
-| T2.2 | named Helmholtz/Biharmonic solvers | `la/solvers.py` absent |
-| T3.4 | coupled IMEX driver | `integrators/coupled.py` absent |
-| T4.6 | `compute_pressure` (Neumann pressure recovery) | optional/deferred |
-| T6.5 | radial dealiasing parity spike | unaddressed numerical risk |
-| T7.1–T7.3 | HDF5/checkpoint/XDMF, diagnostic cadence, sharding parity for couette | unstarted |
-| §8 | differentiability test (`jax.grad` of a diagnostic) | **zero coverage** of the headline "differentiable solver" goal |
+| T4.6 | `compute_pressure` (Neumann pressure recovery) | optional/deferred; pressure-free KMM diagnostics do not require it |
+| T6.7 | reusable `diagnostics.py` for r-weighted TC diagnostics | examples implement diagnostics inline |
+| T7.2 | example wiring for host-side diagnostic/IO cadence | generic `jaxfun.io.Cadence`/`run_with_cadence` exists; examples still use direct solve loops |
+| T7.3 | sharding parity for Couette workflows | core tensor transforms have SPMD support; Couette-specific multi-device parity remains to validate |
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
-1. **Validation illusion (BLOCKER):** x64 off by default + `@skipif(not x64)` parity tests ⇒ green CI with zero parity. → T0.1b + T0.4b.
-2. **`IMEXRK3` unusable in KMM:** it is the documented KMM default but `channelflow_kmm.py:71-72` rejects non-`PDEIMEXRK` steppers (IMEXRK3 is single-equation `BaseIntegrator`). → fix in T3.4 (coupled driver supports per-stage implicit factors) or make KMM accept it.
-3. **MRI eigenvalue ordering unstable:** `la/eig.py` `argsort(-w.real)` has no tiebreak ⇒ both MRI parity tests fail under `--float64` (physics correct to 1e-11, only Im-sign order differs). → deterministic secondary Im sort key (T8.0).
-4. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` uses `vmap(_lu_banded_no_pivot_kernel)`; the indefinite Chebyshev-biharmonic and 3D saddle blocks may need pivoting. **Validating/fixing this is a HARD prerequisite of the 3D quadrants (M9/T9.2).**
-5. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
+1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` uses `vmap(_lu_banded_no_pivot_kernel)`; the indefinite Chebyshev-biharmonic and 3D saddle blocks may need pivoting. **Validating/fixing this remains a HARD prerequisite of the 3D quadrants (M9/T9.2).**
+2. **Couette sharding parity gap:** core transforms support SPMD, but Couette end-to-end parity on multiple devices is still not a completed acceptance gate.
+3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
 ### 11.5 Corrections to Part I
 

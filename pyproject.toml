@@ -32,6 +32,9 @@ dependencies = [
 cuda13 = [
   "jax[cuda13]>=0.10.1",
 ]
+io = [
+  "h5py>=3.16.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = [
