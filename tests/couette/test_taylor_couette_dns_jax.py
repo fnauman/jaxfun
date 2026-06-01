@@ -2,7 +2,12 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
+from examples.taylor_couette_dns_jax import (
+    AxisymmetricTCDNSJax,
+    CircularCouette,
+    TaylorCouetteDNSJax,
+    _require_resolved_m,
+)
 
 
 def test_tc_dns_zero_state_stays_zero() -> None:
@@ -44,3 +49,61 @@ def test_tc_dns_eigenmode_growth_matches_linear_solver_x64() -> None:
     assert jnp.allclose(rate, eig.real, rtol=1.0e-7, atol=1.0e-7)
     assert float(solver.continuity_residual_l2(out)) < 1.0e-18
     assert abs(complex(out.p[0, 0])) < 1.0e-18
+
+
+def test_tc_dns_3d_zero_state_stays_zero() -> None:
+    solver = TaylorCouetteDNSJax(
+        CircularCouette(),
+        nu=0.002,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state = solver.step(solver.zero_state())
+
+    assert all(jnp.allclose(component, 0.0, atol=1.0e-12) for component in state.u)
+    assert jnp.allclose(state.p, 0.0, atol=1.0e-12)
+    assert float(solver.continuity_residual_l2(state)) < 1.0e-12
+
+
+def test_tc_dns_3d_azimuthal_derivative_and_resolution_guard() -> None:
+    solver = TaylorCouetteDNSJax(
+        CircularCouette(),
+        nu=0.002,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    coeff = jnp.zeros(solver.TD.num_dofs, dtype=complex).at[1, 0, 0].set(1.0)
+    value = solver.TD.backward(coeff)
+    dtheta = solver.TD.backward_primitive(coeff, (1, 0, 0))
+
+    assert jnp.max(jnp.abs(dtheta - 1j * value)) < 1.0e-12
+    with pytest.raises(ValueError):
+        _require_resolved_m(2, solver.Ntheta)
+
+
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="3D TC DNS growth-rate validation uses x64",
+)
+def test_tc_dns_3d_eigenmode_growth_matches_linear_solver_x64() -> None:
+    solver = TaylorCouetteDNSJax(
+        CircularCouette(),
+        nu=0.002,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state, eig = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1.0e-8)
+    rate, out = solver.growth_rate(state, steps=3)
+
+    assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)
+    assert float(solver.continuity_residual_l2(out)) < 1.0e-18
+    assert abs(complex(out.p[0, 0, 0])) < 1.0e-18
