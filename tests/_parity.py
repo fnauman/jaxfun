@@ -177,3 +177,89 @@ def tc_radial_dealias_product(*, n: int = 8) -> np.ndarray:
     )
     arr = np.asarray(rows, dtype=float)
     return arr[..., 0] + 1j * arr[..., 1]
+
+
+def pcf_fluctuation_reference(
+    *,
+    steps: tuple[int, ...] = (1, 5, 50),
+    n: tuple[int, int, int] = (9, 8, 8),
+    dt: float = 1.0e-3,
+    re: float = 600.0,
+    perturbation_amplitude: float = 0.05,
+    family: str = "L",
+    include_velocity: bool = False,
+) -> list[dict]:
+    """Run the live shenfun PCF fluctuation reference and return parity rows."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from pcf_fluctuations_corrected import PlaneCouetteFluctuation
+            from shenfun import inner
+
+            solver = PlaneCouetteFluctuation(
+                N={tuple(n)!r},
+                family={family!r},
+                dt={dt!r},
+                Re={re!r},
+                perturbation_amplitude={perturbation_amplitude!r},
+                padding_factor=(1, 1.5, 1.5),
+                modplot=-1,
+                modsave=10**9,
+                moderror=10**9,
+                modanalysis=10**9,
+                modspectra=10**9,
+                modssp=10**9,
+                checkpoint=10**9,
+                enable_live_plots=False,
+                save_plots=False,
+                save_analysis=False,
+                save_spectra=False,
+                save_ssp=False,
+                timestepper='IMEXRK222',
+                filename='/tmp/jaxfun_pcf_parity',
+            )
+            t, tstep = solver.initialize(False)
+
+            def diagnostics(step):
+                ubp = solver.u_.backward(solver.ub)
+                ubt = solver.total_velocity_physical_from(ubp)
+                divu = solver.divu().backward()
+                dvdx = solver.dvdx().backward()
+                row = {{
+                    'steps': int(step),
+                    'Epert': float(
+                        inner(1, ubp[0]*ubp[0])
+                        + inner(1, ubp[1]*ubp[1])
+                        + inner(1, ubp[2]*ubp[2])
+                    ),
+                    'Etot': float(
+                        inner(1, ubt[0]*ubt[0])
+                        + inner(1, ubt[1]*ubt[1])
+                        + inner(1, ubt[2]*ubt[2])
+                    ),
+                    'divL2': float(np.sqrt(inner(1, divu*divu))),
+                    'u_top': float(np.mean(ubt[1][-1, :, :])),
+                    'u_bot': float(np.mean(ubt[1][0, :, :])),
+                    'mean_shear': float(np.mean(dvdx + solver.dUb_dx)),
+                }}
+                if {include_velocity!r}:
+                    row['velocity'] = [
+                        np.asarray(ubp[i], dtype=float).tolist()
+                        for i in range(3)
+                    ]
+                return row
+
+            rows = []
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                solver.solve(t=t, tstep=tstep, end_time=target*solver.dt)
+                t = target*solver.dt
+                tstep = target
+                rows.append(diagnostics(target))
+            print(json.dumps(rows))
+            """
+        )
+    )

@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.taylor_couette_linear_jax import CircularCouette, TaylorCouetteLinearJax
 from examples.taylor_couette_mri_jax import TaylorCouetteMRIJax
 from jaxfun import Domain
@@ -9,6 +10,7 @@ from jaxfun.galerkin import FunctionSpace, TensorProduct
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
 from tests._parity import (
+    pcf_fluctuation_reference,
     tc_linear_eigenvalues,
     tc_linear_nonmodal,
     tc_mri_eigenvalues,
@@ -22,6 +24,36 @@ pytestmark = pytest.mark.integration
 def _keplerian_base():
     eta = 0.5
     return CircularCouette(1.0, 2.0, 1.0, eta**1.5)
+
+
+def test_pcf_fluctuation_matches_live_shenfun_diagnostics_and_velocity():
+    solver = PlaneCouetteFluctuationJax(
+        N=(9, 8, 8),
+        family="L",
+        dt=1.0e-3,
+        perturbation_amplitude=0.05,
+    )
+    state0 = solver.initial_state()
+    references = pcf_fluctuation_reference(include_velocity=True)
+
+    for reference in references:
+        state = solver.solve(state0, reference["steps"])
+        diag = solver.diagnostics(state)
+        for key in ("Epert", "Etot", "u_top", "u_bot", "mean_shear"):
+            assert float(diag[key]) == pytest.approx(
+                reference[key], rel=1.0e-10, abs=1.0e-12
+            )
+        assert float(diag["divL2"]) == pytest.approx(
+            reference["divL2"], rel=0.0, abs=5.0e-15
+        )
+
+        velocity = solver._backward_velocity(state.u)
+        for got, expected in zip(velocity, reference["velocity"], strict=True):
+            got_np = np.asarray(got)
+            assert np.max(np.abs(got_np.imag)) < 1.0e-12
+            assert np.allclose(
+                got_np.real, np.asarray(expected), rtol=1.0e-8, atol=1.0e-10
+            )
 
 
 def test_tc_linear_matches_live_shenfun_eigenvalues_and_nonmodal():
