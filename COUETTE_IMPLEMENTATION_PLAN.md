@@ -7,7 +7,21 @@
 Paths in this document are relative to the workspace root `/home/nauman/cfd/shenfun_jaxfun_spectralDNS/`:
 - `shenfun/` — the reference implementation (CPU/NumPy/MPI). **Read-only ground truth.**
 - `couette/` — the seven working `shenfun` scripts we must reproduce.
-- `jaxfun/` — the JAX reimplementation we are extending. **All new code goes here.**
+- `jaxfun/` — the JAX reimplementation we are extending. **All new code goes here.** (Active work is on branch `couette-jax-implementation` in `fork_jaxfun/`.)
+
+---
+
+> ## ⚠️ STATUS UPDATE — 2026-06-01 (READ FIRST)
+>
+> Implementation is **underway** (~14k lines on branch `couette-jax-implementation`). A full audit is in **Part II (§11–§12)** at the end of this document. Parts I (§1–§10) remain the architectural reference; Part II records what is built and adds the missing scope. Headlines:
+>
+> - **All seven scripts have `*_jax.py` ports**; **22/22 jaxfun unit tests + 7 solver smoke-tests pass** (CPU, float64). Implemented: IMEX-RK integrators (T3.2/T3.3), dense `eig` (T2.4), `CoupledSpace` + truncated pressure (T6.1), `integrate()` (T1.1), ragged vectors, `get_dealiased`, `mask_nyquist`, `Dx`, the BC adapter (T0.5), and runnable KMM-PCF + axisymmetric-hydro-TC-DNS solvers.
+> - **⚠️ NOTHING is validated against `shenfun`.** No test imports `shenfun`; the six `matches_shenfun_reference` tests compare to **self-captured literals** and are `@skipif(not x64)` — and **x64 is OFF by default**, so plain `uv run pytest` **SKIPS every parity test and still reports green**. Read every "done/partial" below as *internally self-consistent, NOT parity-validated*.
+> - **⚠️ Taylor–Couette DNS = 1 of 4 quadrants only** (axisymmetric-hydro). 3D-hydro, axisymmetric-MHD, and 3D-MHD are absent in jax — the `shenfun` reference has all four classes. New milestones **M9–M13 (§12)** add them.
+> - **⚠️ `IMEXRK3` (the documented KMM default) is rejected by the KMM driver** (`channelflow_kmm.py` only accepts `PDEIMEXRK` subclasses). The coupled multi-equation driver (T3.4), cached `Project` (T1.2), named Helmholtz/Biharmonic solvers (T2.2), and CNAB2 (T6.3) are **inlined in examples, not reusable library modules**.
+> - **Decisions taken since Part I:** the **full-complex Fourier** option (T0.3 option B) is in use (see `docs/couette_fourier_layout.md`); `couette/_linear_analysis.py` and `couette/_pcf_linear.py` now **exist** (a prior "missing file" note is stale) and ship a modal+non-modal stability layer that has **no jax port and was unscoped** — added as **M8 (§12)**.
+>
+> **Do §12 "M0b" (float64-at-import + a live `shenfun` parity harness) FIRST.** Until it lands, no parity claim anywhere in this document is meaningful.
 
 ---
 
@@ -718,4 +732,237 @@ for each (m, k_z):
 
 ---
 
-*End of plan. Total scope: 41 gaps across 8 milestones. First end-to-end wins: Taylor–Couette linear stability (M0+M1+M2-eig+M5) and Plane-Couette fluctuations (M0→M4). The Taylor–Couette DNS coupled saddle-point solver is the deepest chain and lands last.*
+*End of Part I. Part II (below) records implementation status as of 2026-06-01 and extends the plan to the four Taylor–Couette DNS quadrants and the stability-analysis layer.*
+
+---
+---
+
+# Part II — Status Review & Extended Plan (2026-06-01)
+
+This part supersedes Part I's status claims. It is based on a full audit of branch `couette-jax-implementation`. **Golden rule for this part:** an item marked *done/partial* is **internally self-consistent only**; the phrase "**not shenfun-validated**" means no test compares it to a live `shenfun` run (see the M0b blocker). Do not silently upgrade "done" to "parity-validated" downstream.
+
+## 11. Status review
+
+### 11.1 Implemented & internally tested — *NOT shenfun-validated*
+
+| Plan ref | Item | Evidence | Caveat |
+|---|---|---|---|
+| T0.5 | tuple→dict BC adapter (`bc=(0,0,0,0)`/`(0,0)`) + biharmonic | `galerkin/functionspace.py`; `test_functionspace_couette_compat.py` | No stencil-equality check vs `shenfun` `ShenBiharmonic`/`ShenDirichlet`; a silent N/D 4-tuple transposition would still pass. Add the 1e-13 stencil cross-check. |
+| T1.4 | `Dx(u, axis, k)` wrapper | `operators.py`; `test_dx_operator.py` | matrices not compared to `shenfun` |
+| T2.4 | dense `generalized_eig` + singular-`M` filtering | `la/eig.py`; `test_eig.py` | only a 2×2 toy test; `finite_cap=1e6` here vs reference `FINITE_CAP=1e8` — **keep these two caps distinct & documented** (modal filter vs non-modal cap) |
+| T5.1 | radial symbol + explicit `1/r` form assembly | `taylor_couette_linear_jax.py` | — |
+| T5.2 | dense block extraction (`.diags().toarray()` analog) | `la/matrix.py` todense | — |
+| T6.1 | mixed `CoupledSpace` + truncated-orthogonal pressure (`P_N/P_{N-2}`) | `tensorproductspace.py`; `test_coupled_space_tc_dns.py` | — |
+
+**Runnable solver examples** (correct-looking, smoke/self-consistency tested, **not** `shenfun`-parity):
+- **KMM PCF** (`channelflow_kmm.py`, `pcf_fluctuations_jax.py`): real biharmonic-`u` + Helmholtz-`g`, vmapped per-mode banded LU, `compute_vw`, base-flow convection. Weak divergence `divL2 ≈ 3e-16` (this is the Galerkin continuity row, pinned to roundoff by construction — *not* a strong-accuracy signal).
+- **PCF-MHD** (`pcf_mhd_jax.py`, `pcf_mhd_mri_shearpy_jax.py`): A-diffusion + compatible-space curl projections; `divB ≈ 2e-16` (weak). MRI stresses assert only `isfinite`.
+- **Axisymmetric-hydro TC DNS** (`taylor_couette_dns_jax.py`): CNAB2 + per-axial-mode vmapped saddle solve + cylindrical nonlinear + r-weighted energy. **Strong** pointwise `div_linf ≈ 4e-9` (not machine precision). Validated only against the port's *own* jax linear eigenmode (near-tautological), not `shenfun`.
+- **TC linear** (`taylor_couette_linear_jax.py`) and **TC MRI** (`taylor_couette_mri_jax.py`) eigensolvers: conducting + insulating Bessel BCs; one eigenvalue tuple checked vs a frozen literal.
+
+### 11.2 Partial — finish these (grouped)
+
+**A. Refactor inline example code into reusable library modules** (the MHD/3D quadrants must *reuse*, not re-inline):
+- **T3.4** coupled multi-equation IMEX driver → `integrators/coupled.py` (currently hand-rolled in `channelflow_kmm.py`).
+- **T6.3** CNAB2 → `integrators/cnab2.py` (inline in TC DNS example; also the time loop is an **un-jitted Python `for`-loop** — violates engineering rule §4.5; use `lax.scan`).
+- **T2.2** named `Helmholtz`/`Biharmonic` constructors → `la/solvers.py` (KMM hand-assembles).
+- **T1.2** cached `Project` object (only per-call `project()` exists, re-factorizes every call).
+- **T6.7** r-weighted diagnostics → `diagnostics.py`; **T1.6** `K_over_K2` helper → `tensorproductspace.py` (inline in `channelflow_kmm.py:105`).
+
+**B. Validation gaps** (all blocked on M0b): T1.1, T1.5, T3.2, T3.3, T4.2–T4.5, T4.7, T4.8, T5.3, T5.4, T6.2, T6.4, T6.6 — implemented but compared only to self-captured literals / invariants. Need live `shenfun` coefficient parity.
+
+**C. Correctness gaps in the batched solver tier:**
+- **T2.1** pivoting and **T2.3** per-mode constraint pinning exist **only** on the single-`DiaMatrix`/`PinnedSystem` path — **NOT** plumbed into the vmapped `TPMatricesWavenumberSolver` (no `pivot`/`constraints` kwarg) that KMM/biharmonic/TC actually use. KMM/TC pin ad hoc.
+- **T3.1** `build_implicit_operator(c,dt)` / `apply_linear_scalar_product` are not the named `base.py` API; each IMEX scheme re-derives `S=M−c·dt·L` inline.
+- **T1.8/T6.5** radial polynomial dealiasing over-samples Gauss points (a *different* physical mesh than `shenfun`'s padded-DCT) — unvalidated, and the TC DNS default `dealias=1.5` exercises it.
+
+### 11.3 Missing — not started
+
+| Plan ref | Item | Note |
+|---|---|---|
+| **T0.1** | float64 at library import | `src/jaxfun/__init__.py` has no `jax_enable_x64`; x64 gated on conftest `--float64` (default off) → **all parity tests skip by default**. *Top blocker.* |
+| **T0.4** | live `shenfun` parity harness (`tests/_parity.py`, `compare_to_shenfun`) | absent; no test imports `shenfun` |
+| T1.2 | cached `Project` class | only per-call `project()` |
+| T1.7 | physical `Array` wrapper | examples pass bare arrays |
+| T1.9 | `backward(mesh='uniform')` | needed for I/O |
+| T2.2 | named Helmholtz/Biharmonic solvers | `la/solvers.py` absent |
+| T3.4 | coupled IMEX driver | `integrators/coupled.py` absent |
+| T4.6 | `compute_pressure` (Neumann pressure recovery) | optional/deferred |
+| T6.5 | radial dealiasing parity spike | unaddressed numerical risk |
+| T7.1–T7.3 | HDF5/checkpoint/XDMF, diagnostic cadence, sharding parity for couette | unstarted |
+| §8 | differentiability test (`jax.grad` of a diagnostic) | **zero coverage** of the headline "differentiable solver" goal |
+
+### 11.4 Known correctness bugs / risks (fix early)
+
+1. **Validation illusion (BLOCKER):** x64 off by default + `@skipif(not x64)` parity tests ⇒ green CI with zero parity. → T0.1b + T0.4b.
+2. **`IMEXRK3` unusable in KMM:** it is the documented KMM default but `channelflow_kmm.py:71-72` rejects non-`PDEIMEXRK` steppers (IMEXRK3 is single-equation `BaseIntegrator`). → fix in T3.4 (coupled driver supports per-stage implicit factors) or make KMM accept it.
+3. **MRI eigenvalue ordering unstable:** `la/eig.py` `argsort(-w.real)` has no tiebreak ⇒ both MRI parity tests fail under `--float64` (physics correct to 1e-11, only Im-sign order differs). → deterministic secondary Im sort key (T8.0).
+4. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` uses `vmap(_lu_banded_no_pivot_kernel)`; the indefinite Chebyshev-biharmonic and 3D saddle blocks may need pivoting. **Validating/fixing this is a HARD prerequisite of the 3D quadrants (M9/T9.2).**
+5. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
+
+### 11.5 Corrections to Part I
+
+- **T0.3 decided → full-complex Fourier (option B).** `jaxfun` Fourier uses single-axis `jnp.fft.fft`; `mask_nyquist`, K-scaling, the `(0,0)` mode, and the saddle solve all assume it. The documented rfft-layout parity mapping for comparing to `shenfun`'s real-`z` half-spectrum is still owed (`docs/couette_fourier_layout.md`).
+- **`couette/_linear_analysis.py` EXISTS** (not missing): `FINITE_CAP=1e8`, `finite_eigensystem`, `transient_growth_from_eigs` (SVD-of-propagator energy-norm growth), `parse_times`, `print_*`. `couette/_pcf_linear.py` exists (`PlaneCouetteLinear`, `energy_matrix(kind)`, `nonmodal_growth`). These define a **stability-analysis layer with no jax port** → **M8**.
+- **§5 master gap map:** mark items 5, 9, 18, 30, 32, 35 (T0.5, T1.4, T2.4, T5.1, T5.2, T6.1) as **present (internally tested, not shenfun-validated)**.
+- **§1.2 / §6 / §9:** script 7 (`taylor_couette_dns.py`) is **four** reference classes, not one — split M6 and add the three missing quadrants (§12).
+
+---
+
+## 12. Extended milestones
+
+### 12.0 Scope: the 2×2 Taylor–Couette DNS matrix
+
+The `shenfun` reference defines **four** DNS classes; the jax port has **only the top-left**:
+
+| | **Hydrodynamic** | **MHD (MRI)** |
+|---|---|---|
+| **Axisymmetric** (`m=0`) | `AxisymmetricTCDNS` (ref :91) — **PORTED** (`AxisymmetricTCDNSJax`) | `AxisymmetricMRIDNS` (ref :788) — **M12** |
+| **3D** (`m≠0`) | `TaylorCouetteDNS` (ref :487) — **M10** | `TaylorCouetteMRIDNS` (ref :1196) — **M13** |
+
+Two **shared prerequisites** keep the four quadrants from duplicating work:
+- **M9 — azimuthal Fourier (`m≠0`) machinery** + two-Fourier-axis per-`(m,kz)` block solve → shared by **M10** and **M13**.
+- **M11 — magnetic induction/Lorentz/EMF machinery** (primitive `b`, imposed axial `B0`, total pressure `Π=p+B0·b_z`, **conducting** walls) → shared by **M12** and **M13**.
+
+**Dependency edges:** M13 = M9 ∪ M11. M10 needs M9; M12 needs M11; both need the finished axisymmetric-hydro substrate (M6) + CNAB2 module (T6.3).
+
+**Out of scope (do not build):** *insulating-wall MHD DNS*. The `shenfun` reference MHD **DNS** classes are conducting-wall only (`b_r=0` Dirichlet, `b_θ` Robin `d(r·b_θ)/dr=0`, `b_z` Neumann). The `--magnetic-bc insulating` flag routes to the **linear** MRI eigensolver (`m=0` only), which is already ported (T5.4). Building an insulating DNS path is wasted effort.
+
+> All Part-I tasks (T*.b excepted) keep their original IDs. New tasks use the milestone's number. Every new quadrant/analysis deliverable **must carry an x64 eigenmode-growth (or live-`shenfun`-coefficient) PARITY test, not a smoke test** — and those become meaningful only after M0b lands.
+
+---
+
+### M0b — Foundation hardening (DO FIRST; gates every parity claim)
+
+**[T0.1b] Enable float64 at import — *S*** · `src/jaxfun/__init__.py`, `tests/conftest.py`
+- **What:** add `jax.config.update("jax_enable_x64", True)` at the top of `src/jaxfun/__init__.py` (before any array creation) with a warn-if-already-x32 guard; **remove** the conftest `--float64` gating so x64 is default. **Where:** library init + conftest + a new x64 regression test.
+- **Accept:** `import jaxfun; jnp.zeros(1).dtype == float64`; a space's quadrature points are float64; default `uv run pytest` no longer skips the couette parity tests; **and the FULL suite (not just couette) is green at x64** (guard the ~692 generic tests currently running at float32/2e-6 against dtype-sensitive regressions).
+
+**[T0.4b] Live `shenfun` parity harness — *L*** · `tests/_parity.py` (new) + rewire `tests/couette/`
+- **What:** a deterministic IC builder reproducing script-1's field, and `compare_to_shenfun(jax_solver, shen_solver, steps, fields, tol)` running **both** solvers from the same IC (shenfun on CPU via a `_load_shenfun_demo`-style shim) comparing `u_hat` coefficient arrays + the six diagnostics after 1/5/50 steps. Replace the six hardcoded golden literals with live or provenance-documented references. **Depends:** T0.1b. **shenfun ref:** §8; `couette/pcf_fluctuations_corrected.py`.
+- **Accept:** runs end-to-end on a viscous-decay case and on PCF at 1/5/50 `IMEXRK222` steps; PCF `u_hat` matches `shenfun` to **1e-8** and the six diagnostics to **1e-10**; TC linear/MRI eigenvalues match a live `scipy.linalg.eig` `shenfun` run to **1e-8/1e-6** with deterministic conjugate-pair ordering (consumes T8.0).
+
+**[T0.4c] Differentiability smoke test — *M*** · `tests/couette/`
+- **What:** `jax.grad`/`value_and_grad` of a scalar diagnostic (final `Epert`) w.r.t. a control (`U_wall`/`Re`/IC amplitude) for one PCF and one axisymmetric-TC case. **Depends:** T0.1b.
+- **Accept:** gradient is finite and FD-consistent to a few digits for both cases (the headline differentiable-solver goal; currently zero coverage).
+
+---
+
+### M8 — Stability-analysis layer: modal eig + non-modal transient growth (PCF & TC, hydro & MHD)
+
+*Rationale:* the reference ships `couette/_linear_analysis.py` (SVD-of-propagator transient growth) and `couette/_pcf_linear.py` (energy-norm choice); the jax side has only modal `eig`. *Depends:* M2 (T2.4), M5. **Note:** M8 *code* depends only on M2/M5, but M8 *acceptance* depends on T0.4b (live reference) and on `couette/_linear_analysis.py` importing cleanly in the venv.
+
+**[T8.0] Shared jax linear-analysis primitives — *M*** · `la/eig.py` (extend) + `la/__init__.py`
+- **What:** `finite_eigensystem(L,M,finite_cap)->(w,V)` (finite eigenpairs, descending growth, **deterministic secondary Im sort key** — fixes the MRI ordering bug); `transient_growth_from_eigs(evals,evecs,metric,times)` = largest singular value of the metric-weighted modal propagator `V·exp(Λt)·a` with gauge/null-direction removal; `parse_times`. Reconcile `FINITE_CAP=1e8` for the non-modal cap while keeping the `1e6` modal-filter default **documented and distinct**. **shenfun ref:** `couette/_linear_analysis.py:15-87`.
+- **Accept:** `finite_eigensystem` eigenvalues match `couette/_linear_analysis.finite_eigensystem` elementwise to 1e-12 with stable conjugate-pair order; `transient_growth_from_eigs` G(t) matches the reference to 1e-10 for t∈{0,1,5}.
+
+**[T8.1] Energy-norm metric (total/kinetic/magnetic) — *M*** · TC eigen examples + new PCF linear module
+- **What:** `energy_matrix(kind)` building the Hermitian PSD state metric `Q` (radial-quadrature-weighted velocity vs magnetic blocks), feeding T8.0. **shenfun ref:** `couette/_pcf_linear.py:247-270`, `couette/taylor_couette_mri.py:482-531`. **Depends:** T8.0.
+- **Accept:** kinetic-norm non-modal growth reduces to the hydro result at `B0=0` to 1e-10; `Q` matches the reference `energy_matrix(kind)` to 1e-12 for all three norms.
+
+**[T8.2] Wire `--nonmodal`/`--linear-energy` into TC eigen examples — *M*** · `taylor_couette_{linear,mri}_jax.py`
+- **What:** `nonmodal_growth(m,kz,times,n_modes,energy=...)` + CLI flags + `print_transient_growth`. **shenfun ref:** `couette/taylor_couette_linear.py:337-341`, `taylor_couette_mri.py:533-545`. **Depends:** T8.1.
+- **Accept:** non-modal gains match `couette/taylor_couette_{linear,mri}.py` to 1e-8 (x64); modal `--eigs` still matches to 1e-11.
+
+**[T8.3] Plane-Couette linear/MHD eigen + non-modal operator — *L*** · `examples/pcf_linear_jax.py` (new) + `--linear` flags in PCF examples
+- **What:** primitive-variable Chebyshev PCF linear operator (hydro + MHD + rotating-shear/MRI) with `eigs`/`nonmodal`/`energy_matrix` and conducting/dirichlet magnetic wall BCs; `--linear {dns,eigs,nonmodal}` + `--linear-by/-bz/-magnetic-bc/-energy`. **shenfun ref:** `couette/_pcf_linear.py:59-289`. **Depends:** T8.1.
+- **Accept:** PCF leading eigenvalues and G(t) match `couette/_pcf_linear.PlaneCouetteLinear` (all three energy norms, both magnetic BCs) to 1e-8 (x64).
+
+**[T8.4] Critical-parameter scans — *M*** · `taylor_couette_{mri,linear}_jax.py`
+- **What:** port `critical_eta_mag`, `critical_Rm_fixed_B0_nu`, `critical_Rm`, the kz-scan, and wire TC-hydro `critical_reynolds` into a tested CLI branch. **shenfun ref:** `couette/taylor_couette_mri.py:470-571`, `taylor_couette_linear.py:343-417`. **Depends:** T8.2.
+- **Accept:** conducting/insulating critical-Rm match the reference scan to 1e-4 (reproduce η=0.5 quasi-Keplerian conducting `Rm_min≈24.7`, insulating `Rm_min≈16.5`); TC-hydro critical Reynolds/Taylor matches to 1e-8.
+
+---
+
+### M9 — Azimuthal Fourier (`m≠0`) machinery (shared by M10, M13)
+
+**[T9.1] 3-axis `CoupledSpace` with a complex azimuthal Fourier axis — *M*** · `taylor_couette_dns_jax.py` + `galerkin/Fourier.py`
+- **What:** TC spaces on `(θ` complex-Fourier `(0,2π)`, `z` Fourier, `r` Dirichlet/orthogonal`)` as a `CoupledSpace`; thread the azimuthal symbol so `Dx(·, θ_axis, 1)` gives `i·m` per mode; add the `_require_resolved_m` guard (`2|m|<Ntheta`). **shenfun ref:** `couette/taylor_couette_dns.py:525-540`, `:73-88`. **Depends:** T6.1.
+- **Accept:** `forward(backward(u))` per component to 1e-12 on a 3-axis field; `Dx(u,θ,1)` gives `i·m·u`; the guard raises for `2|m|≥Ntheta`.
+
+**[T9.2] Per-`(m,kz)` two-Fourier-axis block solve — *L*** · `taylor_couette_dns_jax.py:147-162` or `la/blocktpmatrix.py`
+- **What:** generalize `_mode_indices`/`_extract_mode_matrices` so each `(m,kz)` pair is one batched dense `lu_factor`/`lu_solve` over the combined mode axis, with the `(0,0)` pressure pin at the correct global index. **shenfun ref:** `couette/taylor_couette_dns.py:510-565`. **Depends:** T9.1, T6.2.
+- **⚠️ HARD prerequisite (critic):** before trusting any 3D quadrant, **validate the no-pivot batched LU at production `N` on the indefinite per-`(m,kz)` saddle blocks** (cf. risk §11.4.4); add pivoting (T2.1) to the batched path if it loses accuracy. A silently inaccurate no-pivot LU corrupts every 3D result and is very hard to diagnose.
+- **Accept:** a steady-Stokes-in-annulus 3D MMS solves per `(m,kz)` and matches `shenfun` `BlockMatrixSolver` to 1e-10 for several `(m,kz)`; `(0,0)` pressure pinned; mode indexing verified against a reference enumeration.
+
+---
+
+### M10 — 3D hydrodynamic TC DNS (`TaylorCouetteDNS`, `m≠0`)
+
+**[T10.1] 3D cylindrical linear operator with `m`-couplings — *L*** · `taylor_couette_dns_jax.py` (new `TaylorCouetteDNSJax`)
+- **What:** `m`-dependent Laplacian `L f = f_rr + f_r/r + (1/r²)f_θθ + f_zz`; base-shear advection `−Ω·d/dθ` on every component; viscous r/θ cross-coupling `∓(2/r²)d u_{θ/r}/dθ`; azimuthal continuity `(1/r)d u_θ/dθ` and pressure gradient `(1/r)dΠ/dθ`, into the per-`(m,kz)` Limp/Lexp. **shenfun ref:** `taylor_couette_dns.py:568-571, :573-596, :611-618`. **Depends:** T9.2.
+- **Accept:** assembled 3D linear blocks for a few `m` match `shenfun`'s matrices to 1e-12.
+
+**[T10.2] 3D cylindrical nonlinear + CNAB2 + 3D divergence — *L*** · `taylor_couette_dns_jax.py`
+- **What:** add `(u_θ/r)d/dθ` advection on all three components (plus existing `−u_θ²/r`, `+u_r u_θ/r`); 3D divergence with `(1/r)du_θ/dθ`; 3D eigenmode seeding `exp(i(mθ+kz·z))` with real-field reconstruction; drive with CNAB2 (T6.3). **shenfun ref:** `:649-666, :752-759, :687-715`. **Depends:** T10.1, T6.3, T6.4.
+- **Accept:** **x64 eigenmode-seeded growth-rate parity over 100 CNAB2 steps to 1e-6** vs a 3D linear eigenmode (and vs `shenfun` once the harness exists); `div(u)` at machine precision; **not** a smoke test.
+
+---
+
+### M11 — Magnetic induction/Lorentz/EMF machinery (shared by M12, M13; conducting walls)
+
+**[T11.1] Conducting magnetic bases + 7-field coupled space — *M*** · `examples/taylor_couette_mri_dns_jax.py` (new shared base)
+- **What:** conducting bases `b_r` Dirichlet, `b_θ` Robin `d(r·b_θ)/dr=0`, `b_z` Neumann `b_z'=0` (reuse the Robin/Neumann machinery already in `taylor_couette_mri_jax.py`); 7-field implicit space `VQ=[TD,TD,TD,TP,TD,Tbt,Tbz]` (total pressure `Π`) and 6-field evolving `VE`. **shenfun ref:** `taylor_couette_dns.py:835-857`. **Depends:** T6.1.
+- **Accept:** conducting magnetic stencils match `shenfun` to 1e-13; the 7-field block system is square with expected per-block dims.
+
+**[T11.2] Linear induction + Lorentz block — *L*** · `taylor_couette_mri_dns_jax.py`
+- **What:** `η(L−1/r²)b` induction diffusion; `B0·db/dz` Lorentz momentum coupling and `B0·du/dz` induction coupling under the total-pressure formulation; MRI field-stretching source `r·Ω'·b_r → b_θ`. **shenfun ref:** `taylor_couette_dns.py:917-951`. **Depends:** T11.1.
+- **Accept:** assembled induction+Lorentz blocks match `shenfun` to 1e-12 (axisymmetric).
+
+**[T11.3] EMF `curl(u×b)` + Maxwell `−(b·∇)b` + `divb` monitor — *L*** · `taylor_couette_mri_dns_jax.py` + `integrators/nonlinear.py`
+- **What:** pseudo-spectral EMF `ε=u×b` (reuse `physical_cross`, T4.8); induction RHS `−curl(ε)`; Maxwell `−(b·∇)b`; dealiasing + (ideally cached) cross-space `Project`s for curl pieces; `magnetic_divergence_l2` monitor. **shenfun ref:** `taylor_couette_dns.py:1001-1048, :1163-1164`. **Depends:** T11.2, T4.8.
+- **Accept:** EMF/Maxwell terms match `shenfun` to 1e-10 for a seeded mode; `divb < 1e-12` throughout (x64).
+
+---
+
+### M12 — Axisymmetric MHD (MRI) TC DNS (`AxisymmetricMRIDNS`)
+
+**[T12.1] `AxisymmetricMRIDNSJax` — *L*** · `examples/taylor_couette_mri_dns_jax.py`
+- **What:** combine the axisymmetric-hydro CNAB2/block-solve/cylindrical-nonlinear with the M11 induction/Lorentz block + EMF/Maxwell nonlinear; pin `k=0` total pressure; seed from the linear MRI eigenmode (`taylor_couette_mri_jax.py`). **shenfun ref:** `taylor_couette_dns.py:788-1190`. **Depends:** T11.3, T6.3, T6.4.
+- **Accept:** **x64 eigenmode-seeded MRI growth-rate parity over 100 CNAB2 steps to 1e-6** (vs linear MRI eigenmode; vs `shenfun` once the harness exists); `div(u)` and `div(b)` at machine precision; total-pressure `k=0` pinned. Carry an x64 eigenmode-growth (not smoke) parity test.
+
+---
+
+### M13 — 3D MHD (full MRI) TC DNS (`TaylorCouetteMRIDNS`) — deepest quadrant
+
+**[T13.1] 3D MHD linear couplings — *L*** · `examples/taylor_couette_mri_dns_jax.py`
+- **What:** `−Ω·d/dθ` on every `b`-component; `∓(2/r²)d(·)_{θ/r}/dθ` viscous **and resistive** cross-coupling for both `u` and `b`; 3D continuity/pressure azimuthal terms, into the per-`(m,kz)` 7-field block. Conducting `b_r=0` makes wall BCs `m`-independent (reuse M11 bases). **shenfun ref:** `taylor_couette_dns.py:1340-1385, :1398-1404, :1263-1267`. **Depends:** T9.2, T11.2.
+- **Accept:** assembled 3D MHD blocks for a few `m` match `shenfun` to 1e-12.
+
+**[T13.2] 3D EMF curl (azimuthal `(1/r)d/dθ`) + complex seeding + step — *L*** · `examples/taylor_couette_mri_dns_jax.py`
+- **What:** 3D EMF curl nonlinear with `(1/r)d/dθ` in all three curl components; complex eigenmode seeding split into real/imag radial Functions; CNAB2 over the combined `(m,kz)` modes. **shenfun ref:** `taylor_couette_dns.py:1463-1470, :1512-1554`. **Depends:** T13.1, T11.3, T10.2.
+- **Accept:** **x64 eigenmode-seeded 3D MRI growth-rate parity over 100 steps to 1e-6**; `div(u)` and `div(b)` at machine precision. Carry an x64 eigenmode-growth (not smoke) parity test.
+
+---
+
+### 12.x Build order (dependency-correct, 6 phases)
+
+```
+PHASE 0  M0b  float64-at-import (T0.1b) → live shenfun harness (T0.4b)   ← unblocks ALL parity
+         + cheap gating partials: K_over_K2 → library (T1.6); commit the full-complex Fourier ADR (T0.3)
+PHASE 1  finish correctness-blocking partials BEFORE trusting TC quadrants:
+         T6.5 radial dealiasing parity · T8.0 stable eig ordering · thread pivot/constraints into the
+         batched solver (T2.1/T2.3) OR validate no-pivot biharmonic at production N ·
+         build reusable modules: integrators/coupled.py (T3.4), integrators/cnab2.py (T6.3),
+         la/solvers.py (T2.2), cached Project (T1.2)
+PHASE 2  M8 stability layer (independent; staff in parallel). Acceptance needs T0.4b.
+PHASE 3  M9 azimuthal machinery (T9.2 = highest-risk shared prereq) → M10 3D-hydro
+PHASE 4  M11 magnetic machinery (can start parallel to Phase 3; needs only M6+T4.8) → M12 axi-MHD
+PHASE 5  M13 3D-MHD  = M9 ∪ M11  (needs Phases 3 & 4)
+PHASE 6  M7 I/O (T7.1/T7.2) + sharding parity (T7.3) + differentiability (T0.4c) across all quadrants
+```
+
+### 12.y Updated definition-of-done (extends §9)
+
+| Deliverable | Done when… | Gating |
+|---|---|---|
+| (foundation) | default `uv run pytest` runs x64 & a live `shenfun` parity test passes for one PCF + one TC case | M0b |
+| TC linear + non-modal (hydro & MHD) | eig to 1e-8/1e-6 & transient-growth gains to 1e-8 vs reference; critical-Rm/Re reproduced | M8 |
+| **3D hydro TC DNS** | x64 eigenmode-growth parity over 100 steps to 1e-6; `div(u)`≈0; reduces to axisymmetric when `m`-content=0 | M9→M10 |
+| **Axisymmetric MHD TC DNS** | x64 eigenmode-growth parity to 1e-6; `div(u)`,`div(b)`≈0; total-`p` pinned | M11→M12 |
+| **3D MHD TC DNS** | x64 eigenmode-growth parity to 1e-6; `div(u)`,`div(b)`≈0 | M9,M11→M13 |
+| All quadrants | `jax.grad` of a diagnostic finite & FD-consistent; HDF5 I/O; multi-device bit-identical | M7 |
+
+---
+
+*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope adds M0b (foundation hardening), M8 (stability analysis), and M9–M13 (the three missing Taylor–Couette DNS quadrants + their shared azimuthal & magnetic prerequisites). The current implementation runs all seven scripts as internally-consistent jax ports but is **not yet `shenfun`-validated**; the axisymmetric-hydro TC DNS is the only one of four quadrants complete. Critical path: land M0b first (so parity means something), then finish the Phase-1 correctness partials, then build outward to the 3D and MHD quadrants.*
