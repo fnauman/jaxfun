@@ -766,14 +766,14 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 ### 11.2 Partial — finish these (grouped)
 
 **A. Refactor inline example code into reusable library modules** (the MHD/3D quadrants must *reuse*, not re-inline):
-- **Done after audit:** T3.4 coupled multi-equation IMEX stage helper (`integrators/coupled.py`), T6.3 reusable CNAB2 stepping (`integrators/cnab2.py`), T2.2 named `Helmholtz`/`Biharmonic` constructors (`la/solvers.py`), T1.2 cached `Project`, and T1.6 `K_over_K2`.
+- **Done after audit:** T3.4 coupled multi-equation IMEX stage helper (`integrators/coupled.py`), T6.3 reusable CNAB2 stepping (`integrators/cnab2.py`), T3.1 shared implicit-operator helpers (`integrators/base.py`), T2.2 named `Helmholtz`/`Biharmonic` constructors (`la/solvers.py`), T1.2 cached `Project`, and T1.6 `K_over_K2`.
 - **Done after audit:** T6.7 r-weighted TC diagnostics are factored into `jaxfun.diagnostics`; TC DNS examples call the reusable helpers.
 
 **B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity/coefficient fields at 1/5/50 steps, both PCF-MHD variants' diagnostics/coefficient fields at 1/5/50 steps, axisymmetric and full-3D hydro/MHD TC DNS diagnostics/coefficient fields at 1/5/50 steps, TC linear/MRI eigenvalues plus non-modal growth, and the radial dealiased product. Remaining validation work is broader-size/dealiased production coverage and low-level operator stencil cross-checking; the tuple-BC basis stencil check now covers `ShenDirichlet`/`ShenBiharmonic` parity.
 
 **C. Correctness gaps in the batched solver tier:**
 - **T2.1** pivoting and **T2.3** per-mode constraint pinning exist **only** on the single-`DiaMatrix`/`PinnedSystem` path — **NOT** plumbed into the vmapped `TPMatricesWavenumberSolver` (no `pivot`/`constraints` kwarg) that KMM/biharmonic/TC actually use. KMM/TC pin ad hoc.
-- **T3.1** `build_implicit_operator(c,dt)` / `apply_linear_scalar_product` are not the named `base.py` API; each IMEX scheme re-derives `S=M−c·dt·L` inline.
+- **Done after audit:** T3.1 `BaseIntegrator.build_implicit_operator(coefficient, dt)` and `apply_linear_scalar_product` now provide the named base API; BackwardEuler, ARS IMEX-RK, and IMEXRK3 route through it.
 - **T1.8/T6.5** radial polynomial dealiasing now has a live `shenfun` regression for a padded radial/Fourier quadratic product. The remaining convention caveat is the full-complex Fourier Nyquist mode; solver nonlinear products call `mask_nyquist`.
 
 ### 11.3 Missing — not started

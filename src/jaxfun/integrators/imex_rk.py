@@ -15,7 +15,7 @@ from flax import nnx
 
 from jaxfun.typing import Array, Padding
 
-from .base import BaseIntegrator, _warm_operator_solve_cache
+from .base import BaseIntegrator
 
 
 class PDEIMEXRK(BaseIntegrator):
@@ -57,16 +57,9 @@ class PDEIMEXRK(BaseIntegrator):
         gamma = self._active_diagonal()
         if gamma == 0 or self.linear_operator.is_zero:
             return
-        self._system_operator = nnx.data(
-            self.mass_operator - (float(dt) * gamma) * self.linear_operator
-        )
-        _warm_operator_solve_cache(self._system_operator)
-
-    def _linear_scalar_product(self, u_hat: Array) -> Array:
-        rhs = self.linear_operator @ u_hat
-        if self.linear_forcing is not None:
-            rhs = rhs + jnp.asarray(self.linear_forcing)
-        return rhs
+        operator = self.build_implicit_operator(gamma, dt)
+        if operator is not None:
+            self._system_operator = nnx.data(operator)
 
     def _solve_stage(self, rhs: Array) -> Array:
         if self._system_operator is not None:
@@ -93,7 +86,7 @@ class PDEIMEXRK(BaseIntegrator):
             for j in range(rk + 1):
                 rhs = rhs + dt * b[rk + 1, j] * nonlinear[j]
             if rk > 0:
-                linear.append(self._linear_scalar_product(u_stage))
+                linear.append(self.apply_linear_scalar_product(u_stage))
                 for j in range(rk):
                     rhs = rhs + dt * a[rk + 1, j + 1] * linear[j]
             u_stage = self._solve_stage(self._mask_rhs(rhs))
@@ -134,17 +127,10 @@ class IMEXRK3(BaseIntegrator):
         a, b, _ = self.stages()
         operators = []
         for rk in range(self.steps()):
-            gamma = float((a[rk] + b[rk]) * float(dt) / 2.0)
-            op = self.mass_operator - gamma * self.linear_operator
-            _warm_operator_solve_cache(op)
-            operators.append(op)
+            operator = self.build_implicit_operator(float((a[rk] + b[rk]) / 2.0), dt)
+            if operator is not None:
+                operators.append(operator)
         self._system_operators = nnx.data(tuple(operators))
-
-    def _linear_scalar_product(self, u_hat: Array) -> Array:
-        rhs = self.linear_operator @ u_hat
-        if self.linear_forcing is not None:
-            rhs = rhs + jnp.asarray(self.linear_forcing)
-        return rhs
 
     def _solve_stage(self, rhs: Array, rk: int) -> Array:
         if self._system_operators is not None:
@@ -165,8 +151,8 @@ class IMEXRK3(BaseIntegrator):
         for rk in range(self.steps()):
             w0 = self.nonlinear_rhs_scalar_product(u_stage, N)
             gamma = (a[rk] + b[rk]) * dt / 2.0
-            rhs = self.apply_mass(u_stage) + gamma * self._linear_scalar_product(
-                u_stage
+            rhs = self.apply_mass(u_stage) + gamma * (
+                self.apply_linear_scalar_product(u_stage)
             )
             rhs = rhs + dt * (a[rk] * w0 + b[rk] * w_prev)
             u_stage = self._solve_stage(self._mask_rhs(rhs), rk)
