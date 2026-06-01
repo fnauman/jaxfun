@@ -10,6 +10,13 @@ from examples.taylor_couette_dns_jax import (
     TaylorCouetteMRIDNSJax,
     _require_resolved_m,
 )
+from jaxfun.diagnostics import (
+    cylindrical_component_energy,
+    cylindrical_energy_parts,
+    cylindrical_kinetic_energy,
+    wall_linf,
+)
+from jaxfun.io import Cadence
 
 
 def test_tc_dns_zero_state_stays_zero() -> None:
@@ -208,3 +215,72 @@ def test_tc_mri_dns_3d_eigenmode_growth_matches_linear_solver_x64() -> None:
     assert float(diag["divu"]) < 1.0e-7
     assert float(diag["divb"]) < 1.0e-7
     assert abs(complex(out.p[0, 0, 0])) < 1.0e-18
+
+
+def test_tc_diagnostics_helpers_match_solver_outputs() -> None:
+    hydro = AxisymmetricTCDNSJax(
+        CircularCouette(), nu=0.002, Nr=8, Nz=6, dt=1.0e-3, dealias=1.0
+    )
+    hstate = hydro.step(hydro.initial_state(amp=1.0e-4))
+    velocity = hydro.velocity_physical(hstate)
+    hdiag = hydro.diagnostics(hstate)
+
+    assert jnp.allclose(
+        hdiag["E"], cylindrical_kinetic_energy(velocity, hydro.R, hydro.T0)
+    )
+    assert jnp.allclose(
+        hdiag["Eth"], cylindrical_component_energy(velocity[1], hydro.R, hydro.T0)
+    )
+    assert jnp.allclose(hdiag["wall"], wall_linf(velocity))
+
+    mri = AxisymmetricMRIDNSJax(
+        _keplerian_tc_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    z, r = mri.T0.mesh()
+    wall = (r - mri.base.R1) * (mri.base.R2 - r)
+    values = (
+        1.0e-4 * wall * jnp.cos(z),
+        2.0e-4 * wall * jnp.sin(z),
+        -1.0e-4 * wall * jnp.cos(2.0 * z),
+        1.0e-5 * wall * jnp.sin(z),
+        2.0e-5 * wall * jnp.cos(z),
+        -1.0e-5 * wall * jnp.sin(2.0 * z),
+    )
+    mstate = mri.state_from_physical(values)
+    fields = mri.fields_physical(mstate)
+    ek, em = cylindrical_energy_parts(fields[:3], fields[3:], mri.R, mri.T0)
+    mdiag = mri.diagnostics(mstate)
+
+    assert jnp.allclose(mdiag["Ekin"], ek)
+    assert jnp.allclose(mdiag["Emag"], em)
+    assert jnp.allclose(mdiag["E"], ek + em)
+
+
+
+def test_tc_solve_with_cadence_matches_direct_solve() -> None:
+    solver = AxisymmetricTCDNSJax(
+        CircularCouette(), nu=0.002, Nr=8, Nz=6, dt=1.0e-3, dealias=1.0
+    )
+    state0 = solver.initial_state(amp=1.0e-4)
+    events = []
+
+    out = solver.solve_with_cadence(
+        state0,
+        3,
+        Cadence(diagnostics_every=2),
+        block_size=2,
+        on_diagnostics=lambda t, tstep, diag: events.append((t, tstep, diag["E"])),
+    )
+    direct = solver.solve(state0, 3)
+
+    assert len(events) == 1
+    assert events[0][1] == 2
+    assert all(jnp.allclose(a, b) for a, b in zip(out.u, direct.u, strict=True))
+    assert jnp.allclose(out.p, direct.p)

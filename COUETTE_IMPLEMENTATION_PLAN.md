@@ -568,9 +568,9 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 - **Depends on:** all of M6, T5.3.
 - **Accept (script 7 definition-of-done):** seeded with a `TaylorCouetteLinear` eigenmode, the DNS linear growth rate matches `shenfun` over 100 CNAB2 steps to 1e-6; `k=0` pressure pinned; `div(u)=0` to machine precision throughout.
 
-#### [T6.7] `r`-weighted volume-integral diagnostics — *missing/M* · `diagnostics.py`
-- **Build:** TC energy/Reynolds/Maxwell diagnostics as `integrate(f·rphys, T0)` (the explicit cylindrical volume element). Reuse T1.1; pass `rphys` in the integrand (do **not** auto-apply `sg` for the Cartesian TC space).
-- **Accept:** TC kinetic energy `integrate((u_r²+u_θ²+u_z²)·rphys)` matches `taylor_couette_dns.py:391–394` to 1e-10.
+#### [T6.7] `r`-weighted volume-integral diagnostics — *done/M* · `diagnostics.py`
+- **Build:** implemented `jaxfun.diagnostics` helpers for cylindrical kinetic/magnetic/component energies and wall norms; TC DNS examples use explicit `rphys` weights.
+- **Accept:** `tests/couette/test_taylor_couette_dns_jax.py::test_tc_diagnostics_helpers_match_solver_outputs` covers hydro and MRI helper parity with solver diagnostics.
 
 ---
 
@@ -581,8 +581,8 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 - **Accept:** `tests/io/test_hdf5.py` covers exact write→read, bit-identical restart continuation for 20 steps, uniform snapshot output, and XDMF generation. Live `shenfun` file-output parity remains unclaimed.
 
 #### [T7.2] Host-callback diagnostic/IO cadence — *partial/M* · `src/jaxfun/io/__init__.py`, `examples/`
-- **Build:** generic `Cadence` + `run_with_cadence(advance, state, ...)` runs compiled stepping blocks and invokes diagnostics/snapshot/checkpoint callbacks on exact host-side cadence boundaries. Example CLI wiring and graceful-stop behavior are still open.
-- **Accept:** a 200-step run with `moderror=10` produces diagnostics identical to a run that transfers every step, with no recompilation per interval.
+- **Build:** generic `Cadence` + `run_with_cadence(advance, state, ...)` runs compiled stepping blocks and invokes diagnostics/snapshot/checkpoint callbacks on exact host-side cadence boundaries. PCF and TC DNS examples now expose `--moderror`/`--block-size` and call `solve_with_cadence`; graceful-stop behavior remains open.
+- **Accept:** small PCF and TC cadence tests show cadence-blocked solves match direct solves and fire diagnostics on exact step boundaries. A 200-step CLI cadence/no-recompile benchmark remains unclaimed.
 
 #### [T7.3] MPI→sharding: remove rank gating, sharded reductions, multi-device parity — *partial/L* · `examples/`, `sharding.py`
 - **Build:** (1) remove all rank gating — the `(0,0)` mode is global index 0 (done in T4.3); (2) energy/spectra reductions = `jnp.sum` (single device) or `jax.lax.psum(_,'k')` inside `shard_map` (multi-device); (3) plane-averaged profiles = mean over homogeneous directions locally then `psum`, or `all_gather` over the wall-normal-distributed axis + deterministic reorder; (4) ensure the banded (wall-normal/radial) axis is **not** the sharded axis for the per-mode solver (`jaxfun`'s sharding shards a Fourier axis; satisfy the `poly_axis != 0`, `n_F divisible by device count` constraints).
@@ -766,7 +766,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 
 **A. Refactor inline example code into reusable library modules** (the MHD/3D quadrants must *reuse*, not re-inline):
 - **Done after audit:** T3.4 coupled multi-equation IMEX stage helper (`integrators/coupled.py`), T6.3 reusable CNAB2 stepping (`integrators/cnab2.py`), T2.2 named `Helmholtz`/`Biharmonic` constructors (`la/solvers.py`), T1.2 cached `Project`, and T1.6 `K_over_K2`.
-- **Still open:** T6.7 should be factored into a reusable `diagnostics.py` module; current TC examples carry the r-weighted diagnostics inline.
+- **Done after audit:** T6.7 r-weighted TC diagnostics are factored into `jaxfun.diagnostics`; TC DNS examples call the reusable helpers.
 
 **B. Validation gaps:** live `shenfun` parity now covers TC linear/MRI stability and the radial dealiased product. Broader coefficient-level parity for PCF and DNS trajectories remains open for T1.1, T1.5, T3.2, T3.3, T4.2–T4.5, T4.7, T4.8, T5.3, T5.4, T6.2, T6.4, and T6.6.
 
@@ -780,14 +780,12 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 | Plan ref | Item | Note |
 |---|---|---|
 | T4.6 | `compute_pressure` (Neumann pressure recovery) | optional/deferred; pressure-free KMM diagnostics do not require it |
-| T6.7 | reusable `diagnostics.py` for r-weighted TC diagnostics | examples implement diagnostics inline |
-| T7.2 | example wiring for host-side diagnostic/IO cadence | generic `jaxfun.io.Cadence`/`run_with_cadence` exists; examples still use direct solve loops |
-| T7.3 | sharding parity for Couette workflows | core tensor transforms have SPMD support; Couette-specific multi-device parity remains to validate |
+| T7.3 | full all-quadrant sharding parity for Couette workflows | axisymmetric TC diagnostics/transform parity is covered with `--num-devices=2`; all-quadrant bit-identical parity remains to validate |
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
 1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` uses `vmap(_lu_banded_no_pivot_kernel)`; the indefinite Chebyshev-biharmonic and 3D saddle blocks may need pivoting. **Validating/fixing this remains a HARD prerequisite of the 3D quadrants (M9/T9.2).**
-2. **Couette sharding parity gap:** core transforms support SPMD, but Couette end-to-end parity on multiple devices is still not a completed acceptance gate.
+2. **Couette sharding parity gap:** axisymmetric TC transform/diagnostic parity has a two-device test; all-quadrant end-to-end parity on multiple devices is still not a completed acceptance gate.
 3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
 ### 11.5 Corrections to Part I

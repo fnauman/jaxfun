@@ -4,6 +4,7 @@ import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from jaxfun.integrators import IMEXRK3
+from jaxfun.io import Cadence
 
 
 def test_pcf_fluctuation_initialization_and_one_step_are_finite() -> None:
@@ -69,3 +70,29 @@ def test_pcf_imexrk3_one_step_is_finite() -> None:
     assert bool(jnp.isfinite(state.g).all())
     assert float(diag["Epert"]) > 0.0
     assert float(diag["divL2"]) < 1.0e-4
+
+
+
+def test_pcf_solve_with_cadence_matches_direct_solve() -> None:
+    solver = PlaneCouetteFluctuationJax(
+        N=(9, 4, 4),
+        Re=200.0,
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+    )
+    state0 = solver.initial_state()
+    events = []
+
+    out = solver.solve_with_cadence(
+        state0,
+        3,
+        Cadence(diagnostics_every=2),
+        block_size=2,
+        on_diagnostics=lambda t, tstep, diag: events.append((t, tstep, diag["Epert"])),
+    )
+    direct = solver.solve(state0, 3)
+
+    assert len(events) == 1
+    assert events[0][1] == 2
+    assert all(jnp.allclose(a, b) for a, b in zip(out.u, direct.u, strict=True))
+    assert jnp.allclose(out.g, direct.g)

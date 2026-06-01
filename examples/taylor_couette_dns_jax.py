@@ -34,6 +34,12 @@ except ModuleNotFoundError:  # direct script execution from examples/
     from taylor_couette_mri_jax import TaylorCouetteMRIJax
 
 from jaxfun import Domain, Dx
+from jaxfun.diagnostics import (
+    cylindrical_component_energy,
+    cylindrical_energy_parts,
+    cylindrical_kinetic_energy,
+    wall_linf,
+)
 from jaxfun.galerkin import (
     CoupledSpace,
     FunctionSpace,
@@ -45,9 +51,9 @@ from jaxfun.galerkin import (
 )
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
-from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.integrators.cnab2 import cnab2_rhs, scan_steps
+from jaxfun.io import Cadence, run_with_cadence
 
 type Velocity = tuple[Array, Array, Array]
 
@@ -463,13 +469,37 @@ class AxisymmetricTCDNSJax:
     def solve(self, state: AxisymmetricTCState, steps: int) -> AxisymmetricTCState:
         return scan_steps(self.step, state, steps)
 
+    def solve_with_cadence(
+        self,
+        state: AxisymmetricTCState,
+        steps: int,
+        cadence: Cadence,
+        *,
+        block_size: int = 1,
+        on_diagnostics=None,
+        on_snapshot=None,
+        on_checkpoint=None,
+    ) -> AxisymmetricTCState:
+        return run_with_cadence(
+            self.solve,
+            state,
+            steps=steps,
+            dt=self.dt,
+            cadence=cadence,
+            block_size=block_size,
+            diagnostics=self.diagnostics,
+            on_diagnostics=on_diagnostics,
+            on_snapshot=on_snapshot,
+            on_checkpoint=on_checkpoint,
+        )
+
     def velocity_physical(self, state: AxisymmetricTCState) -> Velocity:
         return tuple(self.TD.backward(ui) for ui in state.u)  # ty: ignore[return-value]
 
     def energy(self, state: AxisymmetricTCState) -> Array:
-        ur, ut, uz = self.velocity_physical(state)
-        density = 0.5 * (jnp.conj(ur) * ur + jnp.conj(ut) * ut + jnp.conj(uz) * uz)
-        return jnp.real(integrate(density * self.R, self.T0))
+        return cylindrical_kinetic_energy(
+            self.velocity_physical(state), self.R, self.T0
+        )
 
     def divergence(self, state: AxisymmetricTCState) -> Array:
         dur_dr = self.TD.backward_primitive(state.u[0], (0, 1))
@@ -491,25 +521,13 @@ class AxisymmetricTCDNSJax:
         return jnp.linalg.norm(residual)
 
     def diagnostics(self, state: AxisymmetricTCState) -> dict[str, Array]:
-        ur, ut, uz = self.velocity_physical(state)
-        wall = jnp.max(
-            jnp.array(
-                [
-                    jnp.max(jnp.abs(ur[:, 0])),
-                    jnp.max(jnp.abs(ur[:, -1])),
-                    jnp.max(jnp.abs(ut[:, 0])),
-                    jnp.max(jnp.abs(ut[:, -1])),
-                    jnp.max(jnp.abs(uz[:, 0])),
-                    jnp.max(jnp.abs(uz[:, -1])),
-                ]
-            )
-        )
+        velocity = self.velocity_physical(state)
         return {
-            "E": self.energy(state),
+            "E": cylindrical_kinetic_energy(velocity, self.R, self.T0),
             "div_linf": self.divergence_linf(state),
             "continuity_l2": self.continuity_residual_l2(state),
-            "wall": wall,
-            "Eth": jnp.real(integrate(jnp.conj(ut) * ut * self.R, self.T0)),
+            "wall": wall_linf(velocity),
+            "Eth": cylindrical_component_energy(velocity[1], self.R, self.T0),
         }
 
     def growth_rate(
@@ -753,9 +771,9 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         return tuple(self.TD.backward(ui) for ui in state.u)  # ty: ignore[return-value]
 
     def energy(self, state: AxisymmetricTCState) -> Array:
-        ur, ut, uz = self.velocity_physical(state)
-        density = 0.5 * (jnp.conj(ur) * ur + jnp.conj(ut) * ut + jnp.conj(uz) * uz)
-        return jnp.real(integrate(density * self.R, self.T0))
+        return cylindrical_kinetic_energy(
+            self.velocity_physical(state), self.R, self.T0
+        )
 
     def divergence(self, state: AxisymmetricTCState) -> Array:
         dur_dr = self.TD.backward_primitive(state.u[0], (0, 0, 1))
@@ -781,25 +799,13 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         return jnp.linalg.norm(residual)
 
     def diagnostics(self, state: AxisymmetricTCState) -> dict[str, Array]:
-        ur, ut, uz = self.velocity_physical(state)
-        wall = jnp.max(
-            jnp.array(
-                [
-                    jnp.max(jnp.abs(ur[:, :, 0])),
-                    jnp.max(jnp.abs(ur[:, :, -1])),
-                    jnp.max(jnp.abs(ut[:, :, 0])),
-                    jnp.max(jnp.abs(ut[:, :, -1])),
-                    jnp.max(jnp.abs(uz[:, :, 0])),
-                    jnp.max(jnp.abs(uz[:, :, -1])),
-                ]
-            )
-        )
+        velocity = self.velocity_physical(state)
         return {
-            "E": self.energy(state),
+            "E": cylindrical_kinetic_energy(velocity, self.R, self.T0),
             "div_linf": self.divergence_linf(state),
             "continuity_l2": self.continuity_residual_l2(state),
-            "wall": wall,
-            "Eth": jnp.real(integrate(jnp.conj(ut) * ut * self.R, self.T0)),
+            "wall": wall_linf(velocity),
+            "Eth": cylindrical_component_energy(velocity[1], self.R, self.T0),
         }
 
 
@@ -1151,16 +1157,8 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         )  # ty: ignore[return-value]
 
     def energy_parts(self, state: AxisymmetricMRIState) -> tuple[Array, Array]:
-        ur, ut, uz, br, bt, bz = self.fields_physical(state)
-        ek_density = (
-            jnp.conj(ur) * ur + jnp.conj(ut) * ut + jnp.conj(uz) * uz
-        )
-        em_density = (
-            jnp.conj(br) * br + jnp.conj(bt) * bt + jnp.conj(bz) * bz
-        )
-        ek = 0.5 * integrate(ek_density * self.R, self.T0)
-        em = 0.5 * integrate(em_density * self.R, self.T0)
-        return jnp.real(ek), jnp.real(em)
+        fields = self.fields_physical(state)
+        return cylindrical_energy_parts(fields[:3], fields[3:], self.R, self.T0)
 
     def energy(self, state: AxisymmetricMRIState) -> Array:
         ek, em = self.energy_parts(state)
@@ -1559,6 +1557,8 @@ def main() -> None:
     parser.add_argument("--kz-mode", type=int, default=1)
     parser.add_argument("--amp", type=float, default=1.0e-6)
     parser.add_argument("--seed-linear", action="store_true")
+    parser.add_argument("--moderror", type=int, default=0)
+    parser.add_argument("--block-size", type=int, default=1)
     args = parser.parse_args()
 
     eta = 0.5
@@ -1610,7 +1610,22 @@ def main() -> None:
             else solver.initial_state()
         )
 
-    state = solver.solve(state, args.steps)
+    if args.moderror > 0:
+        def print_diagnostics(t, tstep, diag):
+            values = " ".join(
+                f"{key}={float(value):.6e}" for key, value in diag.items()
+            )
+            print(f"tstep={tstep} t={t:.6e} {values}")
+
+        state = solver.solve_with_cadence(
+            state,
+            args.steps,
+            Cadence(diagnostics_every=args.moderror),
+            block_size=args.block_size,
+            on_diagnostics=print_diagnostics,
+        )
+    else:
+        state = solver.solve(state, args.steps)
     diag = solver.diagnostics(state)
     print(" ".join(f"{key}={float(value):.6e}" for key, value in diag.items()))
 

@@ -28,6 +28,7 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.integrators import IMEXRK3, IMEXRK222, PDEIMEXRK, ars_stage_rhs
+from jaxfun.io import Cadence, run_with_cadence
 from jaxfun.la.solvers import Biharmonic, Helmholtz
 
 type Velocity = tuple[Array, Array, Array]
@@ -406,6 +407,30 @@ class KMM:
         for _ in range(int(steps)):
             out = self.step(out)
         return out
+
+    def solve_with_cadence(
+        self,
+        state: KMMState,
+        steps: int,
+        cadence: Cadence,
+        *,
+        block_size: int = 1,
+        on_diagnostics=None,
+        on_snapshot=None,
+        on_checkpoint=None,
+    ) -> KMMState:
+        return run_with_cadence(
+            self.solve,
+            state,
+            steps=steps,
+            dt=self.dt,
+            cadence=cadence,
+            block_size=block_size,
+            diagnostics=getattr(self, "diagnostics", None),
+            on_diagnostics=on_diagnostics,
+            on_snapshot=on_snapshot,
+            on_checkpoint=on_checkpoint,
+        )
 
     def divergence_l2(self, state: KMMState) -> Array:
         divu = (

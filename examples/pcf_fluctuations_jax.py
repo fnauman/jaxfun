@@ -23,6 +23,7 @@ except ModuleNotFoundError:  # direct script execution from examples/
 
 from jaxfun.galerkin.inner import integrate
 from jaxfun.integrators import IMEXRK222
+from jaxfun.io import Cadence
 
 
 class PlaneCouetteFluctuationJax(KMM):
@@ -127,12 +128,30 @@ def main() -> None:
     parser.add_argument("--dt", type=float, default=0.01)
     parser.add_argument("--Re", type=float, default=600.0)
     parser.add_argument("--family", choices=("L", "C"), default="L")
+    parser.add_argument("--moderror", type=int, default=0)
+    parser.add_argument("--block-size", type=int, default=1)
     args = parser.parse_args()
 
     solver = PlaneCouetteFluctuationJax(
         N=tuple(args.N), dt=args.dt, Re=args.Re, family=args.family
     )
-    state = solver.solve(solver.initial_state(), args.steps)
+    state0 = solver.initial_state()
+    if args.moderror > 0:
+        def print_diagnostics(t, tstep, diag):
+            values = " ".join(
+                f"{key}={float(value):.6e}" for key, value in diag.items()
+            )
+            print(f"tstep={tstep} t={t:.6e} {values}")
+
+        state = solver.solve_with_cadence(
+            state0,
+            args.steps,
+            Cadence(diagnostics_every=args.moderror),
+            block_size=args.block_size,
+            on_diagnostics=print_diagnostics,
+        )
+    else:
+        state = solver.solve(state0, args.steps)
     diag = solver.diagnostics(state)
     print(" ".join(f"{key}={float(value):.6e}" for key, value in diag.items()))
 
