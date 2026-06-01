@@ -18,7 +18,14 @@ from jaxfun.coordinates import CartCoordSys, x as coord_x
 from jaxfun.galerkin import FunctionSpace, InnerKind, TestFunction, TrialFunction, inner
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.la import generalized_eig
+from jaxfun.la import (
+    NONMODAL_FINITE_CAP,
+    finite_eigensystem,
+    generalized_eig,
+    parse_times,
+    print_transient_growth,
+    transient_growth_from_eigs,
+)
 
 
 class CircularCouette:
@@ -261,6 +268,31 @@ class TaylorCouetteLinearJax:
         )
         return w[:n_return], V[:, :n_return]
 
+    def energy_matrix(self):
+        """Cylindrical kinetic-energy metric for ``(u_r,u_theta,u_z,p)``.
+
+        Reference: ``couette/taylor_couette_linear.py:328-335``.
+        """
+        Q = np.zeros((4 * self.n, 4 * self.n), dtype=complex)
+        W = self._A(self.r, 0)
+        W = 0.5 * (W + W.conj().T)
+        for comp in range(3):
+            sl = slice(comp * self.n, (comp + 1) * self.n)
+            Q[sl, sl] = W
+        return Q
+
+    def nonmodal_growth(
+        self, m, kz, times, n_modes=None, finite_cap=NONMODAL_FINITE_CAP
+    ):
+        """Optimal linear transient growth in kinetic-energy norm.
+
+        Reference: ``couette/taylor_couette_linear.py:337-341``.
+        """
+        w, V = finite_eigensystem(
+            *self.assemble(m, kz), finite_cap=finite_cap, n_return=n_modes
+        )
+        return transient_growth_from_eigs(w, V, self.energy_matrix(), times)
+
     def growth_rate(self, m, kz):
         w = generalized_eig(*self.assemble(m, kz))
         return float(w[0].real) if len(w) else float("nan")
@@ -339,13 +371,23 @@ def main(argv=None):
     parser.add_argument("--kz-min", type=float, default=0.5)
     parser.add_argument("--kz-max", type=float, default=8.0)
     parser.add_argument("--kz-num", type=int, default=40)
+    parser.add_argument("--nonmodal", action="store_true")
+    parser.add_argument("--times", type=str, default="1,5,10,20")
+    parser.add_argument("--n-modes", type=int, default=None)
     args = parser.parse_args(argv)
 
     base, solver = _build(args)
     print(base.describe())
     print(f"  nu={args.nu:g}  N={args.N}  family={args.family}  m={args.m}")
 
-    if args.kz is not None:
+    if args.nonmodal:
+        kz = args.kz if args.kz is not None else 3.0 / base.gap
+        rows = solver.nonmodal_growth(
+            args.m, kz, parse_times(args.times), n_modes=args.n_modes
+        )
+        print(f"\nkz={kz:g}: hydrodynamic non-modal transient growth:")
+        print_transient_growth(rows)
+    elif args.kz is not None:
         w, _ = solver.eigs(args.m, args.kz, n_return=6)
         print(f"\nkz={args.kz:g}: leading eigenvalues (growth, freq):")
         for value in w:

@@ -1,3 +1,8 @@
+# ruff: noqa: E402
+import jax
+
+jax.config.update("jax_enable_x64", True)
+
 from . import galerkin as galerkin, integrators as integrators, pinns as pinns
 from .basespace import BaseSpace as BaseSpace
 from .coordinates import CoordSys as CoordSys, get_CoordSys as get_CoordSys

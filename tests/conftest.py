@@ -13,7 +13,12 @@ def clear_jax_caches_after_module():
 
 
 def pytest_addoption(parser) -> None:
-    parser.addoption("--float64", action="store_true", default=False)
+    parser.addoption(
+        "--float64",
+        action="store_true",
+        default=True,
+        help="Deprecated compatibility flag; tests run in x64 by default.",
+    )
     parser.addoption(
         "--num-devices",
         type=int,
@@ -23,10 +28,11 @@ def pytest_addoption(parser) -> None:
 
 
 def pytest_configure(config) -> None:
-    os.environ["JAX_ENABLE_X64"] = "1" if config.getoption("--float64") else "0"
+    os.environ["JAX_ENABLE_X64"] = "1"
+    os.environ.setdefault("JAX_PLATFORMS", "cpu")
     import jax
 
-    jax.config.update("jax_enable_x64", config.getoption("--float64"))
+    jax.config.update("jax_enable_x64", True)
     n = config.getoption("--num-devices")
     if n > 1:
         jax.config.update("jax_num_cpu_devices", n)

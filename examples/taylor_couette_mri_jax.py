@@ -15,7 +15,14 @@ import sympy as sp
 from scipy.special import iv, kv
 
 from jaxfun.galerkin import FunctionSpace, InnerKind, TestFunction, TrialFunction, inner
-from jaxfun.la import generalized_eig
+from jaxfun.la import (
+    NONMODAL_FINITE_CAP,
+    finite_eigensystem,
+    generalized_eig,
+    parse_times,
+    print_transient_growth,
+    transient_growth_from_eigs,
+)
 
 try:
     from examples.taylor_couette_linear_jax import (
@@ -151,6 +158,12 @@ class TaylorCouetteMRIJax:
             res = inner(test * expr, kind=InnerKind.BILINEAR, num_quad_points=self.N)
             out = out + np.asarray(res.todense(), dtype=complex)
         return out
+
+    def _dense_inner(self, test_expr, trial_expr):
+        res = inner(
+            test_expr * trial_expr, kind=InnerKind.BILINEAR, num_quad_points=self.N
+        )
+        return np.asarray(res.todense(), dtype=complex)
 
     def _lap_terms(self, m, kz):
         r = self.r
@@ -387,6 +400,82 @@ class TaylorCouetteMRIJax:
         )
         return w[:n_return], V[:, :n_return]
 
+    def energy_matrix(self, m, kz, kind="total"):
+        r"""Cylindrical perturbation-energy metric.
+
+        ``kind`` selects ``'kinetic'``, ``'magnetic'``, or ``'total'``.
+        Reference: ``couette/taylor_couette_mri.py:482-531``.
+        """
+        if kind not in ("total", "kinetic", "magnetic"):
+            raise ValueError("kind must be 'total', 'kinetic', or 'magnetic'")
+        want_kin = kind in ("total", "kinetic")
+        want_mag = kind in ("total", "magnetic")
+        n = self.n
+        r = self.r
+
+        if self.magnetic_bc == "conducting":
+            Q = np.zeros((7 * n, 7 * n), dtype=complex)
+            idx = {"ur": 0, "ut": 1, "uz": 2, "p": 3, "br": 4, "bt": 5, "bz": 6}
+            names = ([] if not want_kin else ["ur", "ut", "uz"])
+            names += [] if not want_mag else ["br", "bt", "bz"]
+            for name in names:
+                W = self._blk(self.tv[name], self.tr[name], [(r, 0)])
+                W = 0.5 * (W + W.conj().T)
+                sl = slice(idx[name] * n, (idx[name] + 1) * n)
+                Q[sl, sl] = W
+            return Q
+
+        Schi, Sbth = self._flux_bases(kz)
+        spaces = {
+            "ur": self.SDv,
+            "ut": self.SDv,
+            "uz": self.SDv,
+            "p": self.SP,
+            "chi": Schi,
+            "bt": Sbth,
+        }
+        tv = {name: TestFunction(space) for name, space in spaces.items()}
+        tr = {name: TrialFunction(space) for name, space in spaces.items()}
+        idx = {"ur": 0, "ut": 1, "uz": 2, "p": 3, "chi": 4, "bt": 5}
+        Q = np.zeros((6 * n, 6 * n), dtype=complex)
+        names = ([] if not want_kin else ["ur", "ut", "uz"])
+        names += [] if not want_mag else ["bt"]
+        for name in names:
+            W = self._blk(tv[name], tr[name], [(r, 0)])
+            W = 0.5 * (W + W.conj().T)
+            sl = slice(idx[name] * n, (idx[name] + 1) * n)
+            Q[sl, sl] = W
+        if want_mag:
+            kz_s = sp.Float(float(kz))
+            chi_metric = self._dense_inner(tv["chi"], (kz_s**2 / r) * tr["chi"])
+            chi_metric += self._dense_inner(
+                sp.diff(tv["chi"], r, 1), (1 / r) * sp.diff(tr["chi"], r, 1)
+            )
+            chi_metric = 0.5 * (chi_metric + chi_metric.conj().T)
+            sl = slice(idx["chi"] * n, (idx["chi"] + 1) * n)
+            Q[sl, sl] = chi_metric
+        return Q
+
+    def nonmodal_growth(
+        self,
+        m,
+        kz,
+        times,
+        n_modes=None,
+        finite_cap=NONMODAL_FINITE_CAP,
+        energy="total",
+    ):
+        """Optimal linear transient growth in the selected energy norm.
+
+        Reference: ``couette/taylor_couette_mri.py:533-545``.
+        """
+        w, V = finite_eigensystem(
+            *self.assemble(m, kz), finite_cap=finite_cap, n_return=n_modes
+        )
+        return transient_growth_from_eigs(
+            w, V, self.energy_matrix(m, kz, energy), times
+        )
+
     def growth_rate(self, m, kz):
         w = generalized_eig(*self.assemble(m, kz))
         return float(w[0].real) if len(w) else float("nan")
@@ -395,6 +484,108 @@ class TaylorCouetteMRIJax:
         growth = np.array([self.growth_rate(m, kz) for kz in kz_list])
         i = int(np.argmax(growth))
         return float(kz_list[i]), float(growth[i]), growth
+
+    def critical_eta_mag(self, m, kz, lo=1e-5, hi=1.0, iters=34):
+        """Largest eta_mag still unstable at fixed dimensional B0 and nu."""
+        L0, Lnu, Leta, M = self.assemble_parts(m, kz)
+        L0nu = L0 + self.nu * Lnu
+
+        def growth(eta):
+            w = generalized_eig(L0nu + eta * Leta, M)
+            return w[0].real if len(w) else -np.inf
+
+        if growth(lo) < 0:
+            return None
+        if growth(hi) > 0:
+            return hi
+        for _ in range(iters):
+            mid = math.sqrt(lo * hi)
+            if growth(mid) > 0:
+                lo = mid
+            else:
+                hi = mid
+        return math.sqrt(lo * hi)
+
+    def critical_Rm_fixed_B0_nu(self, m=0, kz_list=None, **kw):
+        """Critical Rm along the fixed dimensional B0/nu scan."""
+        b = self.base
+        if kz_list is None:
+            kz_list = np.linspace(1.0, 8.0, 18) / b.gap
+        best = None
+        for kz in kz_list:
+            eta_c = self.critical_eta_mag(m, kz, **kw)
+            if eta_c is None:
+                continue
+            if best is None or eta_c > best[1]:
+                best = (float(kz), float(eta_c))
+        if best is None:
+            return None
+        kz_c, eta_c = best
+        Rm_c = b.Omega1 * b.R1 * b.gap / eta_c
+        return {
+            "kz_c": kz_c,
+            "eta_mag_c": eta_c,
+            "Rm_c": Rm_c,
+            "S_c": self.B0 * b.gap / eta_c,
+        }
+
+    def critical_eta_mag_fixed_controls(
+        self, m, kz, Pm=None, S=None, lo=1e-5, hi=1.0, iters=34
+    ):
+        """Largest eta_mag still unstable at fixed Pm and Lundquist S."""
+        b = self.base
+        Pm = self.Pm if Pm is None else float(Pm)
+        S = self.S if S is None else float(S)
+        if not (Pm > 0 and np.isfinite(Pm)):
+            raise ValueError("Pm must be a positive finite number")
+        if not (S >= 0 and np.isfinite(S)):
+            raise ValueError("S must be a non-negative finite number")
+
+        def growth(eta):
+            nu = Pm * eta
+            B0 = S * eta / b.gap
+            L0, Lnu, Leta, M = self.assemble_parts(m, kz, B0=B0)
+            w = generalized_eig(L0 + nu * Lnu + eta * Leta, M)
+            return w[0].real if len(w) else -np.inf
+
+        if growth(lo) < 0:
+            return None
+        if growth(hi) > 0:
+            return hi
+        for _ in range(iters):
+            mid = math.sqrt(lo * hi)
+            if growth(mid) > 0:
+                lo = mid
+            else:
+                hi = mid
+        return math.sqrt(lo * hi)
+
+    def critical_Rm(self, m=0, kz_list=None, Pm=None, S=None, **kw):
+        """Critical magnetic Reynolds number at fixed Pm and Lundquist S."""
+        b = self.base
+        if kz_list is None:
+            kz_list = np.linspace(1.0, 8.0, 18) / b.gap
+        Pm = self.Pm if Pm is None else float(Pm)
+        S = self.S if S is None else float(S)
+        best = None
+        for kz in kz_list:
+            eta_c = self.critical_eta_mag_fixed_controls(m, kz, Pm=Pm, S=S, **kw)
+            if eta_c is None:
+                continue
+            if best is None or eta_c > best[1]:
+                best = (float(kz), float(eta_c))
+        if best is None:
+            return None
+        kz_c, eta_c = best
+        return {
+            "kz_c": kz_c,
+            "eta_mag_c": eta_c,
+            "nu_c": Pm * eta_c,
+            "B0_c": S * eta_c / b.gap,
+            "Rm_c": b.Omega1 * b.R1 * b.gap / eta_c,
+            "Pm": Pm,
+            "S_c": S,
+        }
 
 
 def _default_omega2(R1, R2, Omega1):
@@ -418,6 +609,17 @@ def main(argv=None):
     )
     parser.add_argument("--m", type=int, default=0)
     parser.add_argument("--kz", type=float, default=3.0)
+    parser.add_argument("--kz-min", type=float, default=0.5)
+    parser.add_argument("--kz-max", type=float, default=8.0)
+    parser.add_argument("--kz-num", type=int, default=30)
+    parser.add_argument("--nonmodal", action="store_true")
+    parser.add_argument("--times", type=str, default="1,5,10,20")
+    parser.add_argument("--n-modes", type=int, default=None)
+    parser.add_argument(
+        "--energy", choices=["total", "kinetic", "magnetic"], default="total"
+    )
+    parser.add_argument("--critical-rm", action="store_true")
+    parser.add_argument("--critical-fixed-B0-nu", action="store_true")
     parser.add_argument("--local-check", action="store_true")
     args = parser.parse_args(argv)
 
@@ -440,12 +642,42 @@ def main(argv=None):
         family=args.family,
         magnetic_bc=args.magnetic_bc,
     )
-    w, _ = solver.eigs(args.m, args.kz, n_return=6)
     print(base.describe())
     print(
         f"B0={args.B0:g} nu={args.nu:g} eta_mag={args.eta_mag:g} "
         f"Pm={solver.Pm:g} walls={args.magnetic_bc}"
     )
+    print(
+        f"Re={solver.Re:.3g} Rm={solver.Rm:.3g} "
+        f"S(Lundquist)={solver.S:.3g} Ha={solver.Ha:.3g}"
+    )
+
+    if args.nonmodal:
+        rows = solver.nonmodal_growth(
+            args.m,
+            args.kz,
+            parse_times(args.times),
+            n_modes=args.n_modes,
+            energy=args.energy,
+        )
+        print(
+            f"kz={args.kz:g}: MHD/MRI non-modal transient growth "
+            f"({args.energy} energy):"
+        )
+        print_transient_growth(rows)
+        return 0
+
+    if args.critical_rm or args.critical_fixed_B0_nu:
+        kzs = np.linspace(args.kz_min, args.kz_max, args.kz_num)
+        result = (
+            solver.critical_Rm_fixed_B0_nu(args.m, kzs)
+            if args.critical_fixed_B0_nu
+            else solver.critical_Rm(args.m, kzs)
+        )
+        print(result)
+        return 0
+
+    w, _ = solver.eigs(args.m, args.kz, n_return=6)
     print(f"kz={args.kz:g}: leading eigenvalues")
     for value in w:
         print(f"   s = {value.real:+.6e}  {value.imag:+.6e} i")
