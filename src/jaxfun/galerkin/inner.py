@@ -28,6 +28,7 @@ from jaxfun.typing import (
     TestSpaceType,
     TrialSpaceType,
 )
+from jaxfun.utils import split_linear_nonlinear_terms
 from jaxfun.utils.common import lambdify, matmat
 
 from .arguments import (
@@ -1015,6 +1016,63 @@ def assemble_multivar(
 
     a = jnp.einsum("pi,pk,qj,ql,pq->ikjl", P0, P1, P2, P3, sci)
     return a
+
+
+def _solve_with_cached_factor(
+    operator: BaseMatrix, factor, diagonal: Array | None, rhs: Array
+) -> Array:
+    if diagonal is not None:
+        if diagonal.shape == rhs.shape:
+            return rhs / diagonal
+        return (rhs.reshape((-1,)) / diagonal.reshape((-1,))).reshape(rhs.shape)
+    if factor is not None:
+        return factor.solve(rhs)
+    return operator.solve(rhs)
+
+
+class Project:
+    """Cached linear Galerkin projection operator.
+
+    This mirrors the linear part of ``shenfun.forms.project.Project``: the
+    target mass matrix and the source-to-target operator are assembled once,
+    and calls only perform ``A @ coeffs`` followed by the cached mass solve.
+
+    The supported contract is intentionally conservative: ``expr`` must be
+    linear in one :class:`TrialFunction`, and ``target_space`` is a scalar
+    function or tensor-product space.  Nonlinear physical-array projections can
+    still use the existing per-call :func:`project`.
+    """
+
+    def __init__(self, expr: sp.Expr, target_space: TrialSpaceType) -> None:
+        v = TestFunction(target_space)
+        u = TrialFunction(target_space)
+        _test, source_trial = get_basisfunctions(v * expr)
+        if not isinstance(source_trial, TrialFunction):
+            raise ValueError(
+                "Project requires an expression linear in one TrialFunction"
+            )
+        linear_expr, nonlinear_expr = split_linear_nonlinear_terms(expr, source_trial)
+        if sp.sympify(linear_expr) == 0 or sp.sympify(nonlinear_expr) != 0:
+            raise ValueError(
+                "Project requires an expression linear in one TrialFunction"
+            )
+        self.target_space = target_space
+        self.source_space = source_trial.functionspace
+        self.mass_operator = inner(v * u, kind=InnerKind.BILINEAR)
+        self.operator = inner(v * expr, kind=InnerKind.BILINEAR)
+        self.mass_diagonal = self.mass_operator.diagonal_or_none()
+        self.mass_factor = None
+        if self.mass_diagonal is None:
+            lu_factor = getattr(self.mass_operator, "lu_factor", None)
+            if lu_factor is not None:
+                self.mass_factor = lu_factor()
+
+    def __call__(self, source_coeffs: Array) -> Array:
+        source_coeffs = jnp.asarray(source_coeffs)
+        rhs = self.operator @ source_coeffs
+        return _solve_with_cached_factor(
+            self.mass_operator, self.mass_factor, self.mass_diagonal, rhs
+        )
 
 
 def project1D(ue: sp.Expr, V: OrthogonalSpace | Composite | DirectSum) -> Array:
