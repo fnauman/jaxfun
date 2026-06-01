@@ -5,6 +5,12 @@ import pytest
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_mhd_jax import PlaneCouetteMHDJax
 from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
+from examples.taylor_couette_dns_jax import (
+    AxisymmetricMRIDNSJax,
+    AxisymmetricTCDNSJax,
+    TaylorCouetteDNSJax,
+    TaylorCouetteMRIDNSJax,
+)
 from examples.taylor_couette_linear_jax import CircularCouette, TaylorCouetteLinearJax
 from examples.taylor_couette_mri_jax import TaylorCouetteMRIJax
 from jaxfun import Domain
@@ -15,6 +21,10 @@ from tests._parity import (
     pcf_fluctuation_reference,
     pcf_mhd_reference,
     pcf_mhd_shearpy_reference,
+    tc_3d_dns_reference,
+    tc_3d_mri_dns_reference,
+    tc_axisymmetric_dns_reference,
+    tc_axisymmetric_mri_dns_reference,
     tc_linear_eigenvalues,
     tc_linear_nonmodal,
     tc_mri_eigenvalues,
@@ -213,6 +223,175 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
             assert np.allclose(
                 got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
             )
+
+
+def _shenfun_tc_rfft_coeff_layout(coeff, *, radial_n: int, axial_n: int):
+    coeff_np = np.asarray(coeff)
+    out = np.zeros((axial_n // 2 + 1, radial_n), dtype=complex)
+    out[:, : coeff_np.shape[1]] = coeff_np[: axial_n // 2 + 1, :]
+    return out
+
+
+def test_tc_axisymmetric_dns_matches_live_shenfun_diagnostics_and_coeffs():
+    solver = AxisymmetricTCDNSJax(
+        CircularCouette(), nu=0.002, Nr=8, Nz=6, dt=1.0e-3, dealias=1.0
+    )
+    state0 = solver.initial_state(amp=1.0e-4)
+    references = tc_axisymmetric_dns_reference(include_coefficients=True)
+
+    for reference in references:
+        state = solver.solve(state0, reference["steps"])
+        diag = solver.diagnostics(state)
+        for key in ("E", "div_linf", "wall", "Eth"):
+            assert float(diag[key]) == pytest.approx(
+                reference[key], rel=1.0e-10, abs=1.0e-12
+            )
+
+        ref_coeffs = reference["coefficients"]
+        for got, expected in zip(state.u, ref_coeffs["u"], strict=True):
+            got_layout = _shenfun_tc_rfft_coeff_layout(
+                got, radial_n=solver.Nr, axial_n=solver.Nz
+            )
+            assert np.allclose(
+                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+            )
+        p_layout = _shenfun_tc_rfft_coeff_layout(
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+        )
+        assert np.allclose(
+            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+        )
+
+
+def _shenfun_tc3d_rfft_coeff_layout(coeff, *, radial_n: int, axial_n: int):
+    coeff_np = np.asarray(coeff)
+    out = np.zeros((coeff_np.shape[0], axial_n // 2 + 1, radial_n), dtype=complex)
+    out[:, :, : coeff_np.shape[2]] = coeff_np[:, : axial_n // 2 + 1, :]
+    return out
+
+
+def test_tc_3d_dns_matches_live_shenfun_diagnostics_and_coeffs():
+    solver = TaylorCouetteDNSJax(
+        CircularCouette(),
+        nu=0.002,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state0 = solver.initial_state(amp=1.0e-4, m=1, kz_mode=1)
+    references = tc_3d_dns_reference(include_coefficients=True)
+
+    for reference in references:
+        state = solver.solve(state0, reference["steps"])
+        diag = solver.diagnostics(state)
+        assert float(diag["E"]) == pytest.approx(
+            reference["E"], rel=1.0e-10, abs=1.0e-12
+        )
+        assert float(diag["div_linf"]) == pytest.approx(
+            reference["div_linf"], rel=1.0e-8, abs=1.0e-10
+        )
+
+        ref_coeffs = reference["coefficients"]
+        for got, expected in zip(state.u, ref_coeffs["u"], strict=True):
+            got_layout = _shenfun_tc3d_rfft_coeff_layout(
+                got, radial_n=solver.Nr, axial_n=solver.Nz
+            )
+            assert np.allclose(
+                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+            )
+        p_layout = _shenfun_tc3d_rfft_coeff_layout(
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+        )
+        assert np.allclose(
+            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+        )
+
+
+def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
+    solver = AxisymmetricMRIDNSJax(
+        _keplerian_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state0, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-8)
+    references = tc_axisymmetric_mri_dns_reference(include_coefficients=True)
+
+    for reference in references:
+        state = solver.solve(state0, reference["steps"])
+        diag = solver.diagnostics(state)
+        for key in ("Ekin", "Emag", "E"):
+            assert float(diag[key]) == pytest.approx(
+                reference[key], rel=1.0e-10, abs=1.0e-24
+            )
+        for key in ("divu", "divb"):
+            assert float(diag[key]) == pytest.approx(
+                reference[key], rel=1.0e-8, abs=1.0e-12
+            )
+
+        ref_coeffs = reference["coefficients"]
+        for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
+            got_layout = _shenfun_tc_rfft_coeff_layout(
+                got, radial_n=solver.Nr, axial_n=solver.Nz
+            )
+            assert np.allclose(
+                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+            )
+        p_layout = _shenfun_tc_rfft_coeff_layout(
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+        )
+        assert np.allclose(
+            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+        )
+
+
+def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
+    solver = TaylorCouetteMRIDNSJax(
+        _keplerian_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state0, _ = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1.0e-8)
+    references = tc_3d_mri_dns_reference(include_coefficients=True)
+
+    for reference in references:
+        state = solver.solve(state0, reference["steps"])
+        diag = solver.diagnostics(state)
+        for key in ("Ekin", "Emag", "E"):
+            assert float(diag[key]) == pytest.approx(
+                reference[key], rel=1.0e-10, abs=1.0e-24
+            )
+        for key in ("divu", "divb"):
+            assert float(diag[key]) == pytest.approx(
+                reference[key], rel=1.0e-8, abs=1.0e-12
+            )
+
+        ref_coeffs = reference["coefficients"]
+        for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
+            got_layout = _shenfun_tc3d_rfft_coeff_layout(
+                got, radial_n=solver.Nr, axial_n=solver.Nz
+            )
+            assert np.allclose(
+                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+            )
+        p_layout = _shenfun_tc3d_rfft_coeff_layout(
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+        )
+        assert np.allclose(
+            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+        )
 
 
 def test_tc_linear_matches_live_shenfun_eigenvalues_and_nonmodal():

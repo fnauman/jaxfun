@@ -69,6 +69,21 @@ def _require_resolved_m(m: int, ntheta: int) -> None:
         )
 
 
+def _positive_pivot_phase(vec):
+    pivot_index = max(range(vec.shape[0]), key=lambda idx: abs(vec[idx]))
+    pivot = vec[pivot_index]
+    pivot_abs = float(abs(pivot))
+    if pivot_abs == 0.0:
+        return vec
+    pivot_real = float(pivot.real)
+    pivot_imag = float(pivot.imag)
+    if pivot_real < 0.0 or (
+        abs(pivot_real) <= 1.0e-14 * pivot_abs and pivot_imag < 0.0
+    ):
+        return -vec
+    return vec
+
+
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class AxisymmetricTCState:
@@ -405,8 +420,8 @@ class AxisymmetricTCDNSJax:
             if kpos == kneg:
                 arr = arr.at[kpos, :n].set(jnp.real(block))
             else:
-                arr = arr.at[kpos, :n].set(0.5 * block)
-                arr = arr.at[kneg, :n].set(0.5 * jnp.conj(block))
+                arr = arr.at[kpos, :n].set(block)
+                arr = arr.at[kneg, :n].set(jnp.conj(block))
             comps[comp] = arr
         nold = tuple(jnp.zeros_like(ui) for ui in comps)
         return AxisymmetricTCState(tuple(comps), state.p, nold, False), complex(
@@ -1129,7 +1144,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
             magnetic_bc="conducting",
         )
         w, vecs = lin.eigs(m=0, kz=kz, n_return=which + 1)
-        vec = vecs[:, which]
+        vec = _positive_pivot_phase(vecs[:, which])
         n = lin.n
         state = self.zero_state()
         comps = list(state.x)
@@ -1142,8 +1157,8 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
             if kpos == kneg:
                 arr = arr.at[kpos, :n].set(jnp.real(block))
             else:
-                arr = arr.at[kpos, :n].set(0.5 * block)
-                arr = arr.at[kneg, :n].set(0.5 * jnp.conj(block))
+                arr = arr.at[kpos, :n].set(block)
+                arr = arr.at[kneg, :n].set(jnp.conj(block))
             comps[comp] = arr
         nold = tuple(jnp.zeros_like(xi) for xi in comps)
         return AxisymmetricMRIState(tuple(comps), state.p, nold, False), complex(
@@ -1503,6 +1518,8 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
         )
         w, vecs = lin.eigs(m=m, kz=kz, n_return=which + 1)
         vec = vecs[:, which]
+        if int(m) == 0:
+            vec = _positive_pivot_phase(vec)
         n = lin.n
         state = self.zero_state()
         comps = list(state.x)

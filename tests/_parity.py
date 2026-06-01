@@ -460,3 +460,271 @@ def pcf_mhd_shearpy_reference(
             """
         )
     )
+
+
+def tc_axisymmetric_dns_reference(
+    *,
+    steps: tuple[int, ...] = (1, 5, 50),
+    nr: int = 8,
+    nz: int = 6,
+    dt: float = 1.0e-3,
+    nu: float = 0.002,
+    amp: float = 1.0e-4,
+    family: str = "L",
+    dealias: float = 1.0,
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run live shenfun axisymmetric hydrodynamic TC DNS and return rows."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from taylor_couette_linear import CircularCouette
+            from taylor_couette_dns import AxisymmetricTCDNS
+
+            solver = AxisymmetricTCDNS(
+                CircularCouette(),
+                nu={nu!r},
+                Nr={int(nr)!r},
+                Nz={int(nz)!r},
+                dt={dt!r},
+                family={family!r},
+                dealias={dealias!r},
+            )
+            solver.set_perturbation(amp={amp!r}, kz_mode=1)
+
+            def complex_rows(arr):
+                arr = np.asarray(arr)
+                return [
+                    [[float(z.real), float(z.imag)] for z in row]
+                    for row in arr
+                ]
+
+            rows = []
+            tstep = 0
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                diag = solver.run(end_time=(target - tstep)*solver.dt, moderror=0)
+                tstep = target
+                row = {{key: diag[key] for key in ('E', 'div_linf', 'wall', 'Eth')}}
+                row['steps'] = int(target)
+                if {include_coefficients!r}:
+                    row['coefficients'] = {{
+                        'u': [complex_rows(solver.u_hat[i]) for i in range(3)],
+                        'p': complex_rows(solver.p_hat),
+                    }}
+                rows.append(row)
+            print(json.dumps(rows))
+            """
+        )
+    )
+
+
+def tc_3d_dns_reference(
+    *,
+    steps: tuple[int, ...] = (1, 5, 50),
+    nr: int = 8,
+    ntheta: int = 4,
+    nz: int = 6,
+    dt: float = 1.0e-3,
+    nu: float = 0.002,
+    amp: float = 1.0e-4,
+    m: int = 1,
+    family: str = "L",
+    dealias: float = 1.0,
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run live shenfun 3D hydrodynamic TC DNS and return rows."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from taylor_couette_linear import CircularCouette
+            from taylor_couette_dns import TaylorCouetteDNS
+
+            solver = TaylorCouetteDNS(
+                CircularCouette(),
+                nu={nu!r},
+                Nr={int(nr)!r},
+                Ntheta={int(ntheta)!r},
+                Nz={int(nz)!r},
+                dt={dt!r},
+                family={family!r},
+                dealias={dealias!r},
+            )
+            solver.set_perturbation(amp={amp!r}, m={int(m)!r}, kz_mode=1)
+
+            def complex_rows(arr):
+                arr = np.asarray(arr)
+                return [
+                    [
+                        [[float(z.real), float(z.imag)] for z in radial]
+                        for radial in zrows
+                    ]
+                    for zrows in arr
+                ]
+
+            rows = []
+            tstep = 0
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                diag = solver.run(end_time=(target - tstep)*solver.dt, moderror=0)
+                tstep = target
+                row = {{key: diag[key] for key in ('E', 'div_linf')}}
+                row['steps'] = int(target)
+                if {include_coefficients!r}:
+                    row['coefficients'] = {{
+                        'u': [complex_rows(solver.u_hat[i]) for i in range(3)],
+                        'p': complex_rows(solver.p_hat),
+                    }}
+                rows.append(row)
+            print(json.dumps(rows))
+            """
+        )
+    )
+
+
+def tc_axisymmetric_mri_dns_reference(
+    *,
+    steps: tuple[int, ...] = (1, 5, 50),
+    nr: int = 8,
+    nz: int = 6,
+    dt: float = 1.0e-3,
+    b0: float = 0.1,
+    nu: float = 0.001,
+    eta_mag: float = 0.001,
+    amp: float = 1.0e-8,
+    family: str = "L",
+    dealias: float = 1.0,
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run live shenfun axisymmetric Taylor-Couette MHD/MRI DNS and return rows."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from taylor_couette_linear import CircularCouette
+            from taylor_couette_dns import AxisymmetricMRIDNS
+
+            eta = 0.5
+            solver = AxisymmetricMRIDNS(
+                CircularCouette(1.0, 2.0, 1.0, eta**1.5),
+                B0={b0!r},
+                nu={nu!r},
+                eta_mag={eta_mag!r},
+                Nr={int(nr)!r},
+                Nz={int(nz)!r},
+                dt={dt!r},
+                family={family!r},
+                dealias={dealias!r},
+            )
+            solver.seed_linear_eigenmode(kz_mode=1, amp={amp!r})
+
+            def complex_rows(arr):
+                arr = np.asarray(arr)
+                return [
+                    [[float(z.real), float(z.imag)] for z in row]
+                    for row in arr
+                ]
+
+            rows = []
+            tstep = 0
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                diag = solver.run(end_time=(target - tstep)*solver.dt, moderror=0)
+                tstep = target
+                row = {{
+                    key: diag[key]
+                    for key in ('Ekin', 'Emag', 'E', 'divu', 'divb')
+                }}
+                row['steps'] = int(target)
+                if {include_coefficients!r}:
+                    row['coefficients'] = {{
+                        'x': [complex_rows(solver.x[i]) for i in range(6)],
+                        'p': complex_rows(solver.p_hat),
+                    }}
+                rows.append(row)
+            print(json.dumps(rows))
+            """
+        )
+    )
+
+
+def tc_3d_mri_dns_reference(
+    *,
+    steps: tuple[int, ...] = (1, 5, 50),
+    nr: int = 8,
+    ntheta: int = 4,
+    nz: int = 6,
+    dt: float = 1.0e-3,
+    b0: float = 0.1,
+    nu: float = 0.001,
+    eta_mag: float = 0.001,
+    amp: float = 1.0e-8,
+    m: int = 1,
+    family: str = "L",
+    dealias: float = 1.0,
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run live shenfun 3D Taylor-Couette MHD/MRI DNS and return rows."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from taylor_couette_linear import CircularCouette
+            from taylor_couette_dns import TaylorCouetteMRIDNS
+
+            eta = 0.5
+            solver = TaylorCouetteMRIDNS(
+                CircularCouette(1.0, 2.0, 1.0, eta**1.5),
+                B0={b0!r},
+                nu={nu!r},
+                eta_mag={eta_mag!r},
+                Nr={int(nr)!r},
+                Ntheta={int(ntheta)!r},
+                Nz={int(nz)!r},
+                dt={dt!r},
+                family={family!r},
+                dealias={dealias!r},
+            )
+            solver.seed_linear_eigenmode(m={int(m)!r}, kz_mode=1, amp={amp!r})
+
+            def complex_rows(arr):
+                arr = np.asarray(arr)
+                return [
+                    [
+                        [[float(z.real), float(z.imag)] for z in radial]
+                        for radial in zrows
+                    ]
+                    for zrows in arr
+                ]
+
+            rows = []
+            tstep = 0
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                diag = solver.run(end_time=(target - tstep)*solver.dt, moderror=0)
+                tstep = target
+                row = {{
+                    key: diag[key]
+                    for key in ('Ekin', 'Emag', 'E', 'divu', 'divb')
+                }}
+                row['steps'] = int(target)
+                if {include_coefficients!r}:
+                    row['coefficients'] = {{
+                        'x': [complex_rows(solver.x[i]) for i in range(6)],
+                        'p': complex_rows(solver.p_hat),
+                    }}
+                rows.append(row)
+            print(json.dumps(rows))
+            """
+        )
+    )
