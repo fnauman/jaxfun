@@ -51,6 +51,11 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         self.omega = float(omega)
         self.shear_rate = float(shear_rate)
         self.background_b = tuple(float(v) for v in background_b)
+        self.x_bounds = (float(domain[0][0]), float(domain[0][1]))
+        self.x_center = 0.5 * (self.x_bounds[0] + self.x_bounds[1])
+        self.x_half_width = 0.5 * (self.x_bounds[1] - self.x_bounds[0])
+        if self.x_half_width <= 0.0:
+            raise ValueError("x domain must have positive width")
         super().__init__(
             N=N,
             domain=domain,
@@ -67,6 +72,46 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         self.dUb_dx = -self.shear_rate
         self.q_shear = self.shear_rate / self.omega if self.omega != 0 else math.inf
         self.kappa2 = 2.0 * self.omega * (2.0 * self.omega - self.shear_rate)
+
+    def _wall_factor(self):
+        xi = (self.X[0] - self.x_center) / self.x_half_width
+        return 1.0 - xi**2
+
+    def initial_state(self) -> MHDState:
+        """Return the shearpy MRI channel-mode seed used by the reference."""
+        x, y, z = self.X
+        wall = self._wall_factor()
+        amp = self.perturbation_amplitude
+        Ly = self.domain[1][1] - self.domain[1][0]
+        Lz = self.domain[2][1] - self.domain[2][0]
+        ky = 2.0 * jnp.pi / Ly
+        kz = 2.0 * jnp.pi / Lz
+        u0 = jnp.zeros(self.TD.num_quad_points)
+        u1 = jnp.zeros_like(u0)
+        u2 = jnp.zeros_like(u0)
+        if amp != 0.0:
+            for harmonic in (1, 2, 3):
+                u0 = u0 + amp * wall * jnp.cos(harmonic * kz * z)
+                u1 = u1 + amp * wall * jnp.sin(harmonic * kz * z)
+            u0 = u0 + 0.1 * amp * wall * jnp.sin(ky * y) * jnp.cos(kz * z)
+            u1 = u1 + 0.1 * amp * wall * jnp.cos(ky * y) * jnp.sin(kz * z)
+            u2 = u2 + 0.1 * amp * wall * jnp.sin(2.0 * ky * y) * jnp.cos(
+                2.0 * kz * z
+            )
+        flow = self.state_from_physical((u0, u1, u2))
+
+        mag_amp = self.magnetic_amplitude
+        ax = jnp.zeros(self.TD.num_quad_points)
+        ay = jnp.zeros_like(ax)
+        az = jnp.zeros_like(ax)
+        if mag_amp != 0.0:
+            ax = mag_amp * wall * (1.0 / kz) * jnp.sin(ky * y) * jnp.sin(kz * z)
+        A = (
+            self.TD.mask_nyquist(self.TD.forward(ax)),
+            self.TD.mask_nyquist(self.TD.forward(ay)),
+            self.TD.mask_nyquist(self.TD.forward(az)),
+        )
+        return MHDState(flow=flow, A=A)
 
     def _total_B_physical(self, B, padded: bool = False):
         bp = self._backward_B(B, padded=padded)
@@ -112,11 +157,26 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         )
         reynolds = integrate(jnp.real(up[0] * jnp.conj(up[1])), self.TD) / volume
         maxwell = -integrate(jnp.real(bp[0] * jnp.conj(bp[1])), self.TD) / volume
+        transport = reynolds + maxwell
+        vA2 = self.background_b[2] ** 2
+        alpha = transport / vA2 if vA2 > 0.0 else jnp.asarray(jnp.nan)
+        emag_total = jnp.asarray(0.0, dtype=up[0].real.dtype)
+        for bi, space in zip(bp, (self.TD, self.TC, self.TC), strict=True):
+            emag_total = emag_total + jnp.real(integrate(jnp.conj(bi) * bi, space))
+        b_fluct = self._backward_B(self.update_B_from_A(state.A), padded=False)
+        bmax = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in b_fluct]))
+        bmax_total = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in bp]))
         return {
             **diag,
+            "Emag_total": emag_total,
+            "bmax": bmax,
+            "bmax_total": bmax_total,
             "reynolds_xy": reynolds,
             "maxwell_xy": maxwell,
-            "alpha": reynolds + maxwell,
+            "reynolds_stress": reynolds,
+            "maxwell_stress": maxwell,
+            "transport_xy": transport,
+            "alpha": alpha,
             "q_shear": jnp.asarray(self.q_shear),
             "kappa2": jnp.asarray(self.kappa2),
         }

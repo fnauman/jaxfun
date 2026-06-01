@@ -4,6 +4,7 @@ import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_mhd_jax import PlaneCouetteMHDJax
+from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
 from examples.taylor_couette_linear_jax import CircularCouette, TaylorCouetteLinearJax
 from examples.taylor_couette_mri_jax import TaylorCouetteMRIJax
 from jaxfun import Domain
@@ -13,6 +14,7 @@ from jaxfun.galerkin.Legendre import Legendre
 from tests._parity import (
     pcf_fluctuation_reference,
     pcf_mhd_reference,
+    pcf_mhd_shearpy_reference,
     tc_linear_eigenvalues,
     tc_linear_nonmodal,
     tc_mri_eigenvalues,
@@ -124,6 +126,71 @@ def test_pcf_mhd_matches_live_shenfun_diagnostics_and_coeffs():
         B = solver.update_B_from_A(state.A)
         bmax = max(float(np.max(np.abs(np.asarray(b)))) for b in solver._backward_B(B))
         assert bmax == pytest.approx(reference["bmax"], rel=1.0e-10, abs=1.0e-12)
+
+        ref_coeffs = reference["coefficients"]
+        for got, expected in zip(state.flow.u, ref_coeffs["u"], strict=True):
+            got_layout = _shenfun_rfft_coeff_layout(
+                got, radial_n=solver.N[0], spanwise_n=solver.N[2]
+            )
+            assert np.allclose(
+                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+            )
+        got_g = _shenfun_rfft_coeff_layout(
+            state.flow.g, radial_n=solver.N[0], spanwise_n=solver.N[2]
+        )
+        assert np.allclose(
+            got_g, _nested_complex(ref_coeffs["g"]), rtol=1.0e-8, atol=1.0e-10
+        )
+        for got, expected in zip(state.A, ref_coeffs["A"], strict=True):
+            got_layout = _shenfun_rfft_coeff_layout(
+                got, radial_n=solver.N[0], spanwise_n=solver.N[2]
+            )
+            assert np.allclose(
+                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+            )
+
+
+def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
+    solver = PlaneCouetteMRIShearpyJax(
+        N=(9, 8, 8),
+        family="L",
+        dt=1.0e-3,
+        omega=1.0,
+        shear_rate=1.0,
+        background_b=(0.0, 0.0, 0.1),
+        perturbation_amplitude=0.05,
+        magnetic_amplitude=0.05,
+    )
+    state0 = solver.initial_state()
+    references = pcf_mhd_shearpy_reference(include_coefficients=True)
+
+    diag_key_map = {
+        "Epert": "Epert",
+        "Etot": "Etot",
+        "Emag": "Emag",
+        "Emag_total": "Emag_total",
+        "divu_l2": "divL2",
+        "divb_l2": "divB_L2",
+        "top_wall_streamwise": "u_top",
+        "bottom_wall_streamwise": "u_bot",
+        "mean_shear": "mean_shear",
+        "bmax": "bmax",
+        "bmax_total": "bmax_total",
+        "reynolds_stress": "reynolds_stress",
+        "maxwell_stress": "maxwell_stress",
+        "alpha": "alpha",
+        "q_shear": "q_shear",
+        "kappa2": "kappa2",
+    }
+
+    for reference in references:
+        state = solver.solve(state0, reference["steps"])
+        diag = solver.diagnostics(state)
+        for ref_key, jax_key in diag_key_map.items():
+            atol = 5.0e-15 if "div" in ref_key else 1.0e-12
+            assert float(diag[jax_key]) == pytest.approx(
+                reference[ref_key], rel=1.0e-10, abs=atol
+            )
 
         ref_coeffs = reference["coefficients"]
         for got, expected in zip(state.flow.u, ref_coeffs["u"], strict=True):

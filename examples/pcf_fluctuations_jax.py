@@ -64,6 +64,7 @@ class PlaneCouetteFluctuationJax(KMM):
         )
         self.Ub = self.U_wall * self.X[0]
         self.Ubp = self.U_wall * self.Xp[0]
+        self.dUb_dx = self.U_wall
 
     def initial_state(self) -> KMMState:
         """Return the deterministic fluctuation initial condition.
@@ -92,7 +93,7 @@ class PlaneCouetteFluctuationJax(KMM):
     ) -> Velocity:
         n0, n1, n2 = n
         n0 = n0 + self.Ubp * grads["dudy"]
-        n1 = n1 + self.Ubp * grads["dvdy"] + up[0] * self.U_wall
+        n1 = n1 + self.Ubp * grads["dvdy"] + up[0] * self.dUb_dx
         n2 = n2 + self.Ubp * grads["dwdy"]
         return n0, n1, n2
 
@@ -117,7 +118,7 @@ class PlaneCouetteFluctuationJax(KMM):
             "divL2": self.divergence_l2(state),
             "u_top": jnp.real(jnp.mean(ut[1][-1, :, :])),
             "u_bot": jnp.real(jnp.mean(ut[1][0, :, :])),
-            "mean_shear": jnp.real(jnp.mean(dv_dx + self.U_wall)),
+            "mean_shear": jnp.real(jnp.mean(dv_dx + self.dUb_dx)),
         }
 
 
