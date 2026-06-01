@@ -7,7 +7,10 @@ potential A in TD^3, then recomputes B=curl(A) and J=curl(B) when needed.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax.numpy as jnp
 import sympy as sp

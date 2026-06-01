@@ -8,6 +8,9 @@ component ordering is (wall-normal, streamwise, spanwise).
 from __future__ import annotations
 
 import argparse
+import os
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax.numpy as jnp
 import sympy as sp

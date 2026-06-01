@@ -3,9 +3,11 @@ import jax.numpy as jnp
 import pytest
 
 from examples.taylor_couette_dns_jax import (
+    AxisymmetricMRIDNSJax,
     AxisymmetricTCDNSJax,
     CircularCouette,
     TaylorCouetteDNSJax,
+    TaylorCouetteMRIDNSJax,
     _require_resolved_m,
 )
 
@@ -106,4 +108,103 @@ def test_tc_dns_3d_eigenmode_growth_matches_linear_solver_x64() -> None:
 
     assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)
     assert float(solver.continuity_residual_l2(out)) < 1.0e-18
+    assert abs(complex(out.p[0, 0, 0])) < 1.0e-18
+
+
+def _keplerian_tc_base():
+    eta = 0.5
+    return CircularCouette(1.0, 2.0, 1.0, eta**1.5)
+
+
+def test_tc_mri_dns_zero_state_stays_zero() -> None:
+    solver = AxisymmetricMRIDNSJax(
+        _keplerian_tc_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state = solver.step(solver.zero_state())
+    diag = solver.diagnostics(state)
+
+    assert all(jnp.allclose(component, 0.0, atol=1.0e-12) for component in state.x)
+    assert jnp.allclose(state.p, 0.0, atol=1.0e-12)
+    assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
+    assert float(diag["divu"]) < 1.0e-12
+    assert float(diag["divb"]) < 1.0e-12
+
+
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="MRI DNS growth-rate validation uses x64",
+)
+def test_tc_mri_dns_eigenmode_growth_matches_linear_solver_x64() -> None:
+    solver = AxisymmetricMRIDNSJax(
+        _keplerian_tc_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state, eig = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-8)
+    rate, out = solver.growth_rate(state, steps=3)
+    diag = solver.diagnostics(out)
+
+    assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)
+    assert float(diag["divu"]) < 1.0e-7
+    assert float(diag["divb"]) < 1.0e-7
+    assert abs(complex(out.p[0, 0])) < 1.0e-18
+
+
+def test_tc_mri_dns_3d_zero_state_stays_zero() -> None:
+    solver = TaylorCouetteMRIDNSJax(
+        _keplerian_tc_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state = solver.step(solver.zero_state())
+    diag = solver.diagnostics(state)
+
+    assert all(jnp.allclose(component, 0.0, atol=1.0e-12) for component in state.x)
+    assert jnp.allclose(state.p, 0.0, atol=1.0e-12)
+    assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
+    assert float(diag["divu"]) < 1.0e-12
+    assert float(diag["divb"]) < 1.0e-12
+
+
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="3D MRI DNS growth-rate validation uses x64",
+)
+def test_tc_mri_dns_3d_eigenmode_growth_matches_linear_solver_x64() -> None:
+    solver = TaylorCouetteMRIDNSJax(
+        _keplerian_tc_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state, eig = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1.0e-8)
+    rate, out = solver.growth_rate(state, steps=3)
+    diag = solver.diagnostics(out)
+
+    assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)
+    assert float(diag["divu"]) < 1.0e-7
+    assert float(diag["divb"]) < 1.0e-7
     assert abs(complex(out.p[0, 0, 0])) < 1.0e-18
