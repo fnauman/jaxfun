@@ -279,3 +279,87 @@ def pcf_fluctuation_reference(
             """
         )
     )
+
+def pcf_mhd_reference(
+    *,
+    steps: tuple[int, ...] = (1, 5, 50),
+    n: tuple[int, int, int] = (9, 8, 8),
+    dt: float = 1.0e-3,
+    re: float = 400.0,
+    rm: float | None = None,
+    perturbation_amplitude: float = 0.05,
+    magnetic_amplitude: float = 0.05,
+    family: str = "L",
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run the live shenfun PCF-MHD reference and return parity rows."""
+    rm_expr = "None" if rm is None else repr(float(rm))
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from pcf_mhd_divfree import PlaneCouetteMHDDivFree
+
+            solver = PlaneCouetteMHDDivFree(
+                N={tuple(n)!r},
+                family={family!r},
+                dt={dt!r},
+                Re={re!r},
+                Rm={rm_expr},
+                perturbation_amplitude={perturbation_amplitude!r},
+                magnetic_amplitude={magnetic_amplitude!r},
+                padding_factor=(1, 1.5, 1.5),
+                modsave=10**9,
+                moderror=10**9,
+                checkpoint=10**9,
+                filename='/tmp/jaxfun_pcf_mhd_parity',
+                prefer_numba=False,
+                store_history=False,
+                timestepper='IMEXRK222',
+            )
+            t, tstep = solver.initialize(False)
+
+            def complex_rows(arr):
+                arr = np.asarray(arr)
+                return [
+                    [
+                        [[float(z.real), float(z.imag)] for z in rowz]
+                        for rowz in rowy
+                    ]
+                    for rowy in arr
+                ]
+
+            rows = []
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                diag = solver.solve(t=t, tstep=tstep, end_time=target*solver.dt)
+                t = target*solver.dt
+                tstep = target
+                row = {{
+                    key: diag[key]
+                    for key in (
+                        'Epert',
+                        'Etot',
+                        'Emag',
+                        'divu_l2',
+                        'divb_l2',
+                        'top_wall_streamwise',
+                        'bottom_wall_streamwise',
+                        'mean_shear',
+                        'bmax',
+                    )
+                }}
+                row['steps'] = int(target)
+                if {include_coefficients!r}:
+                    row['coefficients'] = {{
+                        'u': [complex_rows(solver.u_[i]) for i in range(3)],
+                        'g': complex_rows(solver.g_),
+                        'A': [complex_rows(solver.a_[i]) for i in range(3)],
+                    }}
+                rows.append(row)
+            print(json.dumps(rows))
+            """
+        )
+    )
