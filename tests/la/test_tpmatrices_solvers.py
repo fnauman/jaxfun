@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import sympy as sp
 
+from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from jaxfun.galerkin import (
     Chebyshev,
     FunctionSpace,
@@ -204,6 +205,30 @@ def test_wavenumber_solver_constraints_pin_matrix_row_and_rhs():
     ref = jnp.linalg.solve(dense_batch, rhs_ref[..., None])[..., 0]
     actual = solver.solve(rhs)
     assert jnp.allclose(actual, ref, rtol=1.0e-13, atol=1.0e-13)
+
+
+@pytest.mark.parametrize("family", ["L", "C"], ids=["legendre", "chebyshev"])
+def test_kmm_couette_operators_fast_wavenumber_solve_matches_pivoted_dense(family):
+    solver = PlaneCouetteFluctuationJax(
+        N=(33, 8, 8),
+        family=family,
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+    )
+    for operator in (solver.Su, solver.Sg):
+        fast_solver = operator.lu_factor()
+        pivoted_solver = tpmats_wavenumber_factor(operator, pivot=True)
+        shape = fast_solver.shape
+        idx = jnp.arange(int(np.prod(shape)), dtype=jnp.float64).reshape(shape)
+        rhs = (jnp.sin(0.17 * idx) + 1j * jnp.cos(0.11 * idx)) * 1.0e-3
+
+        fast = fast_solver.solve(rhs)
+        pivoted = pivoted_solver.solve(rhs)
+        rel = jnp.linalg.norm(fast - pivoted) / jnp.maximum(
+            jnp.linalg.norm(pivoted), 1.0e-300
+        )
+
+        assert float(rel) < 1.0e-11
 
 
 # ---------------------------------------------------------------------------

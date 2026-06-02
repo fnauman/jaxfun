@@ -408,7 +408,7 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 #### [T2.1] Pivoted/robust per-mode banded LU — *partial/L* · `la/diamatrix.py`,`la/tpmatrix.py`
 - **Why:** the existing wavenumber solver uses no-pivot banded LU. The Chebyshev **biharmonic** operator and the **saddle-point** blocks are indefinite/wide-band and can lose diagonal dominance; constraint indenting (T2.3) destroys it further.
 - **Build:** a pivoted (or even/odd-decoupled, as `shenfun`'s `chebyshev/la.py` Biharmonic does) per-mode banded LU, vmapped over wavenumbers. Prefer `jax.scipy.linalg.lu_factor`/`lu_solve` batched over the mode axis if a structured banded path is too fragile.
-- **Current coverage:** `TPMatricesWavenumberSolver(pivot=True)` and `tpmats_wavenumber_factor(..., pivot=True)` route through batched dense `jax.scipy.linalg.lu_factor`/`lu_solve`; tests cover parity against assembled Kronecker solves and a zero-diagonal pivot stress case.
+- **Current coverage:** `TPMatricesWavenumberSolver(pivot=True)` and `tpmats_wavenumber_factor(..., pivot=True)` route through batched dense `jax.scipy.linalg.lu_factor`/`lu_solve`; tests cover parity against assembled Kronecker solves, a zero-diagonal pivot stress case, and production-like KMM Helmholtz/Biharmonic operators where the fast no-pivot path matches the pivoted dense path.
 - **Accept:** solve a 1D biharmonic MMS with known solution to 1e-10 for all wavenumbers; the Chebyshev biharmonic operator (ill-conditioned at high `k`) solves stably; matches `shenfun` `chebyshev.la.Biharmonic` coefficients to 1e-10.
 
 #### [T2.2] Named Helmholtz / Biharmonic fast-solver constructors — *partial/M* · `la/solvers.py`
@@ -788,7 +788,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
-1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Production-size validation must decide when KMM/biharmonic workloads should stay on the fast path versus request `pivot=True`.
+1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Production-size validation now covers production-like KMM Helmholtz/Biharmonic operators against the pivoted dense path; remaining validation should cover broader sizes and any future indefinite saddle-block path that uses the generic solver.
 2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform, diagnostic, and one-step coefficient parity have two-device tests; strict bit-identical longer-rollout parity on multiple devices is still not a completed acceptance gate.
 3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
@@ -934,7 +934,7 @@ PHASE 0  M0b  float64-at-import (T0.1b) → live shenfun harness (T0.4b)   ← u
          + cheap gating partials: K_over_K2 → library (T1.6); commit the full-complex Fourier ADR (T0.3)
 PHASE 1  finish correctness-blocking partials BEFORE trusting TC quadrants:
          T6.5 radial dealiasing parity · T8.0 stable eig ordering · validate no-pivot
-         biharmonic at production N and switch workloads to `pivot=True` where needed ·
+         biharmonic at broader production sizes and switch workloads to `pivot=True` where needed ·
          build reusable modules: integrators/coupled.py (T3.4), integrators/cnab2.py (T6.3),
          la/solvers.py (T2.2), cached Project (T1.2)
 PHASE 2  M8 stability layer (independent; staff in parallel). Acceptance needs T0.4b.
