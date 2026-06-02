@@ -77,6 +77,78 @@ def test_tc_dns_3d_zero_state_stays_zero() -> None:
     assert float(solver.continuity_residual_l2(state)) < 1.0e-12
 
 
+def _deterministic_complex_rhs(dim: int, dtype) -> jnp.ndarray:
+    i = jnp.arange(dim, dtype=jnp.float64)
+    return (jnp.sin(0.13 * i) + 1j * jnp.cos(0.07 * i)).astype(dtype)
+
+
+def _assert_pinned_limp_solve_residual(solver) -> None:
+    rhs = _deterministic_complex_rhs(solver.VQ.dim, solver.Limp.dtype)
+    sol = solver._solve_limp(rhs)
+
+    indices = solver.VQ_mode_indices
+    matrices = solver._pin_pressure_modes(solver.Limp_modes).astype(rhs.dtype)
+    rhs_modes = rhs[indices]
+    pressure_row = sum(int(space.num_dofs[-1]) for space in solver.VQ.tensorspaces[:3])
+    rhs_modes = rhs_modes.at[0, pressure_row].set(0)
+    sol_modes = sol[indices]
+
+    residual = jnp.einsum("mij,mj->mi", matrices, sol_modes) - rhs_modes
+    rel = jnp.linalg.norm(residual) / jnp.maximum(jnp.linalg.norm(rhs_modes), 1.0)
+    assert float(rel) < 1.0e-11
+
+    direct = jnp.linalg.solve(matrices, rhs_modes[..., None])[..., 0]
+    assert jnp.allclose(sol_modes, direct, rtol=1.0e-11, atol=1.0e-11)
+
+
+@pytest.mark.parametrize(
+    "solver_factory",
+    [
+        lambda: AxisymmetricTCDNSJax(
+            CircularCouette(), nu=0.002, Nr=8, Nz=6, dt=1.0e-3, dealias=1.0
+        ),
+        lambda: TaylorCouetteDNSJax(
+            CircularCouette(),
+            nu=0.002,
+            Nr=8,
+            Ntheta=4,
+            Nz=6,
+            dt=1.0e-3,
+            dealias=1.0,
+        ),
+        lambda: AxisymmetricMRIDNSJax(
+            _keplerian_tc_base(),
+            B0=0.1,
+            nu=0.001,
+            eta_mag=0.001,
+            Nr=8,
+            Nz=6,
+            dt=1.0e-3,
+            dealias=1.0,
+        ),
+        lambda: TaylorCouetteMRIDNSJax(
+            _keplerian_tc_base(),
+            B0=0.1,
+            nu=0.001,
+            eta_mag=0.001,
+            Nr=8,
+            Ntheta=4,
+            Nz=6,
+            dt=1.0e-3,
+            dealias=1.0,
+        ),
+    ],
+    ids=[
+        "axisymmetric-hydro",
+        "full-3d-hydro",
+        "axisymmetric-mhd",
+        "full-3d-mhd",
+    ],
+)
+def test_tc_dns_pinned_saddle_solves_match_dense_residuals(solver_factory) -> None:
+    _assert_pinned_limp_solve_residual(solver_factory())
+
+
 def test_tc_dns_3d_azimuthal_derivative_and_resolution_guard() -> None:
     solver = TaylorCouetteDNSJax(
         CircularCouette(),

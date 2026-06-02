@@ -18,7 +18,7 @@ Paths in this document are relative to the workspace root `/home/nauman/cfd/shen
 > - **All seven scripts have `*_jax.py` ports** and the Taylor-Couette DNS matrix now includes all four quadrants: axisymmetric/full-3D hydro and axisymmetric/full-3D MHD.
 > - **Live `shenfun` parity exists.** `tests/_parity.py` runs the sibling `../shenfun` checkout; live tests cover PCF, PCF-MHD, PCF shearpy/MRI, TC linear/MRI modal plus non-modal growth, radial dealiasing, and TC DNS all-quadrant diagnostics/coefficient fields. Pytest enables x64 by default.
 > - **Reusable library pieces are now present** for CNAB2/coupled IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, `integrate()`, ragged vectors, `get_dealiased`, `mask_nyquist`, `K_over_K2`, `Dx`, the BC adapter, KMM pressure recovery, HDF5/cadence IO, and mixed/truncated pressure spaces.
-> - **Remaining gaps are validation hardening**, not first ports of the Couette variants: future indefinite saddle-block solver validation, strict bit-identical multi-device parity, and any remaining low-level stencil/operator cross-checks beyond the live TC linear block matrices.
+> - **Remaining gaps are validation hardening**, not first ports of the Couette variants: strict bit-identical multi-device parity and any remaining low-level stencil/operator cross-checks beyond the live TC linear block matrices.
 > - **Decisions taken since Part I:** the **full-complex Fourier** option (T0.3 option B) is in use (see `docs/couette_fourier_layout.md`); `couette/_linear_analysis.py` and `couette/_pcf_linear.py` exist, and the jax ports now include the modal/non-modal stability layer.
 
 ---
@@ -406,7 +406,7 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 #### [T2.1] Pivoted/robust per-mode banded LU — *partial/L* · `la/diamatrix.py`,`la/tpmatrix.py`
 - **Why:** the existing wavenumber solver uses no-pivot banded LU. The Chebyshev **biharmonic** operator and the **saddle-point** blocks are indefinite/wide-band and can lose diagonal dominance; constraint indenting (T2.3) destroys it further.
 - **Build:** a pivoted (or even/odd-decoupled, as `shenfun`'s `chebyshev/la.py` Biharmonic does) per-mode banded LU, vmapped over wavenumbers. Prefer `jax.scipy.linalg.lu_factor`/`lu_solve` batched over the mode axis if a structured banded path is too fragile.
-- **Current coverage:** `TPMatricesWavenumberSolver(pivot=True)` and `tpmats_wavenumber_factor(..., pivot=True)` route through batched dense `jax.scipy.linalg.lu_factor`/`lu_solve`; tests cover parity against assembled Kronecker solves, a zero-diagonal pivot stress case, and production-like KMM Helmholtz/Biharmonic operators where the fast no-pivot path matches the pivoted dense path.
+- **Current coverage:** `TPMatricesWavenumberSolver(pivot=True)` and `tpmats_wavenumber_factor(..., pivot=True)` route through batched dense `jax.scipy.linalg.lu_factor`/`lu_solve`; tests cover parity against assembled Kronecker solves, a zero-diagonal pivot stress case, production-like KMM Helmholtz/Biharmonic operators where the fast no-pivot path matches the pivoted dense path, and all four TC DNS quadrants' actual pinned saddle-block solves against dense residual/direct-solve checks.
 - **Accept:** solve a 1D biharmonic MMS with known solution to 1e-10 for all wavenumbers; the Chebyshev biharmonic operator (ill-conditioned at high `k`) solves stably; matches `shenfun` `chebyshev.la.Biharmonic` coefficients to 1e-10.
 
 #### [T2.2] Named Helmholtz / Biharmonic fast-solver constructors — *partial/M* · `la/solvers.py`
@@ -785,7 +785,7 @@ This part supersedes Part I status claims. It is based on a full audit of branch
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
-1. **No-pivot batched LU at KMM sizes:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Validation now covers low-resolution and production-like KMM Helmholtz/Biharmonic operators against the pivoted dense path for both Legendre and Chebyshev families; remaining validation should cover any future indefinite saddle-block path that uses the generic solver.
+1. **No-pivot batched LU at KMM sizes:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast KMM path, with an opt-in dense pivoted path available. Validation covers low-resolution and production-like KMM Helmholtz/Biharmonic operators against the pivoted dense path for both Legendre and Chebyshev families. The current TC DNS saddle blocks do not use the no-pivot generic path; their actual pinned dense-pivoted per-mode solves now have residual/direct-solve coverage for all four quadrants.
 2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform, diagnostic, one-step coefficient parity, and five-step rollout coefficient parity have two-device tests to roundoff; strict bit-identical longer-rollout parity on multiple devices is still not a completed acceptance gate.
 3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
@@ -872,7 +872,7 @@ The original shared-prerequisite split is retained for traceability; these piece
 
 **[T9.2] Per-`(m,kz)` two-Fourier-axis block solve — *L*** · `taylor_couette_dns_jax.py:147-162` or `la/blocktpmatrix.py`
 - **What:** generalize `_mode_indices`/`_extract_mode_matrices` so each `(m,kz)` pair is one batched dense `lu_factor`/`lu_solve` over the combined mode axis, with the `(0,0)` pressure pin at the correct global index. **shenfun ref:** `couette/taylor_couette_dns.py:510-565`. **Depends:** T9.1, T6.2.
-- **⚠️ HARD prerequisite (critic):** before trusting any 3D quadrant, **validate the no-pivot batched LU at production `N` on the indefinite per-`(m,kz)` saddle blocks** (cf. risk §11.4.4); add pivoting (T2.1) to the batched path if it loses accuracy. A silently inaccurate no-pivot LU corrupts every 3D result and is very hard to diagnose.
+- **Implementation note:** the current 3D quadrants use dense pivoted per-mode `lu_factor`/`lu_solve` on the extracted `(m,kz)` saddle blocks, not the no-pivot generic banded path. `tests/couette/test_taylor_couette_dns_jax.py::test_tc_dns_pinned_saddle_solves_match_dense_residuals` validates the pinned residual/direct-solve path for axisymmetric/full-3D hydro and MHD. Future refactors that route these saddle blocks through the generic no-pivot path must repeat this validation at the target size before trusting results.
 - **Accept:** a steady-Stokes-in-annulus 3D MMS solves per `(m,kz)` and matches `shenfun` `BlockMatrixSolver` to 1e-10 for several `(m,kz)`; `(0,0)` pressure pinned; mode indexing verified against a reference enumeration.
 
 ---
@@ -931,8 +931,8 @@ The original shared-prerequisite split is retained for traceability; these piece
 PHASE 0  M0b  float64-at-import (T0.1b) → live shenfun harness (T0.4b)   ← unblocks ALL parity
          + cheap gating partials: K_over_K2 → library (T1.6); commit the full-complex Fourier ADR (T0.3)
 PHASE 1  finish correctness-blocking partials BEFORE trusting TC quadrants:
-         T6.5 radial dealiasing parity · T8.0 stable eig ordering · validate no-pivot
-         biharmonic at broader production sizes and switch workloads to `pivot=True` where needed ·
+         T6.5 radial dealiasing parity · T8.0 stable eig ordering · validate KMM fast/pivoted
+         biharmonic at broader production sizes and current pivoted TC saddle residuals ·
          build reusable modules: integrators/coupled.py (T3.4), integrators/cnab2.py (T6.3),
          la/solvers.py (T2.2), cached Project (T1.2)
 PHASE 2  M8 stability layer (independent; staff in parallel). Acceptance needs T0.4b.
@@ -955,4 +955,4 @@ PHASE 6  M7 I/O (T7.1/T7.2) + sharding parity (T7.3) + differentiability (T0.4c)
 
 ---
 
-*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope added M0b (foundation hardening), M8 (stability analysis), and M9-M13 (Taylor-Couette DNS quadrants plus shared azimuthal and magnetic prerequisites). The current implementation runs all seven scripts, includes all four Taylor-Couette DNS quadrants, has KMM pressure recovery, and has live `shenfun` parity for the Couette workflows listed above, including physical snapshot file values and uniform mesh coordinates. Remaining work is validation hardening: future indefinite saddle-block solver checks, low-level operator stencil cross-checks beyond the live TC linear block matrices, and strict bit-identical multi-device parity.*
+*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope added M0b (foundation hardening), M8 (stability analysis), and M9-M13 (Taylor-Couette DNS quadrants plus shared azimuthal and magnetic prerequisites). The current implementation runs all seven scripts, includes all four Taylor-Couette DNS quadrants, has KMM pressure recovery, and has live `shenfun` parity for the Couette workflows listed above, including physical snapshot file values and uniform mesh coordinates. Remaining work is validation hardening: low-level operator stencil cross-checks beyond the live TC linear block matrices and strict bit-identical multi-device parity.*
