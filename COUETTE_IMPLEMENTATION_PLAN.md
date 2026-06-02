@@ -408,6 +408,7 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 #### [T2.1] Pivoted/robust per-mode banded LU — *partial/L* · `la/diamatrix.py`,`la/tpmatrix.py`
 - **Why:** the existing wavenumber solver uses no-pivot banded LU. The Chebyshev **biharmonic** operator and the **saddle-point** blocks are indefinite/wide-band and can lose diagonal dominance; constraint indenting (T2.3) destroys it further.
 - **Build:** a pivoted (or even/odd-decoupled, as `shenfun`'s `chebyshev/la.py` Biharmonic does) per-mode banded LU, vmapped over wavenumbers. Prefer `jax.scipy.linalg.lu_factor`/`lu_solve` batched over the mode axis if a structured banded path is too fragile.
+- **Current coverage:** `TPMatricesWavenumberSolver(pivot=True)` and `tpmats_wavenumber_factor(..., pivot=True)` route through batched dense `jax.scipy.linalg.lu_factor`/`lu_solve`; tests cover parity against assembled Kronecker solves and a zero-diagonal pivot stress case.
 - **Accept:** solve a 1D biharmonic MMS with known solution to 1e-10 for all wavenumbers; the Chebyshev biharmonic operator (ill-conditioned at high `k`) solves stably; matches `shenfun` `chebyshev.la.Biharmonic` coefficients to 1e-10.
 
 #### [T2.2] Named Helmholtz / Biharmonic fast-solver constructors — *partial/M* · `la/solvers.py`
@@ -415,9 +416,10 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 - **Accept:** `Helmholtz` and `Biharmonic` constructors solve their MMS problems to 1e-10 and match `shenfun`. Assert the factorization type is the wavenumber/banded path (not dense) for a Fourier×Legendre space.
 
 #### [T2.3] Per-mode constraint / null-space pinning — *partial/M* · `la/tpmatrix.py`,`la/pinned.py`
-- **Why:** the pressure-Poisson and saddle systems are singular at `(0,0)`; `shenfun` pins one dof of mode 0 (`constraints=((0,0,0),)` / `((3,0,0),)`). `TPMatricesWavenumberSolver.solve` has no `constraints` kwarg; `PinnedSystem` works on one global matrix, not inside the vmapped batch.
-- **Build:** add `constraints: tuple[(mode_index, row, value),...]` to the wavenumber solver. At factor-construction (host/static) build the corrected single-mode matrix (identity row at `row`), refactor that one mode, and scatter its `(L0,U0)` into the batched factors via `.at[k0].set(...)`; in `solve`, set `rhs.at[k0,row].set(value)`. No `lax.cond` per element.
+- **Why:** the pressure-Poisson and saddle systems are singular at `(0,0)`; `shenfun` pins one dof of mode 0 (`constraints=((0,0,0),)` / `((3,0,0),)`). `PinnedSystem` works on one global matrix; `TPMatricesWavenumberSolver` now also supports per-mode pins.
+- **Build:** `constraints: tuple[(flat_mode_index, row, value), ...]` is accepted by the wavenumber solver and factory. At factor construction, constrained mode rows are replaced by identity rows; at solve time, matching RHS entries are set to the requested pin values.
 - **Depends on:** T2.1.
+- **Current coverage:** `TPMatricesWavenumberSolver` and `tpmats_wavenumber_factor` accept per-mode `constraints=((flat_mode, row, value), ...)`; tests cover constrained row replacement and RHS pinning against an explicitly pinned dense batch.
 - **Accept:** a Poisson/Helmholtz with singular `(0,0)` solved with `constraints` matches `shenfun` `SolverGeneric1ND(...)(b, constraints=((0,0,0),))` to 1e-12; the pinned mean is exactly 0.
 
 #### [T2.4] Dense generalized `eig` assembly + singular-`M` filtering — *missing/L* · `la/eig.py`
@@ -773,7 +775,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 **B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity/coefficient fields at 1/5/50 steps, both PCF-MHD variants' diagnostics/coefficient fields at 1/5/50 steps, axisymmetric and full-3D hydro/MHD TC DNS diagnostics/coefficient fields at 1/5/50 steps, TC linear/MRI eigenvalues plus non-modal growth, and the radial dealiased product. Remaining validation work is broader-size/dealiased production coverage and low-level operator stencil cross-checking; the tuple-BC basis stencil check now covers `ShenDirichlet`/`ShenBiharmonic` parity.
 
 **C. Correctness gaps in the batched solver tier:**
-- **T2.1** pivoting and **T2.3** per-mode constraint pinning exist **only** on the single-`DiaMatrix`/`PinnedSystem` path — **NOT** plumbed into the vmapped `TPMatricesWavenumberSolver` (no `pivot`/`constraints` kwarg) that KMM/biharmonic/TC actually use. KMM/TC pin ad hoc.
+- **Done after audit:** T2.1/T2.3 are now plumbed into `TPMatricesWavenumberSolver` and `tpmats_wavenumber_factor` as opt-in `pivot=True` and `constraints=((flat_mode, row, value), ...)` dense batched LU paths. Regression coverage includes pivoted parity vs assembled Kronecker solve, a zero-diagonal pivot stress case, and constrained mode-row/RHS pinning.
 - **Done after audit:** T3.1 `BaseIntegrator.build_implicit_operator(coefficient, dt)` and `apply_linear_scalar_product` now provide the named base API; BackwardEuler, ARS IMEX-RK, and IMEXRK3 route through it.
 - **T1.8/T6.5** radial polynomial dealiasing now has a live `shenfun` regression for a padded radial/Fourier quadratic product. The remaining convention caveat is the full-complex Fourier Nyquist mode; solver nonlinear products call `mask_nyquist`.
 
@@ -786,7 +788,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
-1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` uses `vmap(_lu_banded_no_pivot_kernel)`; the indefinite Chebyshev-biharmonic and 3D saddle blocks may need pivoting. **Validating/fixing this remains a HARD prerequisite of the 3D quadrants (M9/T9.2).**
+1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Production-size validation must decide when KMM/biharmonic workloads should stay on the fast path versus request `pivot=True`.
 2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform and diagnostic parity has a two-device test; all-quadrant stepped coefficient parity on multiple devices is still not a completed acceptance gate.
 3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
@@ -931,8 +933,8 @@ Two **shared prerequisites** keep the four quadrants from duplicating work:
 PHASE 0  M0b  float64-at-import (T0.1b) → live shenfun harness (T0.4b)   ← unblocks ALL parity
          + cheap gating partials: K_over_K2 → library (T1.6); commit the full-complex Fourier ADR (T0.3)
 PHASE 1  finish correctness-blocking partials BEFORE trusting TC quadrants:
-         T6.5 radial dealiasing parity · T8.0 stable eig ordering · thread pivot/constraints into the
-         batched solver (T2.1/T2.3) OR validate no-pivot biharmonic at production N ·
+         T6.5 radial dealiasing parity · T8.0 stable eig ordering · validate no-pivot
+         biharmonic at production N and switch workloads to `pivot=True` where needed ·
          build reusable modules: integrators/coupled.py (T3.4), integrators/cnab2.py (T6.3),
          la/solvers.py (T2.2), cached Project (T1.2)
 PHASE 2  M8 stability layer (independent; staff in parallel). Acceptance needs T0.4b.

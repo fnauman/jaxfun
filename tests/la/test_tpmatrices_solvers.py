@@ -158,6 +158,54 @@ def test_tpmats_wavenumber_factor_type_error():
         tpmats_wavenumber_factor("not a valid input")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
 
 
+def test_tpmats_wavenumber_factor_pivoted_path_agrees_with_kron():
+    _, A, b, _ = _poisson_fourier_poly_2d(8, Legendre.Legendre)
+    wn = tpmats_wavenumber_factor(A, pivot=True)
+    ref = tpmats_to_kron(A.tpmats).solve(b.flatten()).reshape(b.shape)
+    uh = wn.solve(b)
+    assert uh.shape == b.shape
+    assert float(jnp.max(jnp.abs(uh - ref))) < ulp(10)
+
+
+def test_wavenumber_solver_pivot_handles_zero_diagonal():
+    dense = jnp.asarray([[0.0, 1.0], [1.0, 1.0]])
+    dia = DiaMatrix.from_dense(dense, offsets=(-1, 0, 1))
+    data = jnp.broadcast_to(dia.data, (4, *dia.data.shape))
+    solver = TPMatricesWavenumberSolver(
+        poly_axis=1,
+        shape=(4, 2),
+        B_data_batch=data,
+        poly_offsets=dia.offsets,
+        pivot=True,
+    )
+    rhs = jnp.arange(8.0).reshape(4, 2) + 1.0
+    dense_batch = jnp.broadcast_to(dense, (4, 2, 2))
+    ref = jnp.linalg.solve(dense_batch, rhs[..., None])[..., 0]
+    actual = solver.solve(rhs)
+    assert jnp.allclose(actual, ref, rtol=1.0e-13, atol=1.0e-13)
+
+
+def test_wavenumber_solver_constraints_pin_matrix_row_and_rhs():
+    dense = jnp.asarray([[2.0, 1.0], [1.0, 2.0]])
+    dia = DiaMatrix.from_dense(dense, offsets=(-1, 0, 1))
+    data = jnp.broadcast_to(dia.data, (3, *dia.data.shape))
+    solver = TPMatricesWavenumberSolver(
+        poly_axis=1,
+        shape=(3, 2),
+        B_data_batch=data,
+        poly_offsets=dia.offsets,
+        constraints=((0, 1, 3.0),),
+    )
+    rhs = jnp.arange(6.0).reshape(3, 2) + 1.0
+    dense_batch = jnp.broadcast_to(dense, (3, 2, 2))
+    dense_batch = dense_batch.at[0, 1, :].set(0.0)
+    dense_batch = dense_batch.at[0, 1, 1].set(1.0)
+    rhs_ref = rhs.at[0, 1].set(3.0)
+    ref = jnp.linalg.solve(dense_batch, rhs_ref[..., None])[..., 0]
+    actual = solver.solve(rhs)
+    assert jnp.allclose(actual, ref, rtol=1.0e-13, atol=1.0e-13)
+
+
 # ---------------------------------------------------------------------------
 # tpmats_dense_lu_factor / TPMatricesDenseLUFactors
 # ---------------------------------------------------------------------------

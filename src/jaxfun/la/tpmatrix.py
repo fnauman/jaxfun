@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast, overload
 
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg as jsp_linalg
 import numpy as np
 from flax import nnx
 from jax import Array
@@ -674,6 +675,65 @@ def _make_wavenumber_vmap_solve(
     return jax.jit(jax.vmap(_solve_one))
 
 
+type WavenumberConstraint = tuple[int, int, complex | float]
+
+
+def _normalise_wavenumber_constraints(
+    constraints: Sequence[WavenumberConstraint], n_fourier: int, n_poly: int
+) -> tuple[WavenumberConstraint, ...]:
+    normalised: list[WavenumberConstraint] = []
+    for mode, row, value in constraints:
+        mode_i = int(mode)
+        row_i = int(row)
+        if not 0 <= mode_i < n_fourier:
+            raise ValueError(
+                f"constraint mode index {mode_i} outside [0, {n_fourier})"
+            )
+        if not 0 <= row_i < n_poly:
+            raise ValueError(f"constraint row index {row_i} outside [0, {n_poly})")
+        value_c = complex(value)
+        value_norm: complex | float = (
+            float(value_c.real) if value_c.imag == 0.0 else value_c
+        )
+        normalised.append((mode_i, row_i, value_norm))
+    return tuple(normalised)
+
+
+def _constraints_for_wavenumber_range(
+    constraints: tuple[WavenumberConstraint, ...], start: int, end: int
+) -> tuple[WavenumberConstraint, ...]:
+    return tuple(
+        (mode - start, row, value)
+        for mode, row, value in constraints
+        if start <= mode < end
+    )
+
+
+def _dia_batch_to_dense(
+    data: Array, offsets: tuple[int, ...], n_poly: int
+) -> Array:
+    dense = jnp.zeros((data.shape[0], n_poly, n_poly), dtype=data.dtype)
+    col = jnp.arange(n_poly)
+    for diag_index, offset in enumerate(offsets):
+        row = col - int(offset)
+        valid = (row >= 0) & (row < n_poly)
+        safe_row = jnp.where(valid, row, 0)
+        values = jnp.where(
+            valid[None, :], data[:, diag_index, :], jnp.zeros((), dtype=data.dtype)
+        )
+        dense = dense.at[:, safe_row, col].add(values)
+    return dense
+
+
+def _pin_dense_wavenumber_rows(
+    dense: Array, constraints: tuple[WavenumberConstraint, ...]
+) -> Array:
+    for mode, row, _value in constraints:
+        dense = dense.at[mode, row, :].set(0)
+        dense = dense.at[mode, row, row].set(1)
+    return dense
+
+
 class TPMatricesWavenumberSolver:
     """Per-wavenumber solver for Fourier x polynomial tensor-product systems.
 
@@ -714,16 +774,35 @@ class TPMatricesWavenumberSolver:
         B_matrices: list | None = None,
         B_data_batch: Array | None = None,
         poly_offsets: tuple[int, ...] | None = None,
+        *,
+        pivot: bool = False,
+        constraints: Sequence[WavenumberConstraint] = (),
     ) -> None:
         from jaxfun.la.diamatrix import _lu_banded_no_pivot_kernel
 
         self.poly_axis = poly_axis
         self.shape = shape
+        self.pivot = bool(pivot)
 
         if B_data_batch is not None and poly_offsets is not None:
             # ---- Fast batched path: one vmapped XLA call for all wavenumbers ----
             # Avoids the O(n_F) Python loop of per-wavenumber B.lu_factor() calls.
             n_F, _n_diags, n_P_local = B_data_batch.shape
+            norm_constraints = _normalise_wavenumber_constraints(
+                constraints, n_F, n_P_local
+            )
+            if pivot or norm_constraints:
+                dense_batch = _dia_batch_to_dense(
+                    B_data_batch, poly_offsets, n_P_local
+                )
+                dense_batch = _pin_dense_wavenumber_rows(
+                    dense_batch, norm_constraints
+                )
+                self._init_dense_wavenumber_solver(
+                    dense_batch, norm_constraints, n_P_local
+                )
+                return
+
             _dtype = B_data_batch.dtype
             p = max((-o for o in poly_offsets if o < 0), default=0)
             q = max((o for o in poly_offsets if o > 0), default=0)
@@ -841,6 +920,18 @@ class TPMatricesWavenumberSolver:
                 return jnp.stack(rows)
 
             n_F = len(B_matrices)
+            norm_constraints = _normalise_wavenumber_constraints(
+                constraints, n_F, n_P_local
+            )
+            if pivot or norm_constraints:
+                dense_batch = jnp.stack([B.todense() for B in B_matrices])
+                dense_batch = _pin_dense_wavenumber_rows(
+                    dense_batch, norm_constraints
+                )
+                self._init_dense_wavenumber_solver(
+                    dense_batch, norm_constraints, n_P_local
+                )
+                return
 
             if len(jax.devices()) > 1:
                 if poly_axis == 0:
@@ -968,6 +1059,105 @@ class TPMatricesWavenumberSolver:
                 _make_device_jit(self._L_per_device[d], self._U_per_device[d])
                 for d in range(_n_local)
             ]
+
+    def _init_dense_wavenumber_solver(
+        self,
+        dense_batch: Array,
+        constraints: tuple[WavenumberConstraint, ...],
+        n_poly: int,
+    ) -> None:
+        self.L_offsets = ()
+        self.U_offsets = ()
+        ndim = len(self.shape)
+        fourier_axes = [a for a in range(ndim) if a != self.poly_axis]
+        fourier_shape = tuple(self.shape[a] for a in fourier_axes)
+        n_fourier = int(np.prod(fourier_shape)) if fourier_shape else 1
+        axes_order = fourier_axes + [self.poly_axis]
+        inv_perm = [0] * ndim
+        for new_pos, old_pos in enumerate(axes_order):
+            inv_perm[old_pos] = new_pos
+
+        def _make_solve_jit(
+            lu_data: Array,
+            piv_data: Array,
+            local_constraints: tuple[WavenumberConstraint, ...],
+            local_fourier_shape: tuple[int, ...],
+        ):
+            constraint_modes = tuple(mode for mode, _row, _value in local_constraints)
+            constraint_rows = tuple(row for _mode, row, _value in local_constraints)
+            constraint_values = tuple(value for _mode, _row, value in local_constraints)
+            local_n_fourier = int(np.prod(local_fourier_shape))
+
+            @jax.jit
+            def _solve_dense_jit(lu_arg: Array, piv_arg: Array, rhs: Array) -> Array:
+                rhs_2d = jnp.transpose(rhs, axes_order).reshape(
+                    local_n_fourier, n_poly
+                )
+                if constraint_modes:
+                    rhs_2d = rhs_2d.at[
+                        jnp.asarray(constraint_modes), jnp.asarray(constraint_rows)
+                    ].set(jnp.asarray(constraint_values, dtype=rhs_2d.dtype))
+                sol_2d = jax.vmap(
+                    lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve(
+                        (lu_i, piv_i), b_i
+                    )
+                )(lu_arg, piv_arg, rhs_2d)
+                sol_perm = sol_2d.reshape(local_fourier_shape + (n_poly,))
+                return jnp.transpose(sol_perm, inv_perm)
+
+            return partial(_solve_dense_jit, lu_data, piv_data)
+
+        if len(jax.devices()) > 1:
+            if self.poly_axis == 0:
+                raise ValueError(
+                    "Multi-process solve requires axis 0 to be a Fourier axis "
+                    f"(poly_axis=0 not supported). Got shape={self.shape}, "
+                    f"poly_axis={self.poly_axis}."
+                )
+            n_total = len(jax.devices())
+            n_local = jax.local_device_count()
+            if n_fourier % n_total != 0:
+                raise ValueError(
+                    "Number of Fourier modes (n_F) must be divisible by total "
+                    f"number of devices for multi-process solve. Got "
+                    f"n_F={n_fourier}, n_total={n_total}."
+                )
+            n_fourier_per_device = n_fourier // n_total
+            proc_dev_offset = jax.process_index() * n_local
+            k_start = proc_dev_offset * n_fourier_per_device
+            k_end = k_start + n_local * n_fourier_per_device
+            local_lu, local_piv = jax.vmap(jsp_linalg.lu_factor)(
+                dense_batch[k_start:k_end]
+            )
+            self._solve_jit = _make_solve_jit(
+                local_lu,
+                local_piv,
+                _constraints_for_wavenumber_range(constraints, k_start, k_end),
+                (n_local * n_fourier_per_device,),
+            )
+            local_fourier_shape = (fourier_shape[0] // n_total,) + fourier_shape[1:]
+            self._local_solve_jits = []
+            for device_index, device in enumerate(jax.local_devices()):
+                local_start = device_index * n_fourier_per_device
+                local_end = local_start + n_fourier_per_device
+                global_start = k_start + local_start
+                global_end = k_start + local_end
+                lu_d = jax.device_put(local_lu[local_start:local_end], device)
+                piv_d = jax.device_put(local_piv[local_start:local_end], device)
+                self._local_solve_jits.append(
+                    _make_solve_jit(
+                        lu_d,
+                        piv_d,
+                        _constraints_for_wavenumber_range(
+                            constraints, global_start, global_end
+                        ),
+                        local_fourier_shape,
+                    )
+                )
+            return
+
+        lu, piv = jax.vmap(jsp_linalg.lu_factor)(dense_batch)
+        self._solve_jit = _make_solve_jit(lu, piv, constraints, fourier_shape)
 
     def solve(self, rhs: Array) -> Array:
         """Solve the wavenumber-loop system for RHS ``rhs``.
@@ -1230,6 +1420,9 @@ def tpmats_lu_factor(A: TPMatrix | list[TPMatrix]) -> TPMatricesLUFactors:
 
 def tpmats_wavenumber_factor(
     A: list[TPMatrix] | TPMatrices,
+    *,
+    pivot: bool = False,
+    constraints: Sequence[WavenumberConstraint] = (),
 ) -> TPMatricesWavenumberSolver:
     """Pre-factorize a Fourier x polynomial :class:`TPMatrices` system.
 
@@ -1253,6 +1446,12 @@ def tpmats_wavenumber_factor(
         A: :class:`list` of :class:`TPMatrix` (as returned by
             :func:`~jaxfun.galerkin.inner.inner`) or a
             :class:`TPMatrices` instance.
+        pivot: Use a dense batched LU with partial pivoting for each
+            wavenumber. The default keeps the fast no-pivot banded path.
+        constraints: Optional ``(flat_mode_index, row, value)`` pins applied
+            to individual per-wavenumber polynomial systems. Constrained rows
+            are replaced with identity rows and the RHS entry is set to
+            ``value`` during :meth:`TPMatricesWavenumberSolver.solve`.
 
     Returns:
         :class:`TPMatricesWavenumberSolver` for repeated fast solves.
@@ -1346,6 +1545,8 @@ def tpmats_wavenumber_factor(
         shape=shape,
         B_data_batch=B_data_batch,
         poly_offsets=poly_offsets,
+        pivot=pivot,
+        constraints=constraints,
     )
 
 
