@@ -18,7 +18,7 @@ Paths in this document are relative to the workspace root `/home/nauman/cfd/shen
 > - **All seven scripts have `*_jax.py` ports** and the Taylor-Couette DNS matrix now includes all four quadrants: axisymmetric/full-3D hydro and axisymmetric/full-3D MHD.
 > - **Live `shenfun` parity exists.** `tests/_parity.py` runs the sibling `../shenfun` checkout; live tests cover PCF, PCF-MHD, PCF shearpy/MRI, TC linear/MRI modal plus non-modal growth, radial dealiasing, and TC DNS all-quadrant diagnostics/coefficient fields. Pytest enables x64 by default.
 > - **Reusable library pieces are now present** for CNAB2/coupled IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, `integrate()`, ragged vectors, `get_dealiased`, `mask_nyquist`, `K_over_K2`, `Dx`, the BC adapter, HDF5/cadence IO, and mixed/truncated pressure spaces.
-> - **Remaining gaps are validation hardening or optional features**, not first ports of the Couette variants: optional KMM `compute_pressure`, live file-output parity, broader production-size solver validation, strict bit-identical multi-device parity, and some low-level stencil/operator cross-checks.
+> - **Remaining gaps are validation hardening or optional features**, not first ports of the Couette variants: optional KMM `compute_pressure`, live file-output parity, future indefinite saddle-block solver validation, strict bit-identical multi-device parity, and some low-level stencil/operator cross-checks.
 > - **Decisions taken since Part I:** the **full-complex Fourier** option (T0.3 option B) is in use (see `docs/couette_fourier_layout.md`); `couette/_linear_analysis.py` and `couette/_pcf_linear.py` exist, and the jax ports now include the modal/non-modal stability layer.
 
 ---
@@ -786,7 +786,7 @@ This part supersedes Part I status claims. It is based on a full audit of branch
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
-1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Production-size validation now covers production-like KMM Helmholtz/Biharmonic operators against the pivoted dense path; remaining validation should cover broader sizes and any future indefinite saddle-block path that uses the generic solver.
+1. **No-pivot batched LU at KMM sizes:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Validation now covers low-resolution and production-like KMM Helmholtz/Biharmonic operators against the pivoted dense path for both Legendre and Chebyshev families; remaining validation should cover any future indefinite saddle-block path that uses the generic solver.
 2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform, diagnostic, one-step coefficient parity, and five-step rollout coefficient parity have two-device tests to roundoff; strict bit-identical longer-rollout parity on multiple devices is still not a completed acceptance gate.
 3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
@@ -956,4 +956,4 @@ PHASE 6  M7 I/O (T7.1/T7.2) + sharding parity (T7.3) + differentiability (T0.4c)
 
 ---
 
-*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope added M0b (foundation hardening), M8 (stability analysis), and M9-M13 (Taylor-Couette DNS quadrants plus shared azimuthal and magnetic prerequisites). The current implementation runs all seven scripts, includes all four Taylor-Couette DNS quadrants, and has live `shenfun` parity for the Couette workflows listed above. Remaining work is optional pressure recovery and validation hardening: live file-output parity, broader production-size solver checks, low-level operator stencil cross-checks, and strict bit-identical multi-device parity.*
+*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope added M0b (foundation hardening), M8 (stability analysis), and M9-M13 (Taylor-Couette DNS quadrants plus shared azimuthal and magnetic prerequisites). The current implementation runs all seven scripts, includes all four Taylor-Couette DNS quadrants, and has live `shenfun` parity for the Couette workflows listed above. Remaining work is optional pressure recovery and validation hardening: live file-output parity, future indefinite saddle-block solver checks, low-level operator stencil cross-checks, and strict bit-identical multi-device parity.*

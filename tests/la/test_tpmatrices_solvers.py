@@ -208,9 +208,16 @@ def test_wavenumber_solver_constraints_pin_matrix_row_and_rhs():
 
 
 @pytest.mark.parametrize("family", ["L", "C"], ids=["legendre", "chebyshev"])
-def test_kmm_couette_operators_fast_wavenumber_solve_matches_pivoted_dense(family):
+@pytest.mark.parametrize(
+    "resolution",
+    [(17, 4, 4), (33, 8, 8)],
+    ids=["low-resolution", "production-like"],
+)
+def test_kmm_couette_operators_fast_wavenumber_solve_matches_pivoted_dense(
+    family, resolution
+):
     solver = PlaneCouetteFluctuationJax(
-        N=(33, 8, 8),
+        N=resolution,
         family=family,
         dt=1.0e-3,
         padding_factor=(1.0, 1.0, 1.0),
