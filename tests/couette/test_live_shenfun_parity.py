@@ -105,6 +105,27 @@ def test_pcf_fluctuation_matches_live_shenfun_diagnostics_velocity_and_coeffs():
         )
 
 
+def test_kmm_pressure_recovery_matches_live_shenfun():
+    solver = PlaneCouetteFluctuationJax(
+        N=(9, 8, 8),
+        family="L",
+        dt=1.0e-3,
+        perturbation_amplitude=0.05,
+    )
+    state = solver.solve(solver.initial_state(), 1)
+    got = solver.compute_pressure(state)
+    reference = pcf_fluctuation_reference(
+        steps=(1,),
+        include_pressure=True,
+    )[0]
+
+    got_np = np.asarray(got)
+    assert np.max(np.abs(got_np.imag)) < 1.0e-12
+    assert np.allclose(
+        got_np.real, np.asarray(reference["pressure"]), rtol=1.0e-8, atol=1.0e-10
+    )
+
+
 def test_pcf_mhd_matches_live_shenfun_diagnostics_and_coeffs():
     solver = PlaneCouetteMHDJax(
         N=(9, 8, 8),

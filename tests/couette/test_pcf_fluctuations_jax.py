@@ -23,6 +23,27 @@ def test_pcf_fluctuation_initialization_and_one_step_are_finite() -> None:
     assert abs(float(diag["mean_shear"]) - 1.0) < 1.0e-4
 
 
+def test_pcf_pressure_recovery_is_finite_and_real() -> None:
+    solver = PlaneCouetteFluctuationJax(
+        N=(9, 4, 4),
+        family="L",
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+        perturbation_amplitude=0.05,
+    )
+    state = solver.step(solver.initial_state())
+
+    coeff = solver.compute_pressure_coefficients(state)
+    pressure = solver.compute_pressure(state)
+
+    assert coeff.shape == solver.TC.num_dofs
+    assert pressure.shape == solver.TC.num_quad_points
+    assert bool(jnp.isfinite(coeff).all())
+    assert bool(jnp.isfinite(pressure).all())
+    assert float(jnp.max(jnp.abs(jnp.imag(pressure)))) < 1.0e-12
+    assert float(jnp.linalg.norm(jnp.real(pressure))) > 0.0
+
+
 def test_pcf_zero_state_stays_zero_for_fluctuations() -> None:
     solver = PlaneCouetteFluctuationJax(N=(9, 8, 8), family="L", dt=1.0e-3)
     state = solver.step(solver.zero_state())

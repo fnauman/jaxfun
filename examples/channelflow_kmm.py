@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
@@ -95,6 +96,7 @@ class KMM:
         self.TB = TensorProduct(self.B0, self.F1, self.F2, name="TB")
         self.TD = TensorProduct(self.D0, self.F1, self.F2, name="TD")
         self.TC = TensorProduct(self.C0, self.F1, self.F2, name="TC")
+        self.TYZ = TensorProduct(self.F1, self.F2, name="TYZ")
         self.TBp = self.TB.get_dealiased(padding_factor)
         self.TDp = self.TD.get_dealiased(padding_factor)
         self.padding_counts = self.TDp.num_quad_points
@@ -112,6 +114,7 @@ class KMM:
         self.Xp = self.TDp.mesh()
 
         self._build_operators()
+        self._pressure_cache = None
 
     @staticmethod
     def _family_class(family: str):
@@ -222,6 +225,107 @@ class KMM:
             self.dpdy_rhs = self.D00.scalar_product(ones)
         else:
             self.dpdy_rhs = jnp.zeros(self.D00.num_dofs)
+
+    def _build_pressure_cache(self) -> dict[str, Array]:
+        """Assemble radial matrices for optional KMM pressure recovery."""
+        pressure_test = FunctionSpace(
+            self.N[0],
+            self._family_class(self.B0.orthogonal.name),
+            bc={"left": {"N": 0}, "right": {"N": 0}},
+            domain=Domain(*self.domain[0]),
+            name="PN",
+        )
+        n = self.C0.num_dofs
+        eye_p = jnp.eye(n, dtype=float)
+        eye_t = jnp.eye(pressure_test.num_dofs, dtype=float)
+
+        values = jax.vmap(self.C0.backward)(eye_p).T
+        lap_values = jax.vmap(lambda c: self.C0.backward_primitive(c, 2))(eye_p).T
+        tests = jax.vmap(pressure_test.backward)(eye_t).T
+        weights = self.C0.integration_weights()
+
+        stiffness = jnp.einsum("xi,xj,x->ij", tests, lap_values, weights)
+        mass = jnp.einsum("xi,xj,x->ij", tests, values, weights)
+
+        bounds = jnp.asarray([self.domain[0][0], self.domain[0][1]], dtype=float)
+        ref_bounds = self.C0.map_reference_domain(bounds)
+        d1_rows = self.C0.evaluate_basis_derivative(ref_bounds, 1) * float(
+            self.C0.domain_factor
+        )
+        b0_d2_rows = self.B0.evaluate_basis_derivative(
+            self.B0.map_reference_domain(bounds), 2
+        ) * float(self.B0.domain_factor) ** 2
+        k2 = jnp.squeeze(self.K[1] * self.K[1] + self.K[2] * self.K[2], axis=0)
+        return {
+            "tests": tests,
+            "weights": weights,
+            "stiffness": stiffness,
+            "mass": mass,
+            "d1_rows": d1_rows,
+            "b0_d2_rows": b0_d2_rows,
+            "k2": k2,
+        }
+
+    def _pressure_solver_cache(self) -> dict[str, Array]:
+        cache = self._pressure_cache
+        if cache is None:
+            cache = self._build_pressure_cache()
+            self._pressure_cache = cache
+        return cache
+
+    def compute_pressure_coefficients(
+        self, state: KMMState, H: Velocity | None = None
+    ) -> Array:
+        """Recover pressure coefficients from the KMM velocity state.
+
+        This mirrors ``ChannelFlow.KMM.compute_pressure``: the Poisson RHS is
+        ``-div(H)`` and the wall Neumann data are
+        ``nu*d**2(u_wallnormal)/dx**2``.  The returned coefficients live in the
+        unconstrained ``TC`` space; the zero transverse mode is pinned by setting
+        the first radial coefficient to zero.
+        """
+        cache = self._pressure_solver_cache()
+        H = self.convection(state) if H is None else H
+
+        div_h = (
+            self.TD.backward_primitive(H[0], (1, 0, 0))
+            + self.TD.backward_primitive(H[1], (0, 1, 0))
+            + self.TD.backward_primitive(H[2], (0, 0, 1))
+        )
+        rhs_phys = -div_h
+        rhs_modes = jax.vmap(self.TYZ.forward, in_axes=0)(rhs_phys)
+        rhs_galerkin = jnp.einsum(
+            "xi,xkl,x->ikl", cache["tests"], rhs_modes, cache["weights"]
+        )
+
+        wall_neumann = self.nu * jnp.einsum(
+            "bd,dkl->bkl", cache["b0_d2_rows"], state.u[0]
+        )
+        rhs = jnp.concatenate(
+            (
+                jnp.moveaxis(rhs_galerkin, 0, -1),
+                jnp.moveaxis(wall_neumann, 0, -1),
+            ),
+            axis=-1,
+        )
+
+        galerkin = cache["stiffness"] - cache["k2"][..., None, None] * cache["mass"]
+        bc_rows = jnp.broadcast_to(
+            cache["d1_rows"], (*cache["k2"].shape, *cache["d1_rows"].shape)
+        )
+        matrices = jnp.concatenate((galerkin, bc_rows), axis=-2)
+        matrices = matrices.at[0, 0, 0, :].set(0)
+        matrices = matrices.at[0, 0, 0, 0].set(1)
+        rhs = rhs.at[0, 0, 0].set(0)
+
+        matrices = matrices.astype(rhs.dtype)
+        coeff_modes = jnp.linalg.solve(matrices, rhs[..., None])[..., 0]
+        coeff = jnp.moveaxis(coeff_modes, -1, 0)
+        return self.TC.mask_nyquist(coeff)
+
+    def compute_pressure(self, state: KMMState, H: Velocity | None = None) -> Array:
+        """Return recovered pressure on the standard quadrature mesh."""
+        return self.TC.backward(self.compute_pressure_coefficients(state, H))
 
     def zero_state(self) -> KMMState:
         u = (

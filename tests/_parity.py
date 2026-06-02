@@ -295,6 +295,7 @@ def pcf_fluctuation_reference(
     family: str = "L",
     include_velocity: bool = False,
     include_coefficients: bool = False,
+    include_pressure: bool = False,
 ) -> list[dict]:
     """Run the live shenfun PCF fluctuation reference and return parity rows."""
     return run_shenfun_json(
@@ -303,7 +304,7 @@ def pcf_fluctuation_reference(
             import json
             import numpy as np
             from pcf_fluctuations_corrected import PlaneCouetteFluctuation
-            from shenfun import inner
+            from shenfun import *
 
             solver = PlaneCouetteFluctuation(
                 N={tuple(n)!r},
@@ -356,6 +357,44 @@ def pcf_fluctuation_reference(
                         np.asarray(ubp[i], dtype=float).tolist()
                         for i in range(3)
                     ]
+                if {include_pressure!r}:
+                    solver.convection()
+                    d2proj = Project(solver.nu*Dx(solver.u_[0], 0, 2), solver.TC)
+                    d2udx2 = d2proj.output_array
+                    N0 = FunctionSpace(
+                        solver.N[0],
+                        solver.B0.family(),
+                        bc={{'left': {{'N': 1.0}}, 'right': {{'N': 1.0}}}},
+                    )
+                    TN = TensorProductSpace(
+                        comm,
+                        (N0, solver.F1, solver.F2),
+                        collapse_fourier=False,
+                        slab=True,
+                        modify_spaces_inplace=True,
+                    )
+                    d2proj()
+                    coeff = np.asarray(d2udx2)
+                    sign = (-1.0)**np.arange(coeff.shape[0])
+                    left = np.tensordot(sign, coeff, axes=(0, 0))
+                    right = np.sum(coeff, axis=0)
+                    N0.bc.bcs_final[0] = left.copy()
+                    N0.bc.bcs_final[1] = right.copy()
+                    N0.bc.bcs[0] = left.copy()
+                    N0.bc.bcs[1] = right.copy()
+                    pressure_solver = (
+                        chebyshev.la.Helmholtz
+                        if solver.B0.family() == 'chebyshev'
+                        else la.SolverGeneric1ND
+                    )
+                    divH = Inner(TestFunction(TN), -div(solver.H_))
+                    solP = pressure_solver(
+                        inner(TestFunction(TN), div(grad(TrialFunction(TN))))
+                    )
+                    pressure = solP(
+                        divH(), Function(TN), constraints=((0, 0, 0),)
+                    ).backward()
+                    row['pressure'] = np.asarray(pressure, dtype=float).tolist()
                 if {include_coefficients!r}:
                     def complex_rows(arr):
                         arr = np.asarray(arr)

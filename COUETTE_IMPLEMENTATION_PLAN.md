@@ -17,8 +17,8 @@ Paths in this document are relative to the workspace root `/home/nauman/cfd/shen
 >
 > - **All seven scripts have `*_jax.py` ports** and the Taylor-Couette DNS matrix now includes all four quadrants: axisymmetric/full-3D hydro and axisymmetric/full-3D MHD.
 > - **Live `shenfun` parity exists.** `tests/_parity.py` runs the sibling `../shenfun` checkout; live tests cover PCF, PCF-MHD, PCF shearpy/MRI, TC linear/MRI modal plus non-modal growth, radial dealiasing, and TC DNS all-quadrant diagnostics/coefficient fields. Pytest enables x64 by default.
-> - **Reusable library pieces are now present** for CNAB2/coupled IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, `integrate()`, ragged vectors, `get_dealiased`, `mask_nyquist`, `K_over_K2`, `Dx`, the BC adapter, HDF5/cadence IO, and mixed/truncated pressure spaces.
-> - **Remaining gaps are validation hardening or optional features**, not first ports of the Couette variants: optional KMM `compute_pressure`, future indefinite saddle-block solver validation, strict bit-identical multi-device parity, and any remaining low-level stencil/operator cross-checks beyond the live TC linear block matrices.
+> - **Reusable library pieces are now present** for CNAB2/coupled IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, `integrate()`, ragged vectors, `get_dealiased`, `mask_nyquist`, `K_over_K2`, `Dx`, the BC adapter, KMM pressure recovery, HDF5/cadence IO, and mixed/truncated pressure spaces.
+> - **Remaining gaps are validation hardening**, not first ports of the Couette variants: future indefinite saddle-block solver validation, strict bit-identical multi-device parity, and any remaining low-level stencil/operator cross-checks beyond the live TC linear block matrices.
 > - **Decisions taken since Part I:** the **full-complex Fourier** option (T0.3 option B) is in use (see `docs/couette_fourier_layout.md`); `couette/_linear_analysis.py` and `couette/_pcf_linear.py` exist, and the jax ports now include the modal/non-modal stability layer.
 
 ---
@@ -486,10 +486,10 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 - **Depends on:** T4.2, T4.3, T4.4, T1.1.
 - **Accept (the PCF definition-of-done):** from the same deterministic IC (`amp=0.1`, e.g. `N=(17,16,16)`), compare `u_hat` coefficient arrays after **1, 5, 50** `IMEXRK222` steps to rtol **1e-8** (float64) against `shenfun`'s `PlaneCouetteFluctuation`; the six diagnostics match to 1e-10. Script 2's `div(u)` stays at machine precision.
 
-#### [T4.6] (optional) `compute_pressure` — inhomogeneous updating Neumann BC — *missing/M* · `examples/channelflow_kmm.py`
+#### [T4.6] (optional) `compute_pressure` — inhomogeneous updating Neumann BC — *done/M* · `examples/channelflow_kmm.py`
 - **Why:** `shenfun` can recover pressure via a Neumann Poisson solve whose BC data `dp/dn = ν ∂²u/∂n²` updates every step (`ChannelFlow.py:253–268`). Not needed for the energy/divergence parity tests, but required if a script reports pressure.
-- **Build:** a `BCGeneric` Neumann space with **field-valued, time-updating** BC data (project `ν·Dx(u_x,0,2)` each call), assemble the Neumann pressure-Poisson with `constraints=((0,0,0),)` (T2.3). Defer unless a target script needs pressure output.
-- **Accept:** pressure field matches `shenfun` `compute_pressure()` to 1e-8 on a fixed state.
+- **Build:** `KMM.compute_pressure_coefficients(state, H=None)` now assembles a cached radial Neumann Poisson solve, updates the wall Neumann data from the current wall-normal velocity, pins the zero transverse pressure mode, and returns coefficients in the unconstrained `TC` pressure space. `KMM.compute_pressure(state, H=None)` returns the physical pressure field on the standard grid.
+- **Accept:** `tests/couette/test_live_shenfun_parity.py::test_kmm_pressure_recovery_matches_live_shenfun` compares the recovered JAX pressure field to a live `shenfun` inhomogeneous-Neumann pressure solve at 1e-8; `tests/couette/test_pcf_fluctuations_jax.py` also covers finite/real pressure API smoke behavior.
 
 ---
 
@@ -781,7 +781,6 @@ This part supersedes Part I status claims. It is based on a full audit of branch
 
 | Plan ref | Item | Note |
 |---|---|---|
-| T4.6 | `compute_pressure` (Neumann pressure recovery) | optional/deferred; pressure-free KMM diagnostics do not require it |
 | T7.3 | strict bit-identical all-quadrant sharding parity | TC axisymmetric/full-3D hydro/MHD diagnostics, physical-transform parity, and one-step plus five-step coefficient/diagnostic parity are covered with `--num-devices=2` to roundoff; strict bit-identical longer-rollout coefficient parity remains to validate |
 
 ### 11.4 Known correctness bugs / risks (fix early)
@@ -956,4 +955,4 @@ PHASE 6  M7 I/O (T7.1/T7.2) + sharding parity (T7.3) + differentiability (T0.4c)
 
 ---
 
-*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope added M0b (foundation hardening), M8 (stability analysis), and M9-M13 (Taylor-Couette DNS quadrants plus shared azimuthal and magnetic prerequisites). The current implementation runs all seven scripts, includes all four Taylor-Couette DNS quadrants, and has live `shenfun` parity for the Couette workflows listed above, including physical snapshot file values and uniform mesh coordinates. Remaining work is optional pressure recovery and validation hardening: future indefinite saddle-block solver checks, low-level operator stencil cross-checks beyond the live TC linear block matrices, and strict bit-identical multi-device parity.*
+*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope added M0b (foundation hardening), M8 (stability analysis), and M9-M13 (Taylor-Couette DNS quadrants plus shared azimuthal and magnetic prerequisites). The current implementation runs all seven scripts, includes all four Taylor-Couette DNS quadrants, has KMM pressure recovery, and has live `shenfun` parity for the Couette workflows listed above, including physical snapshot file values and uniform mesh coordinates. Remaining work is validation hardening: future indefinite saddle-block solver checks, low-level operator stencil cross-checks beyond the live TC linear block matrices, and strict bit-identical multi-device parity.*
