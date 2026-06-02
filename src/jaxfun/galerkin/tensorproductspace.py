@@ -33,6 +33,16 @@ multiplication_sign = "\u00d7"
 IndivisibleError = ValueError
 
 
+def _has_multiple_devices(value: Array) -> bool:
+    devices = getattr(value, "devices", None)
+    if devices is None:
+        return False
+    try:
+        return len(devices()) > 1
+    except (jax.errors.ConcretizationTypeError, TypeError, AttributeError):
+        return False
+
+
 def K_over_K2(
     K: Sequence[Array], axes: Sequence[int] | None = None
 ) -> tuple[Array, ...]:
@@ -309,7 +319,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
@@ -339,7 +349,7 @@ class TensorProductSpace:
         Returns:
             Scalar or (n_pts,) array of evaluated values.
         """
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             dim = len(self)
             T = self.basespaces
 
@@ -441,7 +451,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
@@ -469,7 +479,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding and len(u.devices()) > 1:
+        if self._physical_sharding and _has_multiple_devices(u):
             return _apply_separable_spmd_shard_map(
                 u, fns, physical_sharding, self._spmd_local_fn_cache
             )
@@ -493,7 +503,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding and len(u.devices()) > 1:
+        if self._physical_sharding and _has_multiple_devices(u):
             return _apply_separable_spmd_shard_map(
                 u, fns, physical_sharding, self._spmd_local_fn_cache
             )
@@ -536,7 +546,7 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )

@@ -250,3 +250,66 @@ def test_taylor_couette_quadrants_sharded_one_step_matches_replicated(
     _assert_diagnostics_match(
         solver.diagnostics(replicated), solver.diagnostics(sharded)
     )
+
+
+@pytest.mark.parametrize(
+    ("solver_factory", "state_factory"),
+    [
+        (
+            lambda: AxisymmetricTCDNSJax(
+                CircularCouette(), nu=0.002, Nr=8, Nz=8, dt=1.0e-3, dealias=1.0
+            ),
+            _seeded_hydro_state,
+        ),
+        (
+            lambda: TaylorCouetteDNSJax(
+                CircularCouette(),
+                nu=0.002,
+                Nr=8,
+                Ntheta=4,
+                Nz=8,
+                dt=1.0e-3,
+                dealias=1.0,
+            ),
+            _seeded_hydro_state,
+        ),
+        (
+            lambda: AxisymmetricMRIDNSJax(
+                CircularCouette(), Nr=8, Nz=8, dt=1.0e-3, dealias=1.0
+            ),
+            _seeded_mhd_state,
+        ),
+        (
+            lambda: TaylorCouetteMRIDNSJax(
+                CircularCouette(),
+                Nr=8,
+                Ntheta=4,
+                Nz=8,
+                dt=1.0e-3,
+                dealias=1.0,
+            ),
+            _seeded_mhd_state,
+        ),
+    ],
+    ids=[
+        "axisymmetric-hydro",
+        "full-3d-hydro",
+        "axisymmetric-mhd",
+        "full-3d-mhd",
+    ],
+)
+def test_taylor_couette_quadrants_sharded_five_step_rollout_matches_replicated(
+    solver_factory, state_factory
+) -> None:
+    if jax.device_count() < 2:
+        pytest.skip("requires --num-devices=2")
+
+    solver = solver_factory()
+    state = state_factory(solver)
+    replicated = solver.solve(state, 5)
+    sharded = solver.solve(_shard_state(state), 5)
+
+    _assert_state_coefficients_match(replicated, sharded)
+    _assert_diagnostics_match(
+        solver.diagnostics(replicated), solver.diagnostics(sharded)
+    )

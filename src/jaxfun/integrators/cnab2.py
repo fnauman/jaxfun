@@ -17,6 +17,19 @@ import jax.numpy as jnp
 T = TypeVar("T")
 
 
+def _has_concrete_multi_device_leaf(tree: object) -> bool:
+    for leaf in jax.tree.leaves(tree):
+        devices = getattr(leaf, "devices", None)
+        if devices is None:
+            continue
+        try:
+            if len(devices()) > 1:
+                return True
+        except (jax.errors.ConcretizationTypeError, TypeError, AttributeError):
+            continue
+    return False
+
+
 def ab2_extrapolate(current: T, previous: T, have_previous: bool | jax.Array) -> T:
     """Return ``current`` on the first step, else ``1.5*current - 0.5*previous``.
 
@@ -53,13 +66,20 @@ def scan_steps(step: Callable[[T], T], state: T, steps: int) -> T:
     """Advance ``state`` with ``step`` using ``jax.lax.scan``.
 
     This keeps Couette time loops staged as one JAX loop while preserving the
-    solver-specific ``step(state) -> state`` API.
+    solver-specific ``step(state) -> state`` API.  Concrete multi-device states
+    use an eager loop so sharded transform paths can inspect their device layout
+    without tracing through ``jax.lax.scan``.
     """
     steps = int(steps)
     if steps < 0:
         raise ValueError("steps must be non-negative")
     if steps == 0:
         return state
+    if _has_concrete_multi_device_leaf(state):
+        out = state
+        for _ in range(steps):
+            out = step(out)
+        return out
 
     def body(carry: T, _unused: None) -> tuple[T, None]:
         return step(carry), None
