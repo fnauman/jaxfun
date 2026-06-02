@@ -34,6 +34,8 @@ from tests._parity import (
 
 pytestmark = pytest.mark.integration
 
+TC_DNS_PARITY_STEPS = (1, 5, 50, 100)
+
 
 def _keplerian_base():
     eta = 0.5
@@ -237,7 +239,9 @@ def test_tc_axisymmetric_dns_matches_live_shenfun_diagnostics_and_coeffs():
         CircularCouette(), nu=0.002, Nr=8, Nz=6, dt=1.0e-3, dealias=1.0
     )
     state0 = solver.initial_state(amp=1.0e-4)
-    references = tc_axisymmetric_dns_reference(include_coefficients=True)
+    references = tc_axisymmetric_dns_reference(
+        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+    )
 
     for reference in references:
         state = solver.solve(state0, reference["steps"])
@@ -281,7 +285,9 @@ def test_tc_3d_dns_matches_live_shenfun_diagnostics_and_coeffs():
         dealias=1.0,
     )
     state0 = solver.initial_state(amp=1.0e-4, m=1, kz_mode=1)
-    references = tc_3d_dns_reference(include_coefficients=True)
+    references = tc_3d_dns_reference(
+        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+    )
 
     for reference in references:
         state = solver.solve(state0, reference["steps"])
@@ -321,7 +327,9 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         dealias=1.0,
     )
     state0, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-8)
-    references = tc_axisymmetric_mri_dns_reference(include_coefficients=True)
+    references = tc_axisymmetric_mri_dns_reference(
+        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+    )
 
     for reference in references:
         state = solver.solve(state0, reference["steps"])
@@ -364,7 +372,9 @@ def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         dealias=1.0,
     )
     state0, _ = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1.0e-8)
-    references = tc_3d_mri_dns_reference(include_coefficients=True)
+    references = tc_3d_mri_dns_reference(
+        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+    )
 
     for reference in references:
         state = solver.solve(state0, reference["steps"])

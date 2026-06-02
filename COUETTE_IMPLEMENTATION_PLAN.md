@@ -11,17 +11,15 @@ Paths in this document are relative to the workspace root `/home/nauman/cfd/shen
 
 ---
 
-> ## ⚠️ STATUS UPDATE — 2026-06-01 (READ FIRST)
+> ## STATUS UPDATE — 2026-06-02 (READ FIRST)
 >
-> Implementation is **underway** (~14k lines on branch `couette-jax-implementation`). A full audit is in **Part II (§11–§12)** at the end of this document. Parts I (§1–§10) remain the architectural reference; Part II records what is built and adds the missing scope. Headlines:
+> Implementation is **well advanced** on branch `couette-jax-implementation`. A full audit is in **Part II (§11–§12)** at the end of this document. Parts I (§1–§10) remain the architectural reference; Part II records what is built and the remaining hardening scope. Headlines:
 >
-> - **All seven scripts have `*_jax.py` ports**; **22/22 jaxfun unit tests + 7 solver smoke-tests pass** (CPU, float64). Implemented: IMEX-RK integrators (T3.2/T3.3), dense `eig` (T2.4), `CoupledSpace` + truncated pressure (T6.1), `integrate()` (T1.1), ragged vectors, `get_dealiased`, `mask_nyquist`, `Dx`, the BC adapter (T0.5), and runnable KMM-PCF + axisymmetric-hydro-TC-DNS solvers.
-> - **⚠️ NOTHING is validated against `shenfun`.** No test imports `shenfun`; the six `matches_shenfun_reference` tests compare to **self-captured literals** and are `@skipif(not x64)` — and **x64 is OFF by default**, so plain `uv run pytest` **SKIPS every parity test and still reports green**. Read every "done/partial" below as *internally self-consistent, NOT parity-validated*.
-> - **⚠️ Taylor–Couette DNS = 1 of 4 quadrants only** (axisymmetric-hydro). 3D-hydro, axisymmetric-MHD, and 3D-MHD are absent in jax — the `shenfun` reference has all four classes. New milestones **M9–M13 (§12)** add them.
-> - **⚠️ `IMEXRK3` (the documented KMM default) is rejected by the KMM driver** (`channelflow_kmm.py` only accepts `PDEIMEXRK` subclasses). The coupled multi-equation driver (T3.4), cached `Project` (T1.2), named Helmholtz/Biharmonic solvers (T2.2), and CNAB2 (T6.3) are **inlined in examples, not reusable library modules**.
-> - **Decisions taken since Part I:** the **full-complex Fourier** option (T0.3 option B) is in use (see `docs/couette_fourier_layout.md`); `couette/_linear_analysis.py` and `couette/_pcf_linear.py` now **exist** (a prior "missing file" note is stale) and ship a modal+non-modal stability layer that has **no jax port and was unscoped** — added as **M8 (§12)**.
->
-> **Do §12 "M0b" (float64-at-import + a live `shenfun` parity harness) FIRST.** Until it lands, no parity claim anywhere in this document is meaningful.
+> - **All seven scripts have `*_jax.py` ports** and the Taylor-Couette DNS matrix now includes all four quadrants: axisymmetric/full-3D hydro and axisymmetric/full-3D MHD.
+> - **Live `shenfun` parity exists.** `tests/_parity.py` runs the sibling `../shenfun` checkout; live tests cover PCF, PCF-MHD, PCF shearpy/MRI, TC linear/MRI modal plus non-modal growth, radial dealiasing, and TC DNS all-quadrant diagnostics/coefficient fields. Pytest enables x64 by default.
+> - **Reusable library pieces are now present** for CNAB2/coupled IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, `integrate()`, ragged vectors, `get_dealiased`, `mask_nyquist`, `K_over_K2`, `Dx`, the BC adapter, HDF5/cadence IO, and mixed/truncated pressure spaces.
+> - **Remaining gaps are validation hardening or optional features**, not first ports of the Couette variants: optional KMM `compute_pressure`, live file-output parity, broader production-size solver validation, strict bit-identical multi-device parity, and some low-level stencil/operator cross-checks.
+> - **Decisions taken since Part I:** the **full-complex Fourier** option (T0.3 option B) is in use (see `docs/couette_fourier_layout.md`); `couette/_linear_analysis.py` and `couette/_pcf_linear.py` exist, and the jax ports now include the modal/non-modal stability layer.
 
 ---
 
@@ -742,13 +740,13 @@ for each (m, k_z):
 
 # Part II — Status Review & Extended Plan (2026-06-01)
 
-This part supersedes Part I's status claims. It is based on a full audit of branch `couette-jax-implementation`. **Golden rule for this part:** an item marked *done/partial* is **internally self-consistent only**; the phrase "**not shenfun-validated**" means no test compares it to a live `shenfun` run (see the M0b blocker). Do not silently upgrade "done" to "parity-validated" downstream.
+This part supersedes Part I status claims. It is based on a full audit of branch `couette-jax-implementation`, plus subsequent implementation updates. **Golden rule for this part:** treat old Part I status labels as architectural history; current live-validation claims must cite tests that call the sibling `../shenfun` reference through `tests/_parity.py`.
 
-> **Implementation update (2026-06-01):** after this audit, the branch added the reusable CNAB2/coupled-IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, physical `Array`, optional HDF5/checkpoint/XDMF IO, host-side cadence runner, differentiability checks, and live `shenfun` parity coverage for PCF and PCF-MHD (divergence-free + shearpy/MRI) 1/5/50-step diagnostics plus mapped coefficient fields, axisymmetric and full-3D hydro/MHD TC DNS 1/5/50-step diagnostics plus mapped coefficient fields, TC linear/MRI including non-modal growth, and the radial dealiased product. Older status tables below are retained for context where not explicitly updated.
+> **Implementation update (2026-06-01):** after this audit, the branch added the reusable CNAB2/coupled-IMEX helpers, named Helmholtz/Biharmonic solvers, cached `Project`, physical `Array`, optional HDF5/checkpoint/XDMF IO, host-side cadence runner, differentiability checks, and live `shenfun` parity coverage for PCF and PCF-MHD (divergence-free + shearpy/MRI) 1/5/50-step diagnostics plus mapped coefficient fields, axisymmetric and full-3D hydro/MHD TC DNS 1/5/50/100-step diagnostics plus mapped coefficient fields, TC linear/MRI including non-modal growth, and the radial dealiased product. Older status tables below are retained for context where not explicitly updated.
 
 ## 11. Status review
 
-### 11.1 Implemented & internally tested — *NOT shenfun-validated*
+### 11.1 Implemented & validated status
 
 | Plan ref | Item | Evidence | Caveat |
 |---|---|---|---|
@@ -759,11 +757,11 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 | T5.2 | dense block extraction (`.diags().toarray()` analog) | `la/matrix.py` todense | — |
 | T6.1 | mixed `CoupledSpace` + truncated-orthogonal pressure (`P_N/P_{N-2}`) | `tensorproductspace.py`; `test_coupled_space_tc_dns.py` | — |
 
-**Runnable solver examples** (correct-looking, smoke/self-consistency tested, **not** `shenfun`-parity):
+**Runnable solver examples** (smoke/self-consistency tested, with live `shenfun` parity where noted):
 - **KMM PCF** (`channelflow_kmm.py`, `pcf_fluctuations_jax.py`): real biharmonic-`u` + Helmholtz-`g`, vmapped per-mode banded LU, `compute_vw`, base-flow convection. Live `shenfun` integration coverage now compares IMEXRK222 1/5/50-step diagnostics, reconstructed physical velocity fields, and mapped coefficient fields. The coefficient test pads compact jax composite coefficients and slices the nonnegative spanwise modes to match `shenfun`'s rfft half-spectrum storage.
 - **PCF-MHD** (`pcf_mhd_jax.py`, `pcf_mhd_mri_shearpy_jax.py`): A-diffusion + compatible-space curl projections; `divB ≈ 2e-16` (weak). Both the divergence-free PCF-MHD path and the shearpy/MRI transport extension now have live `shenfun` 1/5/50-step diagnostic and mapped `(u,g,A)` coefficient parity.
-- **Taylor-Couette hydro DNS** (`taylor_couette_dns_jax.py`): CNAB2 + per-mode vmapped saddle solves + cylindrical nonlinear + r-weighted energy. Live `shenfun` coverage now compares axisymmetric and full-3D 1/5/50-step diagnostics plus mapped `(u,p)` coefficient fields; eigenmode growth remains covered by the jax linear solver consistency tests.
-- **Taylor-Couette MHD DNS** (`taylor_couette_dns_jax.py`): axisymmetric and full-3D conducting-wall MRI solvers now have live `shenfun` 1/5/50-step diagnostics plus mapped `(u,b,p)` coefficient parity for linear-eigenmode seeds.
+- **Taylor-Couette hydro DNS** (`taylor_couette_dns_jax.py`): CNAB2 + per-mode vmapped saddle solves + cylindrical nonlinear + r-weighted energy. Live `shenfun` coverage now compares axisymmetric and full-3D 1/5/50/100-step diagnostics plus mapped `(u,p)` coefficient fields; 100-step eigenmode growth is also covered by the jax linear solver consistency tests.
+- **Taylor-Couette MHD DNS** (`taylor_couette_dns_jax.py`): axisymmetric and full-3D conducting-wall MRI solvers now have live `shenfun` 1/5/50/100-step diagnostics plus mapped `(u,b,p)` coefficient parity for linear-eigenmode seeds.
 - **TC linear** (`taylor_couette_linear_jax.py`) and **TC MRI** (`taylor_couette_mri_jax.py`) eigensolvers: conducting + insulating Bessel BCs; live `shenfun` coverage compares eigenvalues and non-modal growth rows.
 
 ### 11.2 Partial — finish these (grouped)
@@ -772,7 +770,7 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 - **Done after audit:** T3.4 coupled multi-equation IMEX stage helper (`integrators/coupled.py`), T6.3 reusable CNAB2 stepping (`integrators/cnab2.py`), T3.1 shared implicit-operator helpers (`integrators/base.py`), T2.2 named `Helmholtz`/`Biharmonic` constructors (`la/solvers.py`), T1.2 cached `Project`, and T1.6 `K_over_K2`.
 - **Done after audit:** T6.7 r-weighted TC diagnostics are factored into `jaxfun.diagnostics`; TC DNS examples call the reusable helpers.
 
-**B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity/coefficient fields at 1/5/50 steps, both PCF-MHD variants' diagnostics/coefficient fields at 1/5/50 steps, axisymmetric and full-3D hydro/MHD TC DNS diagnostics/coefficient fields at 1/5/50 steps, TC linear/MRI eigenvalues plus non-modal growth, and the radial dealiased product. Remaining validation work is broader-size/dealiased production coverage and low-level operator stencil cross-checking; the tuple-BC basis stencil check now covers `ShenDirichlet`/`ShenBiharmonic` parity.
+**B. Validation gaps:** live `shenfun` parity now covers PCF IMEXRK222 diagnostics/physical velocity/coefficient fields at 1/5/50 steps, both PCF-MHD variants' diagnostics/coefficient fields at 1/5/50 steps, axisymmetric and full-3D hydro/MHD TC DNS diagnostics/coefficient fields at 1/5/50/100 steps, TC linear/MRI eigenvalues plus non-modal growth, and the radial dealiased product. Remaining validation work is broader-size/dealiased production coverage and low-level operator stencil cross-checking; the tuple-BC basis stencil check now covers `ShenDirichlet`/`ShenBiharmonic` parity.
 
 **C. Correctness gaps in the batched solver tier:**
 - **Done after audit:** T2.1/T2.3 are now plumbed into `TPMatricesWavenumberSolver` and `tpmats_wavenumber_factor` as opt-in `pivot=True` and `constraints=((flat_mode, row, value), ...)` dense batched LU paths. Regression coverage includes pivoted parity vs assembled Kronecker solve, a zero-diagonal pivot stress case, and constrained mode-row/RHS pinning.
@@ -784,18 +782,18 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 | Plan ref | Item | Note |
 |---|---|---|
 | T4.6 | `compute_pressure` (Neumann pressure recovery) | optional/deferred; pressure-free KMM diagnostics do not require it |
-| T7.3 | longer stepped all-quadrant sharding parity for Couette workflows | TC axisymmetric/full-3D hydro/MHD diagnostics, physical-transform parity, and one-step coefficient/diagnostic parity are covered with `--num-devices=2`; strict bit-identical longer-rollout coefficient parity remains to validate |
+| T7.3 | strict bit-identical all-quadrant sharding parity | TC axisymmetric/full-3D hydro/MHD diagnostics, physical-transform parity, and one-step plus five-step coefficient/diagnostic parity are covered with `--num-devices=2` to roundoff; strict bit-identical longer-rollout coefficient parity remains to validate |
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
 1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Production-size validation now covers production-like KMM Helmholtz/Biharmonic operators against the pivoted dense path; remaining validation should cover broader sizes and any future indefinite saddle-block path that uses the generic solver.
-2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform, diagnostic, and one-step coefficient parity have two-device tests; strict bit-identical longer-rollout parity on multiple devices is still not a completed acceptance gate.
+2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform, diagnostic, one-step coefficient parity, and five-step rollout coefficient parity have two-device tests to roundoff; strict bit-identical longer-rollout parity on multiple devices is still not a completed acceptance gate.
 3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
 ### 11.5 Corrections to Part I
 
 - **T0.3 decided → full-complex Fourier (option B).** `jaxfun` Fourier uses single-axis `jnp.fft.fft`; `mask_nyquist`, K-scaling, the `(0,0)` mode, and the saddle solve all assume it. The documented rfft-layout parity mapping for comparing to `shenfun`'s real-`z` half-spectrum is still owed (`docs/couette_fourier_layout.md`).
-- **`couette/_linear_analysis.py` EXISTS** (not missing): `FINITE_CAP=1e8`, `finite_eigensystem`, `transient_growth_from_eigs` (SVD-of-propagator energy-norm growth), `parse_times`, `print_*`. `couette/_pcf_linear.py` exists (`PlaneCouetteLinear`, `energy_matrix(kind)`, `nonmodal_growth`). These define a **stability-analysis layer with no jax port** → **M8**.
+- **`couette/_linear_analysis.py` EXISTS** (not missing): `FINITE_CAP=1e8`, `finite_eigensystem`, `transient_growth_from_eigs` (SVD-of-propagator energy-norm growth), `parse_times`, `print_*`. `couette/_pcf_linear.py` exists (`PlaneCouetteLinear`, `energy_matrix(kind)`, `nonmodal_growth`). The jax ports now cover PCF, TC hydro, and TC MRI modal/non-modal workflows with live parity coverage; M8 is retained as the stability-layer acceptance label.
 - **§5 master gap map:** mark items 5, 9, 18, 30, 32, 35 (T0.5, T1.4, T2.4, T5.1, T5.2, T6.1) as **present (internally tested, not shenfun-validated)**.
 - **§1.2 / §6 / §9:** script 7 (`taylor_couette_dns.py`) is **four** reference classes, not one — split M6 and add the three missing quadrants (§12).
 
@@ -805,18 +803,18 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 
 ### 12.0 Scope: the 2×2 Taylor–Couette DNS matrix
 
-The `shenfun` reference defines **four** DNS classes; the jax port has **only the top-left**:
+The `shenfun` reference defines **four** DNS classes; the current jax port now covers all four quadrants:
 
 | | **Hydrodynamic** | **MHD (MRI)** |
 |---|---|---|
-| **Axisymmetric** (`m=0`) | `AxisymmetricTCDNS` (ref :91) — **PORTED** (`AxisymmetricTCDNSJax`) | `AxisymmetricMRIDNS` (ref :788) — **M12** |
-| **3D** (`m≠0`) | `TaylorCouetteDNS` (ref :487) — **M10** | `TaylorCouetteMRIDNS` (ref :1196) — **M13** |
+| **Axisymmetric** (`m=0`) | `AxisymmetricTCDNS` (ref :91) — **PORTED** (`AxisymmetricTCDNSJax`) | `AxisymmetricMRIDNS` (ref :788) — **PORTED** (`AxisymmetricMRIDNSJax`) |
+| **3D** (`m≠0`) | `TaylorCouetteDNS` (ref :487) — **PORTED** (`TaylorCouetteDNSJax`) | `TaylorCouetteMRIDNS` (ref :1196) — **PORTED** (`TaylorCouetteMRIDNSJax`) |
 
-Two **shared prerequisites** keep the four quadrants from duplicating work:
+The original shared-prerequisite split is retained for traceability; these pieces are now implemented in `examples/taylor_couette_dns_jax.py`:
 - **M9 — azimuthal Fourier (`m≠0`) machinery** + two-Fourier-axis per-`(m,kz)` block solve → shared by **M10** and **M13**.
 - **M11 — magnetic induction/Lorentz/EMF machinery** (primitive `b`, imposed axial `B0`, total pressure `Π=p+B0·b_z`, **conducting** walls) → shared by **M12** and **M13**.
 
-**Dependency edges:** M13 = M9 ∪ M11. M10 needs M9; M12 needs M11; both need the finished axisymmetric-hydro substrate (M6) + CNAB2 module (T6.3).
+**Dependency edges:** M13 = M9 ∪ M11. M10 needs M9; M12 needs M11; both need the finished axisymmetric-hydro substrate (M6) + CNAB2 module (T6.3). These edges are satisfied by the current port; remaining work is validation hardening rather than first implementation of the quadrants.
 
 **Out of scope (do not build):** *insulating-wall MHD DNS*. The `shenfun` reference MHD **DNS** classes are conducting-wall only (`b_r=0` Dirichlet, `b_θ` Robin `d(r·b_θ)/dr=0`, `b_z` Neumann). The `--magnetic-bc insulating` flag routes to the **linear** MRI eigensolver (`m=0` only), which is already ported (T5.4). Building an insulating DNS path is wasted effort.
 
@@ -958,4 +956,4 @@ PHASE 6  M7 I/O (T7.1/T7.2) + sharding parity (T7.3) + differentiability (T0.4c)
 
 ---
 
-*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope adds M0b (foundation hardening), M8 (stability analysis), and M9–M13 (the three missing Taylor–Couette DNS quadrants + their shared azimuthal & magnetic prerequisites). The current implementation runs all seven scripts as internally-consistent jax ports but is **not yet `shenfun`-validated**; the axisymmetric-hydro TC DNS is the only one of four quadrants complete. Critical path: land M0b first (so parity means something), then finish the Phase-1 correctness partials, then build outward to the 3D and MHD quadrants.*
+*End of plan (Parts I + II). Original scope: 41 gaps / 8 milestones (Part I). Extended scope added M0b (foundation hardening), M8 (stability analysis), and M9-M13 (Taylor-Couette DNS quadrants plus shared azimuthal and magnetic prerequisites). The current implementation runs all seven scripts, includes all four Taylor-Couette DNS quadrants, and has live `shenfun` parity for the Couette workflows listed above. Remaining work is optional pressure recovery and validation hardening: live file-output parity, broader production-size solver checks, low-level operator stencil cross-checks, and strict bit-identical multi-device parity.*
