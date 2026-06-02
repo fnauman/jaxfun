@@ -418,6 +418,7 @@ class KMM:
         on_diagnostics=None,
         on_snapshot=None,
         on_checkpoint=None,
+        should_stop=None,
     ) -> KMMState:
         return run_with_cadence(
             self.solve,
@@ -430,6 +431,7 @@ class KMM:
             on_diagnostics=on_diagnostics,
             on_snapshot=on_snapshot,
             on_checkpoint=on_checkpoint,
+            should_stop=should_stop,
         )
 
     def divergence_l2(self, state: KMMState) -> Array:

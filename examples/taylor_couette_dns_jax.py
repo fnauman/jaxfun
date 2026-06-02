@@ -494,6 +494,7 @@ class AxisymmetricTCDNSJax:
         on_diagnostics=None,
         on_snapshot=None,
         on_checkpoint=None,
+        should_stop=None,
     ) -> AxisymmetricTCState:
         return run_with_cadence(
             self.solve,
@@ -506,6 +507,7 @@ class AxisymmetricTCDNSJax:
             on_diagnostics=on_diagnostics,
             on_snapshot=on_snapshot,
             on_checkpoint=on_checkpoint,
+            should_stop=should_stop,
         )
 
     def velocity_physical(self, state: AxisymmetricTCState) -> Velocity:

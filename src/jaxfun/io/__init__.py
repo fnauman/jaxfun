@@ -150,12 +150,16 @@ def run_with_cadence(
     on_diagnostics: Any | None = None,
     on_snapshot: Any | None = None,
     on_checkpoint: Any | None = None,
+    should_stop: Any | None = None,
 ) -> Any:
     """Advance in compiled blocks and run host callbacks at cadence boundaries.
 
     ``advance(state, nsteps)`` should contain the jitted stepping work.  This
     function deliberately stays on the host: after each block it waits for the
     device result, computes optional diagnostics, and invokes IO callbacks.
+    If ``should_stop`` is provided, it is called as
+    ``should_stop(t, tstep, state)`` after due callbacks and may return true to
+    stop before another compiled block is launched.
     """
     if steps < 0:
         raise ValueError("steps must be non-negative")
@@ -177,6 +181,8 @@ def run_with_cadence(
             on_snapshot(t, tstep, out)
         if cadence_due(tstep, cadence.checkpoint_every) and on_checkpoint:
             on_checkpoint(t, tstep, out)
+        if should_stop is not None and bool(should_stop(t, tstep, out)):
+            break
     return out
 
 

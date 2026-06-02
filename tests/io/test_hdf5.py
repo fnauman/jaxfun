@@ -140,3 +140,56 @@ def test_run_with_cadence_hits_exact_boundaries():
     ]
     assert cadence_due(8, 4)
     assert not cadence_due(7, 4)
+
+
+def test_run_with_cadence_can_stop_after_callback_boundary():
+    @jax.jit(static_argnums=1)
+    def advance(state, nsteps):
+        def body(_, value):
+            return value + 1.0
+
+        return jax.lax.fori_loop(0, nsteps, body, state)
+
+    events = []
+    stop_steps = []
+
+    def diagnostics(state):
+        return {"sum": jnp.sum(state)}
+
+    def on_diagnostics(t, tstep, diag):
+        events.append(("diag", tstep, float(diag["sum"])))
+
+    def on_snapshot(t, tstep, state):
+        events.append(("snap", tstep, float(state[0])))
+
+    def on_checkpoint(t, tstep, state):
+        events.append(("ckpt", tstep, float(state[0])))
+
+    def should_stop(t, tstep, state):
+        stop_steps.append(tstep)
+        return tstep >= 6
+
+    out = run_with_cadence(
+        advance,
+        jnp.zeros(2),
+        steps=20,
+        dt=0.25,
+        block_size=5,
+        cadence=Cadence(diagnostics_every=2, snapshot_every=3, checkpoint_every=4),
+        diagnostics=diagnostics,
+        on_diagnostics=on_diagnostics,
+        on_snapshot=on_snapshot,
+        on_checkpoint=on_checkpoint,
+        should_stop=should_stop,
+    )
+
+    assert jnp.array_equal(out, jnp.full(2, 6.0))
+    assert [(kind, tstep) for kind, tstep, _ in events] == [
+        ("diag", 2),
+        ("snap", 3),
+        ("diag", 4),
+        ("ckpt", 4),
+        ("diag", 6),
+        ("snap", 6),
+    ]
+    assert stop_steps == [2, 3, 4, 6]
