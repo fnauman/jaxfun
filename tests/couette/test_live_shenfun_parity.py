@@ -27,6 +27,7 @@ from tests._parity import (
     tc_axisymmetric_mri_dns_reference,
     tc_linear_eigenvalues,
     tc_linear_nonmodal,
+    tc_linear_operator_parts,
     tc_mri_eigenvalues,
     tc_mri_nonmodal,
     tc_radial_dealias_product,
@@ -402,6 +403,18 @@ def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         assert np.allclose(
             p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
         )
+
+
+@pytest.mark.parametrize("family", ["L", "C"], ids=["legendre", "chebyshev"])
+def test_tc_linear_operator_parts_match_live_shenfun(family):
+    solver = TaylorCouetteLinearJax(CircularCouette(), nu=0.002, N=8, family=family)
+    got = solver.assemble_parts(m=1, kz=2.0)
+    ref = tc_linear_operator_parts(n=8, m=1, kz=2.0, family=family)
+
+    for name, matrix in zip(("L0", "Lv", "M"), got, strict=True):
+        assert np.allclose(
+            matrix, _nested_complex(ref[name]), rtol=1.0e-10, atol=1.0e-12
+        ), name
 
 
 def test_tc_linear_matches_live_shenfun_eigenvalues_and_nonmodal():
