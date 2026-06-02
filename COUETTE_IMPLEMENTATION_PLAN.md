@@ -836,7 +836,8 @@ Two **shared prerequisites** keep the four quadrants from duplicating work:
 
 **[T0.4c] Differentiability smoke test — *M*** · `tests/couette/`
 - **What:** `jax.grad`/`value_and_grad` of a scalar diagnostic (final `Epert`) w.r.t. a control (`U_wall`/`Re`/IC amplitude) for one PCF and one axisymmetric-TC case. **Depends:** T0.1b.
-- **Accept:** gradient is finite and FD-consistent to a few digits for both cases (the headline differentiable-solver goal; currently zero coverage).
+- **Current coverage:** `tests/couette/test_differentiability_jax.py` covers PCF final `Epert` and axisymmetric TC final energy gradients with central finite-difference checks in x64.
+- **Accept:** gradient is finite and FD-consistent to a few digits for both cases (the headline differentiable-solver goal).
 
 ---
 
