@@ -25,9 +25,11 @@ from tests._parity import (
     tc_3d_mri_dns_reference,
     tc_axisymmetric_dns_reference,
     tc_axisymmetric_mri_dns_reference,
+    tc_linear_critical_scan,
     tc_linear_eigenvalues,
     tc_linear_nonmodal,
     tc_linear_operator_parts,
+    tc_mri_critical_scans,
     tc_mri_eigenvalues,
     tc_mri_nonmodal,
     tc_mri_operator_parts,
@@ -452,6 +454,27 @@ def test_tc_linear_matches_live_shenfun_eigenvalues_and_nonmodal():
         assert row["gain"] == pytest.approx(ref["gain"], rel=1.0e-10, abs=1.0e-10)
 
 
+def _assert_scalar_dict_close(got, ref, *, rel=1.0e-10, abs=1.0e-10):
+    assert got.keys() == ref.keys()
+    for key, value in got.items():
+        assert value == pytest.approx(ref[key], rel=rel, abs=abs), key
+
+
+def test_tc_linear_critical_scan_matches_live_shenfun():
+    solver = TaylorCouetteLinearJax(CircularCouette(), nu=0.001, N=8, family="L")
+    kz_c, nu_c = solver.critical_over_kz(
+        m=0, kz_list=np.array([2.0, 3.0, 4.0]), iters=8
+    )
+    got = {
+        "kz_c": kz_c,
+        "nu_c": nu_c,
+        "Re_c": solver.base.Omega1 * solver.base.R1 * solver.base.gap / nu_c,
+        "a_c": kz_c * solver.base.gap,
+    }
+
+    _assert_scalar_dict_close(got, tc_linear_critical_scan(n=8, iters=8))
+
+
 @pytest.mark.parametrize(
     ("magnetic_bc", "m"),
     [("conducting", 1), ("insulating", 0)],
@@ -474,6 +497,30 @@ def test_tc_mri_operator_parts_match_live_shenfun(magnetic_bc, m):
         assert np.allclose(
             matrix, _nested_complex(ref[name]), rtol=1.0e-10, atol=1.0e-12
         ), name
+
+
+@pytest.mark.parametrize("magnetic_bc", ["conducting", "insulating"])
+def test_tc_mri_critical_scans_match_live_shenfun(magnetic_bc):
+    solver = TaylorCouetteMRIJax(
+        _keplerian_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        N=8,
+        family="L",
+        magnetic_bc=magnetic_bc,
+    )
+    kzs = np.array([2.0, 3.0])
+    got = {
+        "fixed_B0_nu": solver.critical_Rm_fixed_B0_nu(0, kzs, iters=8),
+        "fixed_controls": solver.critical_Rm(0, kzs, iters=8),
+    }
+    ref = tc_mri_critical_scans(magnetic_bc=magnetic_bc, n=8, iters=8)
+
+    assert got.keys() == ref.keys()
+    for scan, values in got.items():
+        assert values is not None
+        _assert_scalar_dict_close(values, ref[scan])
 
 
 @pytest.mark.parametrize("magnetic_bc", ["conducting", "insulating"])

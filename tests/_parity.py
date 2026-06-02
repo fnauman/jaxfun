@@ -239,6 +239,54 @@ def tc_mri_operator_parts(
     )
 
 
+def tc_linear_critical_scan(*, n: int = 8, iters: int = 8) -> dict[str, Any]:
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import numpy as np
+            from taylor_couette_linear import CircularCouette, TaylorCouetteLinear
+            base = CircularCouette()
+            s = TaylorCouetteLinear(base, nu=0.001, N={n}, family='L')
+            kzs = np.array([2.0, 3.0, 4.0])
+            kz_c, nu_c = s.critical_over_kz(0, kzs, iters={iters})
+            print(json.dumps({{
+                "kz_c": float(kz_c),
+                "nu_c": float(nu_c),
+                "Re_c": float(base.Omega1 * base.R1 * base.gap / nu_c),
+                "a_c": float(kz_c * base.gap),
+            }}))
+            """
+        )
+    )
+
+
+def tc_mri_critical_scans(
+    *, magnetic_bc: str, n: int = 8, iters: int = 8
+) -> dict[str, Any]:
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import numpy as np
+            from taylor_couette_linear import CircularCouette
+            from taylor_couette_mri import TaylorCouetteMRI
+            eta = 0.5
+            base = CircularCouette(1.0, 2.0, 1.0, eta**1.5)
+            s = TaylorCouetteMRI(
+                base, B0=0.1, nu=0.001, eta_mag=0.001, N={n},
+                family='L', magnetic_bc={magnetic_bc!r}
+            )
+            kzs = np.array([2.0, 3.0])
+            print(json.dumps({{
+                "fixed_B0_nu": s.critical_Rm_fixed_B0_nu(
+                    0, kzs, iters={iters}
+                ),
+                "fixed_controls": s.critical_Rm(0, kzs, iters={iters}),
+            }}))
+            """
+        )
+    )
+
+
 def tc_mri_eigenvalues(*, magnetic_bc: str, n: int = 12) -> np.ndarray:
     rows = run_shenfun_json(
         textwrap.dedent(
