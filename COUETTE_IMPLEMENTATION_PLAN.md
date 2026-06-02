@@ -588,8 +588,8 @@ Each task: **[ID] Title** — *status/effort* · files · depends-on. Then **Bui
 
 #### [T7.3] MPI→sharding: remove rank gating, sharded reductions, multi-device parity — *partial/L* · `examples/`, `sharding.py`
 - **Build:** (1) remove all rank gating — the `(0,0)` mode is global index 0 (done in T4.3); (2) energy/spectra reductions = `jnp.sum` (single device) or `jax.lax.psum(_,'k')` inside `shard_map` (multi-device); (3) plane-averaged profiles = mean over homogeneous directions locally then `psum`, or `all_gather` over the wall-normal-distributed axis + deterministic reorder; (4) ensure the banded (wall-normal/radial) axis is **not** the sharded axis for the per-mode solver (`jaxfun`'s sharding shards a Fourier axis; satisfy the `poly_axis != 0`, `n_F divisible by device count` constraints).
-- **Current coverage:** `tests/couette/test_sharding_parity_jax.py` covers two-device TC diagnostics and physical transforms for axisymmetric/full-3D hydro and axisymmetric/full-3D MHD states on a Fourier-sharded axis.
-- **Accept:** the same problem on 1 device and on N devices (or N CPU shards via `XLA_FLAGS`) yields **bit-identical** `u_hat` and diagnostics after stepping; single-device spectra match `shenfun`'s MPI-allreduced spectra to 1e-10. Runs on GPU and TPU unchanged (`jax.devices()` abstracts the backend — no GPU/TPU branching).
+- **Current coverage:** `tests/couette/test_sharding_parity_jax.py` covers two-device TC diagnostics and physical transforms for axisymmetric/full-3D hydro and axisymmetric/full-3D MHD states on a Fourier-sharded axis; it now also checks one-step coefficient and diagnostic parity for all four TC DNS quadrants to roundoff.
+- **Accept:** the same problem on 1 device and on N devices (or N CPU shards via `XLA_FLAGS`) yields **bit-identical** `u_hat` and diagnostics after longer stepped rollouts; single-device spectra match `shenfun`'s MPI-allreduced spectra to 1e-10. Runs on GPU and TPU unchanged (`jax.devices()` abstracts the backend — no GPU/TPU branching).
 
 ---
 
@@ -784,12 +784,12 @@ This part supersedes Part I's status claims. It is based on a full audit of bran
 | Plan ref | Item | Note |
 |---|---|---|
 | T4.6 | `compute_pressure` (Neumann pressure recovery) | optional/deferred; pressure-free KMM diagnostics do not require it |
-| T7.3 | stepped all-quadrant sharding parity for Couette workflows | TC axisymmetric/full-3D hydro/MHD diagnostics and physical-transform parity are covered with `--num-devices=2`; bit-identical stepped coefficient parity remains to validate |
+| T7.3 | longer stepped all-quadrant sharding parity for Couette workflows | TC axisymmetric/full-3D hydro/MHD diagnostics, physical-transform parity, and one-step coefficient/diagnostic parity are covered with `--num-devices=2`; strict bit-identical longer-rollout coefficient parity remains to validate |
 
 ### 11.4 Known correctness bugs / risks (fix early)
 
 1. **No-pivot batched LU at production N:** `TPMatricesWavenumberSolver` still defaults to `vmap(_lu_banded_no_pivot_kernel)` for the fast path, with an opt-in dense pivoted path now available. Production-size validation must decide when KMM/biharmonic workloads should stay on the fast path versus request `pivot=True`.
-2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform and diagnostic parity has a two-device test; all-quadrant stepped coefficient parity on multiple devices is still not a completed acceptance gate.
+2. **Couette sharding parity gap:** TC axisymmetric/full-3D hydro/MHD transform, diagnostic, and one-step coefficient parity have two-device tests; strict bit-identical longer-rollout parity on multiple devices is still not a completed acceptance gate.
 3. **`finite_cap` split:** modal filter `1e6` (`eig.py`) vs non-modal `1e8` (`_linear_analysis.py`) must stay **distinct and documented** — unifying them silently changes which large-but-finite modes the modal filter discards.
 
 ### 11.5 Corrections to Part I

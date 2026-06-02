@@ -89,6 +89,20 @@ def _assert_physical_fields_match(replicated, sharded):
         assert len(sharded_field.devices()) == jax.device_count()
 
 
+def _assert_state_coefficients_match(replicated, sharded):
+    if isinstance(replicated, AxisymmetricTCState):
+        replicated_coeffs = (*replicated.u, replicated.p, *replicated.nonlinear_old)
+        sharded_coeffs = (*sharded.u, sharded.p, *sharded.nonlinear_old)
+    else:
+        replicated_coeffs = (*replicated.x, replicated.p, *replicated.nonlinear_old)
+        sharded_coeffs = (*sharded.x, sharded.p, *sharded.nonlinear_old)
+    for replicated_coeff, sharded_coeff in zip(
+        replicated_coeffs, sharded_coeffs, strict=True
+    ):
+        assert jnp.allclose(sharded_coeff, replicated_coeff, rtol=1.0e-12, atol=1.0e-12)
+        assert len(sharded_coeff.devices()) == jax.device_count()
+
+
 def test_tc_axisymmetric_sharded_transforms_and_diagnostics_match_replicated() -> None:
     if jax.device_count() < 2:
         pytest.skip("requires --num-devices=2")
@@ -173,3 +187,66 @@ def test_taylor_couette_quadrants_sharded_transforms_and_diagnostics_match_repli
     )
     physical = getattr(solver, physical_method)
     _assert_physical_fields_match(physical(state), physical(sharded_state))
+
+
+@pytest.mark.parametrize(
+    ("solver_factory", "state_factory"),
+    [
+        (
+            lambda: AxisymmetricTCDNSJax(
+                CircularCouette(), nu=0.002, Nr=8, Nz=8, dt=1.0e-3, dealias=1.0
+            ),
+            _seeded_hydro_state,
+        ),
+        (
+            lambda: TaylorCouetteDNSJax(
+                CircularCouette(),
+                nu=0.002,
+                Nr=8,
+                Ntheta=4,
+                Nz=8,
+                dt=1.0e-3,
+                dealias=1.0,
+            ),
+            _seeded_hydro_state,
+        ),
+        (
+            lambda: AxisymmetricMRIDNSJax(
+                CircularCouette(), Nr=8, Nz=8, dt=1.0e-3, dealias=1.0
+            ),
+            _seeded_mhd_state,
+        ),
+        (
+            lambda: TaylorCouetteMRIDNSJax(
+                CircularCouette(),
+                Nr=8,
+                Ntheta=4,
+                Nz=8,
+                dt=1.0e-3,
+                dealias=1.0,
+            ),
+            _seeded_mhd_state,
+        ),
+    ],
+    ids=[
+        "axisymmetric-hydro",
+        "full-3d-hydro",
+        "axisymmetric-mhd",
+        "full-3d-mhd",
+    ],
+)
+def test_taylor_couette_quadrants_sharded_one_step_matches_replicated(
+    solver_factory, state_factory
+) -> None:
+    if jax.device_count() < 2:
+        pytest.skip("requires --num-devices=2")
+
+    solver = solver_factory()
+    state = state_factory(solver)
+    replicated = solver.step(state)
+    sharded = solver.step(_shard_state(state))
+
+    _assert_state_coefficients_match(replicated, sharded)
+    _assert_diagnostics_match(
+        solver.diagnostics(replicated), solver.diagnostics(sharded)
+    )
