@@ -21,6 +21,7 @@ from tests._parity import (
     pcf_fluctuation_reference,
     pcf_mhd_reference,
     pcf_mhd_shearpy_reference,
+    run_shenfun_json,
     tc_3d_dns_reference,
     tc_3d_mri_dns_reference,
     tc_axisymmetric_dns_reference,
@@ -36,9 +37,15 @@ from tests._parity import (
     tc_radial_dealias_product,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.live_shenfun]
 
 TC_DNS_PARITY_STEPS = (1, 5, 50, 100)
+TC_MHD_NONLINEAR_PARITY_STEPS = (50,)
+TC_MHD_NONLINEAR_PARITY_AMP = 1.0e-3
+
+
+def test_live_shenfun_reference_runner_executes():
+    assert run_shenfun_json("print(json.dumps({'ok': True}))") == {"ok": True}
 
 
 def _keplerian_base():
@@ -51,8 +58,38 @@ def _nested_complex(rows):
     return arr[..., 0] + 1j * arr[..., 1]
 
 
+def _assert_conjugate_symmetric(coeff, periodic_axes: tuple[int, ...]) -> None:
+    coeff_np = np.asarray(coeff)
+    axis_shape = tuple(coeff_np.shape[axis] for axis in periodic_axes)
+    for mode in np.ndindex(axis_shape):
+        src = [slice(None)] * coeff_np.ndim
+        dst = [slice(None)] * coeff_np.ndim
+        for axis, index in zip(periodic_axes, mode, strict=True):
+            src[axis] = index
+            dst[axis] = (-index) % coeff_np.shape[axis]
+        src_values = coeff_np[tuple(src)]
+        dst_values = coeff_np[tuple(dst)]
+        if max(np.max(np.abs(src_values)), np.max(np.abs(dst_values))) < 1.0e-8:
+            continue
+        assert np.allclose(
+            dst_values,
+            np.conj(src_values),
+            rtol=1.0e-10,
+            atol=1.0e-10,
+        )
+
+
+def _assert_active_coefficients_close(got, expected, *, floor: float = 1.0e-8) -> None:
+    got_np = np.asarray(got)
+    expected_np = np.asarray(expected)
+    active = (np.abs(got_np) >= floor) | (np.abs(expected_np) >= floor)
+    assert np.any(active)
+    assert np.allclose(got_np[active], expected_np[active], rtol=1.0e-8, atol=1.0e-10)
+
+
 def _shenfun_rfft_coeff_layout(coeff, *, radial_n: int, spanwise_n: int):
     coeff_np = np.asarray(coeff)
+    _assert_conjugate_symmetric(coeff_np, periodic_axes=(1, 2))
     out = np.zeros(
         (radial_n, coeff_np.shape[1], spanwise_n // 2 + 1),
         dtype=complex,
@@ -254,6 +291,7 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
 
 def _shenfun_tc_rfft_coeff_layout(coeff, *, radial_n: int, axial_n: int):
     coeff_np = np.asarray(coeff)
+    _assert_conjugate_symmetric(coeff_np, periodic_axes=(0,))
     out = np.zeros((axial_n // 2 + 1, radial_n), dtype=complex)
     out[:, : coeff_np.shape[1]] = coeff_np[: axial_n // 2 + 1, :]
     return out
@@ -384,6 +422,42 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         )
 
 
+def test_tc_axisymmetric_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
+    solver = AxisymmetricMRIDNSJax(
+        _keplerian_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state0, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=TC_MHD_NONLINEAR_PARITY_AMP)
+    reference = tc_axisymmetric_mri_dns_reference(
+        steps=TC_MHD_NONLINEAR_PARITY_STEPS,
+        amp=TC_MHD_NONLINEAR_PARITY_AMP,
+        include_coefficients=True,
+    )[0]
+
+    state = solver.solve(state0, reference["steps"])
+    diag = solver.diagnostics(state)
+    for key in ("Ekin", "Emag", "E"):
+        assert float(diag[key]) == pytest.approx(
+            reference[key], rel=1.0e-10, abs=1.0e-12
+        )
+    ref_coeffs = reference["coefficients"]
+    for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
+        got_layout = _shenfun_tc_rfft_coeff_layout(
+            got, radial_n=solver.Nr, axial_n=solver.Nz
+        )
+        _assert_active_coefficients_close(got_layout, _nested_complex(expected))
+    p_layout = _shenfun_tc_rfft_coeff_layout(
+        state.p, radial_n=solver.Nr, axial_n=solver.Nz
+    )
+    _assert_active_coefficients_close(p_layout, _nested_complex(ref_coeffs["p"]))
+
+
 def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
     solver = TaylorCouetteMRIDNSJax(
         _keplerian_base(),
@@ -427,6 +501,45 @@ def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         assert np.allclose(
             p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
         )
+
+
+def test_tc_3d_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
+    solver = TaylorCouetteMRIDNSJax(
+        _keplerian_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state0, _ = solver.seed_linear_eigenmode(
+        m=1, kz_mode=1, amp=TC_MHD_NONLINEAR_PARITY_AMP
+    )
+    reference = tc_3d_mri_dns_reference(
+        steps=TC_MHD_NONLINEAR_PARITY_STEPS,
+        amp=TC_MHD_NONLINEAR_PARITY_AMP,
+        include_coefficients=True,
+    )[0]
+
+    state = solver.solve(state0, reference["steps"])
+    diag = solver.diagnostics(state)
+    for key in ("Ekin", "Emag", "E"):
+        assert float(diag[key]) == pytest.approx(
+            reference[key], rel=1.0e-10, abs=1.0e-12
+        )
+    ref_coeffs = reference["coefficients"]
+    for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
+        got_layout = _shenfun_tc3d_rfft_coeff_layout(
+            got, radial_n=solver.Nr, axial_n=solver.Nz
+        )
+        _assert_active_coefficients_close(got_layout, _nested_complex(expected))
+    p_layout = _shenfun_tc3d_rfft_coeff_layout(
+        state.p, radial_n=solver.Nr, axial_n=solver.Nz
+    )
+    _assert_active_coefficients_close(p_layout, _nested_complex(ref_coeffs["p"]))
 
 
 @pytest.mark.parametrize("family", ["L", "C"], ids=["legendre", "chebyshev"])
@@ -574,6 +687,4 @@ def test_radial_polynomial_dealiasing_matches_live_shenfun_product():
 
     h = Tp.forward(Tp.backward(u) * Tp.backward(v))
 
-    assert np.allclose(
-        h, tc_radial_dealias_product(n=n), rtol=1.0e-12, atol=1.0e-12
-    )
+    assert np.allclose(h, tc_radial_dealias_product(n=n), rtol=1.0e-12, atol=1.0e-12)

@@ -64,10 +64,15 @@ def test_uniform_snapshot_from_jaxfunction_and_physical_array(tmp_path):
     xdmf = generate_xdmf(path)
     text = xdmf.read_text()
     assert "fields.h5:/snapshots/2/fields/u" in text
+    assert 'TopologyType="2DRectMesh"' in text
+    assert 'GeometryType="VXVY"' in text
+    assert "fields.h5:/snapshots/2/mesh/u/x0" in text
+    assert "fields.h5:/snapshots/2/mesh/u/x1" in text
     assert "u_phys" in text
 
 
 @pytest.mark.integration
+@pytest.mark.live_shenfun
 def test_uniform_snapshot_matches_live_shenfun_file_output(tmp_path):
     h5py = pytest.importorskip("h5py")
     from tests._parity import shenfun_uniform_snapshot_reference
@@ -120,7 +125,6 @@ def test_checkpoint_restart_continues_bit_identically(tmp_path):
 
     assert jnp.array_equal(continued[0], direct[0])
     assert jnp.array_equal(continued[1], direct[1])
-
 
 
 def test_run_with_cadence_hits_exact_boundaries():

@@ -333,7 +333,75 @@ def _xdmf_number_type(dtype: np.dtype) -> tuple[str, int]:
     return "Float", int(dtype.itemsize)
 
 
-def _grid_xml(shape: tuple[int, ...]) -> list[str]:
+def _hdf_data_item(
+    h5_path: Path, dataset_path: str, arr: np.ndarray, *, dimensions: str | None = None
+) -> str:
+    number_type, precision = _xdmf_number_type(arr.dtype)
+    dims = dimensions or " ".join(str(n) for n in arr.shape)
+    return (
+        f'<DataItem Dimensions="{dims}" NumberType="{number_type}" '
+        f'Precision="{precision}" Format="HDF">'
+        f"{h5_path.name}:{dataset_path}</DataItem>"
+    )
+
+
+def _mesh_coordinates(
+    step: Any,
+    *,
+    snapshot_group: str,
+    step_name: str,
+    dataset_name: str,
+    shape: tuple[int, ...],
+) -> list[tuple[str, np.ndarray]] | None:
+    mesh_root = step.get("mesh")
+    if mesh_root is None:
+        return None
+    field_name = dataset_name.split("/", 1)[0]
+    if field_name not in mesh_root:
+        return None
+    field_mesh = mesh_root[field_name]
+    coordinates: list[tuple[str, np.ndarray]] = []
+    for axis, size in enumerate(shape):
+        key = f"x{axis}"
+        if key not in field_mesh:
+            return None
+        values = np.asarray(field_mesh[key])
+        if values.ndim != 1 or values.shape[0] != int(size):
+            return None
+        coordinates.append(
+            (f"/{snapshot_group}/{step_name}/mesh/{field_name}/{key}", values)
+        )
+    return coordinates
+
+
+def _grid_xml(
+    shape: tuple[int, ...],
+    *,
+    h5_path: Path,
+    coordinates: list[tuple[str, np.ndarray]] | None = None,
+) -> list[str]:
+    if coordinates is not None and len(coordinates) == len(shape):
+        if len(shape) == 1:
+            path, values = coordinates[0]
+            return [
+                f'<Topology TopologyType="Polyvertex" NumberOfElements="{shape[0]}"/>',
+                '<Geometry GeometryType="X">',
+                _hdf_data_item(h5_path, path, values, dimensions=str(shape[0])),
+                "</Geometry>",
+            ]
+        if len(shape) in (2, 3):
+            dims = " ".join(str(n) for n in shape)
+            topology = "2DRectMesh" if len(shape) == 2 else "3DRectMesh"
+            geometry = "VXVY" if len(shape) == 2 else "VXVYVZ"
+            lines = [
+                f'<Topology TopologyType="{topology}" Dimensions="{dims}"/>',
+                f'<Geometry GeometryType="{geometry}">',
+            ]
+            for coordinate_path, values in coordinates:
+                lines.append(_hdf_data_item(h5_path, coordinate_path, values))
+            lines.append("</Geometry>")
+            return lines
+
     if len(shape) == 1:
         coords = " ".join(str(i) for i in range(shape[0]))
         return [
@@ -343,7 +411,7 @@ def _grid_xml(shape: tuple[int, ...]) -> list[str]:
                 f'<DataItem Dimensions="{shape[0]}" NumberType="Float" '
                 f'Format="XML">{coords}</DataItem>'
             ),
-            '</Geometry>',
+            "</Geometry>",
         ]
     if len(shape) == 2:
         dims = f"{shape[0]} {shape[1]}"
@@ -359,7 +427,7 @@ def _grid_xml(shape: tuple[int, ...]) -> list[str]:
             f'<Topology TopologyType="Polyvertex" NumberOfElements="{n}"/>',
             '<Geometry GeometryType="X">',
             f'<DataItem Dimensions="{n}" NumberType="Float" Format="XML">0</DataItem>',
-            '</Geometry>',
+            "</Geometry>",
         ]
     zeros = " ".join("0" for _ in range(geom_dims))
     ones = " ".join("1" for _ in range(geom_dims))
@@ -368,7 +436,7 @@ def _grid_xml(shape: tuple[int, ...]) -> list[str]:
         '<Geometry GeometryType="ORIGIN_DXDYDZ">',
         f'<DataItem Dimensions="{geom_dims}" Format="XML">{zeros}</DataItem>',
         f'<DataItem Dimensions="{geom_dims}" Format="XML">{ones}</DataItem>',
-        '</Geometry>',
+        "</Geometry>",
     ]
 
 
@@ -382,14 +450,12 @@ def generate_xdmf(
     h5py = _h5py()
     h5_path = Path(h5_filename)
     xdmf_path = (
-        h5_path.with_suffix(".xdmf")
-        if xdmf_filename is None
-        else Path(xdmf_filename)
+        h5_path.with_suffix(".xdmf") if xdmf_filename is None else Path(xdmf_filename)
     )
     lines = [
         '<?xml version="1.0" ?>',
         '<Xdmf Version="3.0">',
-        '<Domain>',
+        "<Domain>",
         (
             '<Grid Name="jaxfun_snapshots" GridType="Collection" '
             'CollectionType="Temporal">'
@@ -403,10 +469,20 @@ def generate_xdmf(
             lines.append(f'<Time Value="{float(step.attrs["t"]):.17g}"/>')
             datasets = list(_iter_datasets(step["fields"]))
             if not datasets:
-                lines.append('</Grid>')
+                lines.append("</Grid>")
                 continue
-            first = np.asarray(datasets[0][1])
-            lines.extend(_grid_xml(tuple(first.shape)))
+            first_name, first_dataset = datasets[0]
+            first = np.asarray(first_dataset)
+            coordinates = _mesh_coordinates(
+                step,
+                snapshot_group=snapshot_group,
+                step_name=step_name,
+                dataset_name=first_name,
+                shape=tuple(first.shape),
+            )
+            lines.extend(
+                _grid_xml(tuple(first.shape), h5_path=h5_path, coordinates=coordinates)
+            )
             for name, dataset in datasets:
                 arr = np.asarray(dataset)
                 if np.iscomplexobj(arr):
@@ -423,12 +499,12 @@ def generate_xdmf(
                         (
                             f'<DataItem Dimensions="{dims}" NumberType="{number_type}" '
                             f'Precision="{precision}" Format="HDF">'
-                            f'{h5_path.name}:{dataset_path}</DataItem>'
+                            f"{h5_path.name}:{dataset_path}</DataItem>"
                         ),
-                        '</Attribute>',
+                        "</Attribute>",
                     ]
                 )
-            lines.append('</Grid>')
-    lines.extend(['</Grid>', '</Domain>', '</Xdmf>', ''])
+            lines.append("</Grid>")
+    lines.extend(["</Grid>", "</Domain>", "</Xdmf>", ""])
     xdmf_path.write_text("\n".join(lines))
     return xdmf_path

@@ -22,12 +22,26 @@ def _shenfun_python() -> str:
     return str(candidate)
 
 
+def _shenfun_source_root() -> Path:
+    explicit = os.environ.get("SHENFUN_SOURCE_ROOT")
+    if explicit:
+        return Path(explicit)
+    return REPO_ROOT.parent / "shenfun"
+
+
 def require_local_shenfun() -> None:
     """Skip when the local shenfun reference runner is unavailable."""
     if not Path(_shenfun_python()).exists():
         pytest.skip("set SHENFUN_PYTHON to a Python executable with shenfun installed")
-    if not (REPO_ROOT.parent / "shenfun").exists():
-        pytest.skip("sibling ../shenfun checkout is required for live parity tests")
+    if not _shenfun_source_root().exists():
+        pytest.skip("set SHENFUN_SOURCE_ROOT or provide a sibling ../shenfun checkout")
+
+
+def _record_shenfun_reference_run() -> None:
+    path = os.environ.get("JAXFUN_SHENFUN_PARITY_SENTINEL")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("1\n")
 
 
 def run_shenfun_json(source: str) -> Any:
@@ -52,7 +66,7 @@ def run_shenfun_json(source: str) -> Any:
         capture_output=True,
     )
     if proc.returncode != 0:
-        pytest.skip(
+        raise AssertionError(
             "local shenfun reference run failed:\n"
             + proc.stdout[-2000:]
             + proc.stderr[-2000:]
@@ -60,7 +74,16 @@ def run_shenfun_json(source: str) -> Any:
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     if not lines:
         raise AssertionError("shenfun reference runner produced no JSON output")
-    return json.loads(lines[-1])
+    try:
+        result = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            "shenfun reference runner produced invalid JSON output:\n"
+            + proc.stdout[-2000:]
+            + proc.stderr[-2000:]
+        ) from exc
+    _record_shenfun_reference_run()
+    return result
 
 
 def complex_array(rows: Any) -> np.ndarray:
@@ -511,6 +534,7 @@ def pcf_fluctuation_reference(
         )
     )
 
+
 def pcf_mhd_reference(
     *,
     steps: tuple[int, ...] = (1, 5, 50),
@@ -594,6 +618,7 @@ def pcf_mhd_reference(
             """
         )
     )
+
 
 def pcf_mhd_shearpy_reference(
     *,

@@ -65,6 +65,7 @@ def test_homogeneous_robin_bc_preserves_robin_coefficient():
 
 
 @pytest.mark.integration
+@pytest.mark.live_shenfun
 def test_tuple_bc_stencils_match_live_shenfun_dirichlet_and_biharmonic():
     references = shenfun_basis_stencils(n=8)
     cases = (

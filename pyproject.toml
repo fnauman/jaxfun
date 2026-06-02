@@ -43,6 +43,7 @@ testpaths = [
 markers = [
   "slow: long-running tests excluded from local default",
   "integration: solves a complete problem or exercises several subsystems",
+  "live_shenfun: compares against the live shenfun reference subprocess",
   "smoke: small end-to-end test suitable for every PR",
   "spmd: requires multiple JAX devices",
   "pinn: neural-network/PINN tests",

@@ -53,9 +53,9 @@ def test_pcf_zero_state_stays_zero_for_fluctuations() -> None:
 
 
 @pytest.mark.skipif(
-    not jax.config.jax_enable_x64, reason="shenfun parity reference uses float64"
+    not jax.config.jax_enable_x64, reason="recorded golden values use float64"
 )
-def test_pcf_one_step_matches_shenfun_reference_diagnostics() -> None:
+def test_pcf_one_step_matches_recorded_golden_diagnostics() -> None:
     solver = PlaneCouetteFluctuationJax(
         N=(9, 8, 8), family="L", dt=1.0e-3, perturbation_amplitude=0.05
     )
@@ -91,7 +91,6 @@ def test_pcf_imexrk3_one_step_is_finite() -> None:
     assert bool(jnp.isfinite(state.g).all())
     assert float(diag["Epert"]) > 0.0
     assert float(diag["divL2"]) < 1.0e-4
-
 
 
 def test_pcf_solve_with_cadence_matches_direct_solve() -> None:

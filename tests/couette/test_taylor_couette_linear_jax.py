@@ -6,9 +6,9 @@ from examples.taylor_couette_linear_jax import CircularCouette, TaylorCouetteLin
 
 
 @pytest.mark.skipif(
-    not jax.config.jax_enable_x64, reason="shenfun parity reference requires x64"
+    not jax.config.jax_enable_x64, reason="recorded golden spectrum requires x64"
 )
-def test_taylor_couette_linear_matches_shenfun_reference_spectrum():
+def test_taylor_couette_linear_matches_recorded_golden_spectrum():
     solver = TaylorCouetteLinearJax(CircularCouette(), nu=0.002, N=12, family="L")
 
     w, _ = solver.eigs(m=0, kz=3.0, n_return=6)

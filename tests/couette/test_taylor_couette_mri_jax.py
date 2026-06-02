@@ -19,7 +19,7 @@ def test_local_keplerian_mri_optimum():
 
 
 @pytest.mark.skipif(
-    not jax.config.jax_enable_x64, reason="shenfun parity reference requires x64"
+    not jax.config.jax_enable_x64, reason="recorded golden spectra require x64"
 )
 @pytest.mark.parametrize(
     ("magnetic_bc", "expected"),
@@ -52,7 +52,7 @@ def test_local_keplerian_mri_optimum():
         ),
     ],
 )
-def test_taylor_couette_mri_matches_shenfun_reference_spectrum(magnetic_bc, expected):
+def test_taylor_couette_mri_matches_recorded_golden_spectrum(magnetic_bc, expected):
     solver = TaylorCouetteMRIJax(
         _keplerian_base(),
         B0=0.1,
