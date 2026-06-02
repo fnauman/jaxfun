@@ -2,7 +2,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jaxfun.galerkin import Array, Chebyshev, JAXFunction, TensorProduct
+from jaxfun.galerkin import Array, Chebyshev, FunctionSpace, JAXFunction, TensorProduct
+from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.io import (
     Cadence,
     cadence_due,
@@ -64,6 +65,37 @@ def test_uniform_snapshot_from_jaxfunction_and_physical_array(tmp_path):
     text = xdmf.read_text()
     assert "fields.h5:/snapshots/2/fields/u" in text
     assert "u_phys" in text
+
+
+@pytest.mark.integration
+def test_uniform_snapshot_matches_live_shenfun_file_output(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    from tests._parity import shenfun_uniform_snapshot_reference
+
+    path = tmp_path / "jaxfun_fields.h5"
+    F = FunctionSpace(8, Fourier)
+    C = FunctionSpace(6, Chebyshev.Chebyshev, bc=(0, 0))
+    T = TensorProduct(F, C)
+    x0, x1 = T.mesh(kind="uniform", N=(8, 6), broadcast=False)
+    values = jnp.cos(x0[:, None]) * (1.0 - x1[None, :] ** 2)
+
+    write_uniform_snapshot(
+        path,
+        {"u": Array(T, values=values, name="u")},
+        t=0.2,
+        tstep=2,
+        N={"u": (8, 6)},
+    )
+    ref = shenfun_uniform_snapshot_reference(n0=8, n1=6, step=2)
+
+    with h5py.File(path, "r") as h5:
+        got = jnp.asarray(h5["snapshots/2/fields/u"][()])
+        got_x0 = jnp.asarray(h5["snapshots/2/mesh/u/x0"][()])
+        got_x1 = jnp.asarray(h5["snapshots/2/mesh/u/x1"][()])
+
+    assert jnp.allclose(got, jnp.asarray(ref["u"]), rtol=1.0e-12, atol=1.0e-12)
+    assert jnp.allclose(got_x0, jnp.asarray(ref["mesh"]["x0"]), atol=0.0)
+    assert jnp.allclose(got_x1, jnp.asarray(ref["mesh"]["x1"]), atol=0.0)
 
 
 def test_checkpoint_restart_continues_bit_identically(tmp_path):

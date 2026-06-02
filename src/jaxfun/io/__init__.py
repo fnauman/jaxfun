@@ -243,6 +243,23 @@ def read_checkpoint(
         )
 
 
+def _field_space(value: Any, space: Any = None) -> Any:
+    if space is not None:
+        return space
+    if hasattr(value, "functionspace"):
+        return value.functionspace
+    return None
+
+
+def _mesh_uniform_values(space: Any, N: Any = None) -> dict[str, Any] | None:
+    if space is None or not hasattr(space, "mesh"):
+        return None
+    mesh = space.mesh(kind="uniform", N=N)
+    if not isinstance(mesh, tuple):
+        mesh = (mesh,)
+    return {f"x{axis}": jnp.squeeze(coordinate) for axis, coordinate in enumerate(mesh)}
+
+
 def _field_uniform_values(value: Any, space: Any = None, N: Any = None) -> Any:
     if hasattr(value, "functionspace") and hasattr(value, "array"):
         functionspace = value.functionspace
@@ -287,11 +304,16 @@ def write_uniform_snapshot(
             for key, value in attrs.items():
                 step_group.attrs[str(key)] = value
         fields_group = step_group.create_group("fields")
+        mesh_group = step_group.create_group("mesh")
         spaces = {} if spaces is None else spaces
         for name, value in fields.items():
             counts = N.get(name) if isinstance(N, Mapping) else N
+            field_space = _field_space(value, spaces.get(name))
             physical = _field_uniform_values(value, spaces.get(name), counts)
             _write_tree(fields_group, str(name), physical)
+            mesh = _mesh_uniform_values(field_space, counts)
+            if mesh is not None:
+                _write_tree(mesh_group, str(name), mesh)
         root.attrs["latest_step"] = int(tstep)
 
 

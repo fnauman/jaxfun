@@ -68,6 +68,54 @@ def complex_array(rows: Any) -> np.ndarray:
     return arr[:, 0] + 1j * arr[:, 1]
 
 
+def shenfun_uniform_snapshot_reference(
+    *, n0: int = 8, n1: int = 6, step: int = 2
+) -> dict[str, Any]:
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import os
+            import tempfile
+            import h5py
+            import numpy as np
+            from mpi4py import MPI
+            from shenfun import Array, FunctionSpace, ShenfunFile, TensorProductSpace
+
+            K0 = FunctionSpace({n0}, 'F')
+            K1 = FunctionSpace({n1}, 'C', bc=(0, 0))
+            T = TensorProductSpace(MPI.COMM_WORLD, (K0, K1))
+            base = tempfile.NamedTemporaryFile(
+                prefix='shenfun_uniform_snapshot_', suffix='', delete=False
+            ).name
+            os.unlink(base)
+            x0, x1 = [np.squeeze(x) for x in T.mesh(kind='uniform')]
+            values = np.cos(x0.reshape((-1, 1))) * (1.0 - x1.reshape((1, -1))**2)
+            u = Array(T)
+            u[:] = values
+            hfile = ShenfunFile(base, T, backend='hdf5', mode='w', mesh='uniform')
+            hfile.write({step}, {{'u': [u]}}, forward_output=False)
+            close = getattr(hfile, 'close', None)
+            if close is not None:
+                close()
+
+            filename = base + '.h5'
+            with h5py.File(filename, 'r') as h5:
+                out = {{
+                    'u': np.asarray(h5['u/2D/{step}']).tolist(),
+                    'mesh': {{
+                        'x0': np.asarray(h5['u/mesh/x0']).tolist(),
+                        'x1': np.asarray(h5['u/mesh/x1']).tolist(),
+                    }},
+                }}
+            os.remove(filename)
+            T.destroy()
+            print(json.dumps(out))
+            """
+        )
+    )
+
+
 def shenfun_basis_stencils(*, n: int = 8) -> dict[str, dict]:
     """Return live shenfun Dirichlet/Biharmonic basis stencil matrices."""
     return run_shenfun_json(
