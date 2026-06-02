@@ -201,6 +201,44 @@ def tc_linear_operator_parts(
     )
 
 
+def tc_mri_operator_parts(
+    *,
+    magnetic_bc: str,
+    n: int = 8,
+    m: int = 0,
+    kz: float = 2.0,
+    family: str = "L",
+) -> dict[str, Any]:
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            from taylor_couette_linear import CircularCouette
+            from taylor_couette_mri import TaylorCouetteMRI
+            eta = 0.5
+            base = CircularCouette(1.0, 2.0, 1.0, eta**1.5)
+            s = TaylorCouetteMRI(
+                base, B0=0.1, nu=0.001, eta_mag=0.001, N={n},
+                family={family!r}, magnetic_bc={magnetic_bc!r}
+            )
+            L0, Lnu, Leta, M = s.assemble_parts({m}, {kz!r})
+
+            def matrix_rows(arr):
+                return [
+                    [[float(z.real), float(z.imag)] for z in row]
+                    for row in arr
+                ]
+
+            print(json.dumps({{
+                "L0": matrix_rows(L0),
+                "Lnu": matrix_rows(Lnu),
+                "Leta": matrix_rows(Leta),
+                "M": matrix_rows(M),
+            }}))
+            """
+        )
+    )
+
+
 def tc_mri_eigenvalues(*, magnetic_bc: str, n: int = 12) -> np.ndarray:
     rows = run_shenfun_json(
         textwrap.dedent(

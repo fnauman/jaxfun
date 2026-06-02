@@ -30,6 +30,7 @@ from tests._parity import (
     tc_linear_operator_parts,
     tc_mri_eigenvalues,
     tc_mri_nonmodal,
+    tc_mri_operator_parts,
     tc_radial_dealias_product,
 )
 
@@ -449,6 +450,30 @@ def test_tc_linear_matches_live_shenfun_eigenvalues_and_nonmodal():
     for row, ref in zip(rows, ref_rows, strict=True):
         assert row["t"] == pytest.approx(ref["t"], abs=0.0)
         assert row["gain"] == pytest.approx(ref["gain"], rel=1.0e-10, abs=1.0e-10)
+
+
+@pytest.mark.parametrize(
+    ("magnetic_bc", "m"),
+    [("conducting", 1), ("insulating", 0)],
+    ids=["conducting-primitive", "insulating-flux"],
+)
+def test_tc_mri_operator_parts_match_live_shenfun(magnetic_bc, m):
+    solver = TaylorCouetteMRIJax(
+        _keplerian_base(),
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        N=8,
+        family="L",
+        magnetic_bc=magnetic_bc,
+    )
+    got = solver.assemble_parts(m=m, kz=2.0)
+    ref = tc_mri_operator_parts(magnetic_bc=magnetic_bc, n=8, m=m, kz=2.0)
+
+    for name, matrix in zip(("L0", "Lnu", "Leta", "M"), got, strict=True):
+        assert np.allclose(
+            matrix, _nested_complex(ref[name]), rtol=1.0e-10, atol=1.0e-12
+        ), name
 
 
 @pytest.mark.parametrize("magnetic_bc", ["conducting", "insulating"])
