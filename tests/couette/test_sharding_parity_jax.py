@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from examples.taylor_couette_dns_jax import (
@@ -78,14 +79,22 @@ def _seeded_mhd_state(solver):
     return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=False)
 
 
+def _assert_bit_identical(actual, expected, label):
+    actual_np = np.asarray(jax.device_get(actual))
+    expected_np = np.asarray(jax.device_get(expected))
+    assert np.array_equal(actual_np, expected_np), label
+
+
 def _assert_diagnostics_match(replicated, sharded):
     for key, value in replicated.items():
-        assert jnp.allclose(sharded[key], value, rtol=1.0e-12, atol=1.0e-12), key
+        _assert_bit_identical(sharded[key], value, key)
 
 
 def _assert_physical_fields_match(replicated, sharded):
-    for replicated_field, sharded_field in zip(replicated, sharded, strict=True):
-        assert jnp.allclose(sharded_field, replicated_field, rtol=1.0e-12, atol=1.0e-12)
+    for i, (replicated_field, sharded_field) in enumerate(
+        zip(replicated, sharded, strict=True)
+    ):
+        _assert_bit_identical(sharded_field, replicated_field, f"field {i}")
         assert len(sharded_field.devices()) == jax.device_count()
 
 
@@ -99,7 +108,7 @@ def _assert_state_coefficients_match(replicated, sharded):
     for replicated_coeff, sharded_coeff in zip(
         replicated_coeffs, sharded_coeffs, strict=True
     ):
-        assert jnp.allclose(sharded_coeff, replicated_coeff, rtol=1.0e-12, atol=1.0e-12)
+        _assert_bit_identical(sharded_coeff, replicated_coeff, "state coefficient")
         assert len(sharded_coeff.devices()) == jax.device_count()
 
 

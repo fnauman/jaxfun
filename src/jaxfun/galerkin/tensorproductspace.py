@@ -43,6 +43,36 @@ def _has_multiple_devices(value: Array) -> bool:
         return False
 
 
+def _separable_axis_order(dim: int, sharding: NamedSharding) -> tuple[int, ...]:
+    """Return the local transform order used by the SPMD separable path."""
+    spec = sharding.spec
+    sharded = tuple(ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None)
+    unsharded = tuple(ax for ax in range(dim) if ax not in sharded)
+    return unsharded + sharded
+
+
+def _apply_separable_local(c: Array, fns: tuple, sharding: NamedSharding) -> Array:
+    """Apply separable transforms in the same axis order as SPMD execution."""
+    for ax in _separable_axis_order(c.ndim, sharding):
+        c = fns[ax](c)
+    return c
+
+
+def _apply_separable_replicated(
+    c: Array, fns: tuple, sharding: NamedSharding, cache: dict
+) -> Array:
+    """Apply the SPMD kernel to a replicated array when devices are available."""
+    if jax.device_count() > 1 and isinstance(c, jax.Array):
+        try:
+            out = _apply_separable_spmd_shard_map(
+                jax.device_put(c, sharding), fns, sharding, cache
+            )
+            return jax.device_put(out, jax.devices()[0])
+        except (TypeError, ValueError):
+            pass
+    return _apply_separable_local(c, fns, sharding)
+
+
 def K_over_K2(
     K: Sequence[Array], axes: Sequence[int] | None = None
 ) -> tuple[Array, ...]:
@@ -323,9 +353,9 @@ class TensorProductSpace:
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            c = fn(c)
-        return c
+        return _apply_separable_replicated(
+            c, fns, spectral_sharding, self._spmd_local_fn_cache
+        )
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0,), ndim=1)
     def _evaluate_single_device(self, x: Array, c: Array) -> Array:
@@ -455,9 +485,9 @@ class TensorProductSpace:
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            c = fn(c)
-        return c
+        return _apply_separable_replicated(
+            c, fns, spectral_sharding, self._spmd_local_fn_cache
+        )
 
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable).
@@ -483,9 +513,9 @@ class TensorProductSpace:
             return _apply_separable_spmd_shard_map(
                 u, fns, physical_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            u = fn(u)
-        return u
+        return _apply_separable_replicated(
+            u, fns, physical_sharding, self._spmd_local_fn_cache
+        )
 
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation.
@@ -507,9 +537,9 @@ class TensorProductSpace:
             return _apply_separable_spmd_shard_map(
                 u, fns, physical_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            u = fn(u)
-        return u
+        return _apply_separable_replicated(
+            u, fns, physical_sharding, self._spmd_local_fn_cache
+        )
 
     def backward_primitive(
         self,
@@ -550,9 +580,9 @@ class TensorProductSpace:
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            c = fn(c)
-        return c
+        return _apply_separable_replicated(
+            c, fns, spectral_sharding, self._spmd_local_fn_cache
+        )
 
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped to underlying orthogonal basis.

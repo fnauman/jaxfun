@@ -66,16 +66,17 @@ def scan_steps(step: Callable[[T], T], state: T, steps: int) -> T:
     """Advance ``state`` with ``step`` using ``jax.lax.scan``.
 
     This keeps Couette time loops staged as one JAX loop while preserving the
-    solver-specific ``step(state) -> state`` API.  Concrete multi-device states
-    use an eager loop so sharded transform paths can inspect their device layout
-    without tracing through ``jax.lax.scan``.
+    solver-specific ``step(state) -> state`` API.  When multiple JAX devices
+    are visible, concrete states use an eager loop so replicated and sharded
+    rollouts follow the same schedule and sharded transform paths avoid tracing
+    through ``jax.lax.scan``.
     """
     steps = int(steps)
     if steps < 0:
         raise ValueError("steps must be non-negative")
     if steps == 0:
         return state
-    if _has_concrete_multi_device_leaf(state):
+    if jax.device_count() > 1 or _has_concrete_multi_device_leaf(state):
         out = state
         for _ in range(steps):
             out = step(out)

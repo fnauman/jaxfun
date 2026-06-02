@@ -198,6 +198,18 @@ def _axis_integration_weights(space: OrthogonalSpace, N: int | None = None) -> A
     return weights / float(space.domain_factor)
 
 
+def _single_device_reduction_input(values: Array) -> Array:
+    devices = getattr(values, "devices", None)
+    if devices is None:
+        return values
+    try:
+        if len(devices()) > 1:
+            return jax.device_put(values, jax.devices()[0])
+    except (jax.errors.ConcretizationTypeError, TypeError, AttributeError):
+        pass
+    return values
+
+
 def integrate(
     u: Array | tuple[Array, ...] | list[Array], V: FunctionSpaceType
 ) -> Array:
@@ -219,6 +231,7 @@ def integrate(
 
     values = jnp.asarray(u)
     if isinstance(V, OrthogonalSpace):
+        values = _single_device_reduction_input(values)
         weights = V.integration_weights(int(values.shape[0]))
         return jnp.sum(values * weights)
 
@@ -234,6 +247,7 @@ def integrate(
         for axis, space in enumerate(V.basespaces):
             weights = _axis_integration_weights(space, counts[axis])
             weighted = weighted * V.broadcast_to_ndims(weights, axis)
+        weighted = _single_device_reduction_input(weighted)
         return jnp.sum(weighted)
 
     raise TypeError(f"integrate does not support space type {type(V).__name__}")
