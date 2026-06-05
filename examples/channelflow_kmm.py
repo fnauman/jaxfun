@@ -408,9 +408,9 @@ class KMM:
         ) - self.TD.backward_primitive(H[2], (0, 1, 0), N=counts)
         Nu = self.TB.scalar_product(Hu)
         Ng = self.TD.scalar_product(Hg)
-        Nv00 = -(self.M00 @ H[1][:, 0, 0]) + self.dpdy_rhs
-        Nw00 = -(self.M00 @ H[2][:, 0, 0])
-        return Nu, Ng, Nv00, Nw00
+        Nv00 = -(self.M00 @ jnp.real(H[1][:, 0, 0])) + self.dpdy_rhs
+        Nw00 = -(self.M00 @ jnp.real(H[2][:, 0, 0]))
+        return Nu, Ng, jnp.real(Nv00), jnp.real(Nw00)
 
     def _reconstruct_velocity(
         self, u0: Array, g: Array, v00: Array, w00: Array
@@ -419,8 +419,8 @@ class KMM:
         f = self.TD.forward(dudx_phys)
         u1 = 1j * (self.K_over_K2[0] * f + self.K_over_K2[1] * g)
         u2 = 1j * (self.K_over_K2[1] * f - self.K_over_K2[0] * g)
-        u1 = u1.at[:, 0, 0].set(v00)
-        u2 = u2.at[:, 0, 0].set(w00)
+        u1 = u1.at[:, 0, 0].set(jnp.real(v00))
+        u2 = u2.at[:, 0, 0].set(jnp.real(w00))
         return (
             self.TB.mask_nyquist(u0),
             self.TD.mask_nyquist(u1),
@@ -435,8 +435,8 @@ class KMM:
         previous = (
             jnp.zeros_like(state.u[0]),
             jnp.zeros_like(state.g),
-            jnp.zeros_like(state.u[1][:, 0, 0]),
-            jnp.zeros_like(state.u[2][:, 0, 0]),
+            jnp.zeros_like(jnp.real(state.u[1][:, 0, 0])),
+            jnp.zeros_like(jnp.real(state.u[2][:, 0, 0])),
         )
 
         assert isinstance(self.Su, tuple)
@@ -448,11 +448,11 @@ class KMM:
             gamma = (a[rk] + b[rk]) * self.dt / 2.0
             rhs_u = self.Mu @ u_stage[0] + gamma * (self.Lu @ u_stage[0])
             rhs_g = self.Mg @ g_stage + gamma * (self.Lg @ g_stage)
-            rhs_v = self.M00 @ u_stage[1][:, 0, 0] + gamma * (
-                self.L00 @ u_stage[1][:, 0, 0]
+            rhs_v = self.M00 @ jnp.real(u_stage[1][:, 0, 0]) + gamma * (
+                self.L00 @ jnp.real(u_stage[1][:, 0, 0])
             )
-            rhs_w = self.M00 @ u_stage[2][:, 0, 0] + gamma * (
-                self.L00 @ u_stage[2][:, 0, 0]
+            rhs_w = self.M00 @ jnp.real(u_stage[2][:, 0, 0]) + gamma * (
+                self.L00 @ jnp.real(u_stage[2][:, 0, 0])
             )
             rhs_u = rhs_u + self.dt * (a[rk] * current[0] + b[rk] * previous[0])
             rhs_g = rhs_g + self.dt * (a[rk] * current[1] + b[rk] * previous[1])
@@ -460,9 +460,9 @@ class KMM:
             rhs_w = rhs_w + self.dt * (a[rk] * current[3] + b[rk] * previous[3])
 
             u0_new = self.Su[rk].solve(self.TB.mask_nyquist(rhs_u))
-            g_new = self.Sg[rk].solve(self.TD.mask_nyquist(rhs_g))
-            v00_new = self.S00[rk].solve(rhs_v)
-            w00_new = self.S00[rk].solve(rhs_w)
+            g_new = self.TD.mask_nyquist(self.Sg[rk].solve(self.TD.mask_nyquist(rhs_g)))
+            v00_new = jnp.real(self.S00[rk].solve(rhs_v))
+            w00_new = jnp.real(self.S00[rk].solve(rhs_w))
             u_stage = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
             g_stage = g_new
             previous = current
@@ -476,8 +476,8 @@ class KMM:
         steps = self.timestepper.steps()
         u0_initial = state.u[0]
         g_initial = state.g
-        v00_initial = state.u[1][:, 0, 0]
-        w00_initial = state.u[2][:, 0, 0]
+        v00_initial = jnp.real(state.u[1][:, 0, 0])
+        w00_initial = jnp.real(state.u[2][:, 0, 0])
         u0_rhs = self.Mu @ u0_initial
         g0_rhs = self.Mg @ g_initial
         v00_rhs0 = self.M00 @ v00_initial
@@ -498,8 +498,8 @@ class KMM:
                     (
                         self.Lu @ u_stage[0],
                         self.Lg @ g_stage,
-                        self.L00 @ u_stage[1][:, 0, 0],
-                        self.L00 @ u_stage[2][:, 0, 0],
+                        self.L00 @ jnp.real(u_stage[1][:, 0, 0]),
+                        self.L00 @ jnp.real(u_stage[2][:, 0, 0]),
                     )
                 )
 
@@ -507,9 +507,9 @@ class KMM:
                 base_rhs, nonlinear_history, linear_history, a, b, self.dt, rk
             )
             u0_new = self.Su.solve(self.TB.mask_nyquist(rhs_u))
-            g_new = self.Sg.solve(self.TD.mask_nyquist(rhs_g))
-            v00_new = self.S00.solve(rhs_v)
-            w00_new = self.S00.solve(rhs_w)
+            g_new = self.TD.mask_nyquist(self.Sg.solve(self.TD.mask_nyquist(rhs_g)))
+            v00_new = jnp.real(self.S00.solve(rhs_v))
+            w00_new = jnp.real(self.S00.solve(rhs_w))
             u_stage = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
             g_stage = g_new
 

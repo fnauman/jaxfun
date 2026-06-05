@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from examples.channelflow_kmm import KMMState
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from jaxfun.integrators import IMEXRK3
 from jaxfun.io import Cadence
@@ -50,6 +51,25 @@ def test_pcf_zero_state_stays_zero_for_fluctuations() -> None:
 
     assert all(jnp.allclose(component, 0.0, atol=1.0e-7) for component in state.u)
     assert jnp.allclose(state.g, 0.0, atol=1.0e-7)
+
+
+def test_pcf_mean_modes_are_forced_real_after_step() -> None:
+    solver = PlaneCouetteFluctuationJax(
+        N=(9, 4, 4),
+        Re=200.0,
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+    )
+    state0 = solver.initial_state()
+    u = list(state0.u)
+    imaginary_mean = 1.0e-4j * jnp.linspace(1.0, 2.0, u[1].shape[0])
+    u[1] = u[1].at[:, 0, 0].add(imaginary_mean)
+    u[2] = u[2].at[:, 0, 0].add(2.0 * imaginary_mean)
+
+    state1 = solver.step(KMMState(u=tuple(u), g=state0.g))
+
+    assert float(jnp.max(jnp.abs(jnp.imag(state1.u[1][:, 0, 0])))) < 1.0e-12
+    assert float(jnp.max(jnp.abs(jnp.imag(state1.u[2][:, 0, 0])))) < 1.0e-12
 
 
 @pytest.mark.skipif(

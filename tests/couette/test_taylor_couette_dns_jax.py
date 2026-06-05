@@ -77,6 +77,38 @@ def test_tc_dns_3d_zero_state_stays_zero() -> None:
     assert float(solver.continuity_residual_l2(state)) < 1.0e-12
 
 
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="TC eigenmode seed comparison uses x64 eigensolves",
+)
+def test_tc_axisymmetric_and_3d_m0_eigenmode_seed_amplitudes_match() -> None:
+    axisymmetric = AxisymmetricTCDNSJax(
+        CircularCouette(), nu=0.002, Nr=8, Nz=6, dt=1.0e-3, dealias=1.0
+    )
+    full_3d = TaylorCouetteDNSJax(
+        CircularCouette(),
+        nu=0.002,
+        Nr=8,
+        Ntheta=4,
+        Nz=6,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+
+    state_axis, eig_axis = axisymmetric.seed_linear_eigenmode(kz_mode=1, amp=1.0e-5)
+    state_3d, eig_3d = full_3d.seed_linear_eigenmode(m=0, kz_mode=1, amp=1.0e-5)
+
+    assert eig_3d == pytest.approx(eig_axis, rel=1.0e-12, abs=1.0e-12)
+    for axis_component, full_component in zip(
+        axisymmetric.velocity_physical(state_axis),
+        full_3d.velocity_physical(state_3d),
+        strict=True,
+    ):
+        assert jnp.allclose(
+            full_component[0], axis_component, rtol=1.0e-10, atol=1.0e-12
+        )
+
+
 def _deterministic_complex_rhs(dim: int, dtype) -> jnp.ndarray:
     i = jnp.arange(dim, dtype=jnp.float64)
     return (jnp.sin(0.13 * i) + 1j * jnp.cos(0.07 * i)).astype(dtype)
@@ -333,7 +365,6 @@ def test_tc_diagnostics_helpers_match_solver_outputs() -> None:
     assert jnp.allclose(mdiag["Ekin"], ek)
     assert jnp.allclose(mdiag["Emag"], em)
     assert jnp.allclose(mdiag["E"], ek + em)
-
 
 
 def test_tc_solve_with_cadence_matches_direct_solve() -> None:

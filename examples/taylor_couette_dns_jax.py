@@ -174,7 +174,6 @@ class AxisymmetricTCDNSJax:
         self.VQ = CoupledSpace((self.TD, self.TD, self.TD, self.TP), name="VQ")
 
         self.z, self.r = self.TD.system.base_scalars()
-        self.pressure_pin = self.VQ.block_slices[3].start
         self.VQ_mode_indices = self._mode_indices(self.VQ)
         self.VV_mode_indices = self._mode_indices(self.VV)
         self.Z, self.R = self.T0.mesh()
@@ -408,7 +407,7 @@ class AxisymmetricTCDNSJax:
             self.base, nu=self.nu, N=self.Nr, family=self.family
         )
         w, vecs = lin.eigs(m=0, kz=kz, n_return=which + 1)
-        vec = vecs[:, which]
+        vec = _positive_pivot_phase(vecs[:, which])
         n = lin.n
         state = self.zero_state()
         comps = list(state.u)
@@ -420,8 +419,8 @@ class AxisymmetricTCDNSJax:
             if kpos == kneg:
                 arr = arr.at[kpos, :n].set(jnp.real(block))
             else:
-                arr = arr.at[kpos, :n].set(block)
-                arr = arr.at[kneg, :n].set(jnp.conj(block))
+                arr = arr.at[kpos, :n].set(0.5 * block)
+                arr = arr.at[kneg, :n].set(0.5 * jnp.conj(block))
             comps[comp] = arr
         nold = tuple(jnp.zeros_like(ui) for ui in comps)
         return AxisymmetricTCState(tuple(comps), state.p, nold, False), complex(
@@ -454,9 +453,15 @@ class AxisymmetricTCDNSJax:
         n_t = ur * utr + uz * _utz + ur * ut * invr
         n_z = ur * uzr + uz * uzz
         return (
-            self.TD.scalar_product(self._dealias_to_standard(n_r)),
-            self.TD.scalar_product(self._dealias_to_standard(n_t)),
-            self.TD.scalar_product(self._dealias_to_standard(n_z)),
+            self.TD.mask_nyquist(
+                self.TD.scalar_product(self._dealias_to_standard(n_r))
+            ),
+            self.TD.mask_nyquist(
+                self.TD.scalar_product(self._dealias_to_standard(n_t))
+            ),
+            self.TD.mask_nyquist(
+                self.TD.scalar_product(self._dealias_to_standard(n_z))
+            ),
         )
 
     def _apply_lexp(self, u: Velocity) -> Velocity:
@@ -610,7 +615,6 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         self.VQ = CoupledSpace((self.TD, self.TD, self.TD, self.TP), name="VQ3")
 
         self.theta, self.z, self.r = self.TD.system.base_scalars()
-        self.pressure_pin = self.VQ.block_slices[3].start
         self.VQ_mode_indices = self._mode_indices(self.VQ)
         self.VV_mode_indices = self._mode_indices(self.VV)
         self.Theta, self.Z, self.R = self.T0.mesh()
@@ -735,9 +739,15 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         n_t = ur * utr + (ut * invr) * utt + uz * utz + ur * ut * invr
         n_z = ur * uzr + (ut * invr) * uzt + uz * uzz
         return (
-            self.TD.scalar_product(self._dealias_to_standard(n_r)),
-            self.TD.scalar_product(self._dealias_to_standard(n_t)),
-            self.TD.scalar_product(self._dealias_to_standard(n_z)),
+            self.TD.mask_nyquist(
+                self.TD.scalar_product(self._dealias_to_standard(n_r))
+            ),
+            self.TD.mask_nyquist(
+                self.TD.scalar_product(self._dealias_to_standard(n_t))
+            ),
+            self.TD.mask_nyquist(
+                self.TD.scalar_product(self._dealias_to_standard(n_z))
+            ),
         )
 
     def initial_state(
@@ -763,6 +773,8 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         )
         w, vecs = lin.eigs(m=m, kz=kz, n_return=which + 1)
         vec = vecs[:, which]
+        if int(m) == 0:
+            vec = _positive_pivot_phase(vec)
         n = lin.n
         state = self.zero_state()
         comps = list(state.u)
@@ -1104,12 +1116,12 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         )
         nb_z = -self.T0.backward_primitive(et_hat, (0, 1)) - eps_t * self.inv_r
         return (
-            self.TD.scalar_product(nu_r),
-            self.TD.scalar_product(nu_t),
-            self.TD.scalar_product(nu_z),
-            self.TD.scalar_product(nb_r),
-            self.Tbt.scalar_product(nb_t),
-            self.Tbz.scalar_product(nb_z),
+            self.TD.mask_nyquist(self.TD.scalar_product(nu_r)),
+            self.TD.mask_nyquist(self.TD.scalar_product(nu_t)),
+            self.TD.mask_nyquist(self.TD.scalar_product(nu_z)),
+            self.TD.mask_nyquist(self.TD.scalar_product(nb_r)),
+            self.Tbt.mask_nyquist(self.Tbt.scalar_product(nb_t)),
+            self.Tbz.mask_nyquist(self.Tbz.scalar_product(nb_z)),
         )
 
     def _apply_lexp_mhd(self, x: MHDFields) -> MHDFields:
@@ -1159,8 +1171,8 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
             if kpos == kneg:
                 arr = arr.at[kpos, :n].set(jnp.real(block))
             else:
-                arr = arr.at[kpos, :n].set(block)
-                arr = arr.at[kneg, :n].set(jnp.conj(block))
+                arr = arr.at[kpos, :n].set(0.5 * block)
+                arr = arr.at[kneg, :n].set(0.5 * jnp.conj(block))
             comps[comp] = arr
         nold = tuple(jnp.zeros_like(xi) for xi in comps)
         return AxisymmetricMRIState(tuple(comps), state.p, nold, False), complex(
@@ -1496,12 +1508,12 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
         nb_z = -self.T0.backward_primitive(et_hat, (0, 0, 1)) - eps_t * self.inv_r
         nb_z = nb_z + self.inv_r * self.T0.backward_primitive(er_hat, (1, 0, 0))
         return (
-            self.TD.scalar_product(nu_r),
-            self.TD.scalar_product(nu_t),
-            self.TD.scalar_product(nu_z),
-            self.TD.scalar_product(nb_r),
-            self.Tbt.scalar_product(nb_t),
-            self.Tbz.scalar_product(nb_z),
+            self.TD.mask_nyquist(self.TD.scalar_product(nu_r)),
+            self.TD.mask_nyquist(self.TD.scalar_product(nu_t)),
+            self.TD.mask_nyquist(self.TD.scalar_product(nu_z)),
+            self.TD.mask_nyquist(self.TD.scalar_product(nb_r)),
+            self.Tbt.mask_nyquist(self.Tbt.scalar_product(nb_t)),
+            self.Tbz.mask_nyquist(self.Tbz.scalar_product(nb_z)),
         )
 
     def seed_linear_eigenmode(
