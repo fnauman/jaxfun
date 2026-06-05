@@ -35,12 +35,21 @@ from jaxfun.la.solvers import Biharmonic, Helmholtz
 type Velocity = tuple[Array, Array, Array]
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class KMMState:
     """Coefficient-space KMM state."""
 
     u: Velocity
     g: Array
+
+    def tree_flatten(self):
+        return (self.u[0], self.u[1], self.u[2], self.g), None
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        u0, u1, u2, g = children
+        return cls(u=(u0, u1, u2), g=g)
 
 
 class KMM:
