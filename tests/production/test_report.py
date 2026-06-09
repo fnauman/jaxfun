@@ -21,6 +21,10 @@ def test_report_marks_validate_only_runner_metadata_as_skipped(tmp_path):
     assert record["problem_id"] == "tc_supercritical_saturation"
     assert record["outcome"] == "skipped"
     assert record["fallback_rungs"] == [2, 3]
+    assert (
+        record["reason"]
+        == "metadata validation only; solver execution was not requested"
+    )
 
 
 def test_report_marks_completed_channel_oracle_as_passed(tmp_path):

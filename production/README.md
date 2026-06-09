@@ -46,6 +46,6 @@ Current implemented entry points:
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses and compares final numeric diagnostics for CPU/GPU agreement checks.
 - `production/report.py` builds machine-readable summaries from run metadata.
 
-Planned Phase J3/J6 entry points:
+Long-run Phase J5/J6 entry point:
 
 - `production/validate_gpu.sh --full` long-form heavy-run execution mode for saturation specs

@@ -22,7 +22,7 @@ def record_from_metadata(
     solver_wired = bool(execution.get("solver_execution_wired", False))
     if not solver_wired and status in {"validated", "not_started"}:
         outcome = "skipped"
-        reason = "solver execution not wired; metadata validation only"
+        reason = "metadata validation only; solver execution was not requested"
     elif status == "completed":
         outcome = "passed"
         reason = ""
