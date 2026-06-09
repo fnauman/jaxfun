@@ -68,9 +68,11 @@ make -C production validate-all
 make -C production validate-tc_supercritical_saturation
 ```
 
-`validate-all` and direct heavyweight run IDs still use `--validate-only`; the
-heavy saturation solvers are not marked executable until their production runner
-paths are wired.
+`validate-all` and direct production run IDs now execute bounded start-tier
+smoke by default (`--resolution-tier start --steps 2`). Pass `--full` to run the
+checked-in production spec without smoke defaults, or pass `--validate-only` for
+metadata-only validation. `JAXFUN_VALIDATE_RESOLUTION_TIER` and
+`JAXFUN_VALIDATE_HEAVY_STEPS` can change the smoke defaults.
 
 ## Taylor-Couette MHD cheap parity
 
@@ -212,5 +214,5 @@ a long GPU run; omit `--resolution-tier start` or pass
   --validate-only
 ```
 
-Non-`--validate-only` execution currently exits with status 2 for DNS/heavy specs
-that are not yet wired into the production runner.
+Non-`--validate-only` execution now runs wired DNS/heavy specs; unsupported or
+intentionally unwired specs still exit with status 1/2 before solver allocation.

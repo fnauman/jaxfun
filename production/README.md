@@ -37,10 +37,10 @@ Current implemented entry points:
 - `production/compare_goldens.py` validates `schema_version=1` goldens and compares
   tolerance-declared scalars.
 - `production/run_problem.py --validate-only` validates a spec and writes metadata;
-  full solver execution still fails explicitly for unwired DNS/heavy paths.
+  unsupported or intentionally unwired specs still fail explicitly before solver allocation.
 - `make -C production parity-cheap` runs the seven non-pipe cheap golden comparisons and writes `runs/_report/results.json`; pipe hydro goldens are skipped until the axis-regular radial basis lands.
 - `make -C production parity-dns` runs the four committed non-pipe linear-window DNS golden comparisons and writes `runs/_report/results.json`; `parity-dns-pcf` and `parity-dns-tc` run geometry-specific subsets.
-- `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log` with command/status/duration, and writes `runs/_report/results.json`; `all`, `heavy`, and direct heavyweight run IDs remain validate-only.
+- `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log` with command/status/duration, and writes `runs/_report/results.json`; `all`, `heavy`, and direct production run IDs execute bounded start-tier smoke by default (`--resolution-tier start --steps 2`) unless `--full`, `--validate-only`, or explicit run args are supplied.
 - `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths through `production/checkpoint.py`, including spec hash, dtype/shape metadata, device metadata, and diagnostics pointer attrs.
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses and compares final numeric diagnostics for CPU/GPU agreement checks.
@@ -48,4 +48,4 @@ Current implemented entry points:
 
 Planned Phase J3/J6 entry points:
 
-- `production/validate_gpu.sh` full heavy-run execution mode for saturation specs
+- `production/validate_gpu.sh --full` long-form heavy-run execution mode for saturation specs
