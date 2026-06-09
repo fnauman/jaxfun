@@ -46,6 +46,15 @@ from jaxfun.io import Cadence, run_with_cadence
 type MHDFields = tuple[Array, Array, Array, Array, Array, Array]
 
 
+def _dealias_tuple(value: Any, dimensions: int) -> tuple[float, ...]:
+    if isinstance(value, (list, tuple)):
+        out = tuple(float(item) for item in value)
+        if len(out) != dimensions:
+            raise ValueError(f"expected {dimensions} dealias values, got {len(out)}")
+        return out
+    return (float(value),) * dimensions
+
+
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class AxisymmetricPCFState:
@@ -610,7 +619,7 @@ class PCFMRIDNSJax:
         Lz: float = 1.0,
         dt: float = 2.0e-3,
         family: str = "C",
-        dealias: float = 1.0,
+        dealias: float | tuple[float, float, float] = 1.0,
     ) -> None:
         self.S = float(S)
         self.omega = float(omega)
@@ -624,7 +633,7 @@ class PCFMRIDNSJax:
         self.Lz = float(Lz)
         self.dt = float(dt)
         self.family = family.upper()
-        self.dealias = float(dealias)
+        self.dealias = _dealias_tuple(dealias, 3)
 
         family_cls = AxisymmetricPCFMRIDNSJax._family_class(self.family)
         dom = Domain(-1.0, 1.0)
@@ -664,8 +673,8 @@ class PCFMRIDNSJax:
         self.VQ_mode_indices = AxisymmetricPCFMRIDNSJax._mode_indices(self.VQ)
         self.VE_mode_indices = AxisymmetricPCFMRIDNSJax._mode_indices(self.VE)
         self.Y, self.Z, self.X = self.T0.mesh()
-        if self.dealias > 1.0:
-            self.T0p = self.T0.get_dealiased((self.dealias, self.dealias, self.dealias))
+        if any(value > 1.0 for value in self.dealias):
+            self.T0p = self.T0.get_dealiased(self.dealias)
             self.padded_counts = self.T0p.num_quad_points
         else:
             self.T0p = None

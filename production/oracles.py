@@ -112,6 +112,32 @@ def run_supported_spec(
             device_record=device_record,
         )
     if (
+        spec["problem_id"] == "pcf_mhd_divfree"
+        and spec["geometry"] == "pcf"
+        and spec["physics"] == "mhd"
+        and spec["expected_oracle"]["type"] == "gpu_generated_saturated_dns"
+    ):
+        return _run_pcf_primitive_mhd_saturation(
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
+        )
+    if (
+        spec["problem_id"] == "exp_pcf_mri_shearbox_growth"
+        and spec["geometry"] == "pcf"
+        and spec["physics"] == "mri"
+        and spec["expected_oracle"]["type"] == "mri_saturation_ladder"
+    ):
+        return _run_pcf_primitive_mhd_saturation(
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
+        )
+    if (
         spec["geometry"] == "channel"
         and spec["physics"] == "hydro"
         and spec["expected_oracle"]["type"] == "plane_poiseuille_laminar"
@@ -564,6 +590,104 @@ def _run_pcf_fluctuation_saturation(
         "wall_shear_upper": final["wall_shear_upper"],
         "streak_rms": final["streak_rms"],
         "roll_rms": final["roll_rms"],
+    }
+    return {"scalars": scalars, "time_series": [first, last]}
+
+
+def _run_pcf_primitive_mhd_saturation(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
+
+    magnetic_bc = _magnetic_bc(spec)
+    if magnetic_bc != "conducting":
+        raise ProductionOracleNotImplementedError(
+            "PCF primitive-b saturation runner is wired only for conducting walls, "
+            f"got {magnetic_bc!r}"
+        )
+    _assert_pcf_half_gap_domain(spec)
+    resolution = _selected_resolution(spec)
+    groups = spec["nondimensional_groups"]
+    solver = PCFMRIDNSJax(
+        S=float(groups.get("S", 1.0)),
+        omega=float(groups.get("Omega", 0.0)),
+        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
+        nu=float(groups["nu"]),
+        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        Nx=int(resolution.get("Nx", resolution.get("N", 32))),
+        Ny=int(resolution.get("Ny", 8)),
+        Nz=int(resolution.get("Nz", 16)),
+        Ly=float(spec["domain"]["y_period"]),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "L"),
+        dealias=_padding_factor(resolution, dimensions=3),
+    )
+    if spec["physics"] == "mri":
+        state, eigenvalue = _pcf_mri_packet_state(solver, spec)
+    else:
+        state, eigenvalue = _pcf_mhd_perturbation_state(solver, spec)
+
+    initial = _pcf_primitive_3d_scalars(solver, state)
+    n_steps = _steps_from_spec(spec, steps=steps)
+    out = _solve_with_optional_checkpoints(
+        solver,
+        state,
+        n_steps,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        state_kind="pcf_primitive_mhd_saturation",
+        device_record=device_record,
+    )
+    final = _pcf_primitive_3d_scalars(solver, out)
+    growth_rate = _growth_rate_from_energy(
+        initial["total_energy"], final["total_energy"], n_steps, solver.dt
+    )
+    elapsed = n_steps * float(spec["time"]["dt"])
+    magnetic_growth = (
+        final["magnetic_energy"] / initial["magnetic_energy"]
+        if initial["magnetic_energy"] > 0.0
+        else 0.0
+    )
+    scalars = {
+        **final,
+        "growth_rate": float(growth_rate),
+        "growth_rate_linear": float(eigenvalue.real),
+        "magnetic_energy_growth_factor": float(magnetic_growth),
+        "saturation_check_passed": bool(magnetic_growth > 2.0),
+        "magnetic_bc": magnetic_bc,
+    }
+    first = {
+        "t": 0.0,
+        "kinetic_energy": initial["kinetic_energy"],
+        "magnetic_energy": initial["magnetic_energy"],
+        "total_energy": initial["total_energy"],
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_u_l2": initial["divergence_u_l2"],
+        "divergence_b_l2": initial["divergence_b_l2"],
+        "maxwell_stress_xy": initial["maxwell_stress_xy"],
+        "reynolds_stress": initial["reynolds_stress"],
+        "transport_alpha": initial["transport_alpha"],
+        "butterfly_by_mean": initial["butterfly_by_mean"],
+    }
+    last = {
+        "t": elapsed,
+        "kinetic_energy": final["kinetic_energy"],
+        "magnetic_energy": final["magnetic_energy"],
+        "total_energy": final["total_energy"],
+        "growth_rate": float(growth_rate),
+        "divergence_u_l2": final["divergence_u_l2"],
+        "divergence_b_l2": final["divergence_b_l2"],
+        "maxwell_stress_xy": final["maxwell_stress_xy"],
+        "reynolds_stress": final["reynolds_stress"],
+        "transport_alpha": final["transport_alpha"],
+        "butterfly_by_mean": final["butterfly_by_mean"],
     }
     return {"scalars": scalars, "time_series": [first, last]}
 
@@ -1036,6 +1160,90 @@ def _padding_factor(
             raise ValueError(f"expected {dimensions} dealias values, got {len(values)}")
         return values
     return tuple(float(dealias) for _ in range(dimensions))
+
+
+def _assert_pcf_half_gap_domain(spec: dict[str, Any]) -> None:
+    x0, x1 = (float(value) for value in spec["domain"]["x"])
+    if not (
+        math.isclose(x0, -1.0, rel_tol=0.0, abs_tol=1.0e-12)
+        and math.isclose(x1, 1.0, rel_tol=0.0, abs_tol=1.0e-12)
+    ):
+        raise ProductionOracleNotImplementedError(
+            "PCF primitive-b DNS is wired for the shenfun half-gap domain "
+            f"[-1, 1], got [{x0:g}, {x1:g}]"
+        )
+
+
+def _pcf_state_from_components(template: Any, x: tuple[Any, ...]) -> Any:
+    import jax.numpy as jnp
+
+    return type(template)(
+        x=x,
+        p=jnp.zeros_like(template.p),
+        nonlinear_old=tuple(jnp.zeros_like(component) for component in x),
+        have_old=False,
+    )
+
+
+def _pcf_mhd_perturbation_state(
+    solver: Any, spec: dict[str, Any]
+) -> tuple[Any, complex]:
+    initial = spec["initial_condition"]
+    state, eigenvalue = solver.seed_linear_eigenmode(
+        ky_mode=int(initial.get("ky_mode", 1)),
+        kz_mode=int(initial.get("kz_mode", 1)),
+        amp=1.0,
+    )
+    velocity_amplitude = float(initial.get("velocity_amplitude", 0.1))
+    magnetic_amplitude = float(initial.get("magnetic_amplitude", velocity_amplitude))
+    x = tuple(
+        (velocity_amplitude if i < 3 else magnetic_amplitude) * component
+        for i, component in enumerate(state.x)
+    )
+    return _pcf_state_from_components(state, x), eigenvalue
+
+
+def _pcf_mri_packet_state(solver: Any, spec: dict[str, Any]) -> tuple[Any, complex]:
+    initial = spec["initial_condition"]
+    seeded_modes = initial.get("seeded_modes", {})
+    ky_mode = int(seeded_modes.get("ky", 0))
+    kz_modes = seeded_modes.get("kz", [1])
+    if not kz_modes:
+        raise ValueError("mri_eigenmode_packet requires at least one kz mode")
+    amplitude = float(initial.get("amplitude", 1.0e-3)) / math.sqrt(len(kz_modes))
+    states = []
+    eigenvalues = []
+    for kz_mode in kz_modes:
+        state, eigenvalue = solver.seed_linear_eigenmode(
+            ky_mode=ky_mode, kz_mode=int(kz_mode), amp=amplitude
+        )
+        states.append(state)
+        eigenvalues.append(eigenvalue)
+    x = tuple(
+        sum((state.x[i] for state in states[1:]), states[0].x[i])
+        for i in range(len(states[0].x))
+    )
+    eigenvalue = max(eigenvalues, key=lambda value: value.real)
+    return _pcf_state_from_components(states[0], x), eigenvalue
+
+
+def _pcf_primitive_3d_scalars(solver: Any, state: Any) -> dict[str, float]:
+    import jax.numpy as jnp
+
+    diag = solver.diagnostics(state)
+    fields = solver.fields_physical(state)
+    butterfly_by_mean = jnp.mean(jnp.real(fields[4]))
+    return {
+        "kinetic_energy": float(diag["Ekin"]),
+        "magnetic_energy": float(diag["Emag"]),
+        "total_energy": float(diag["E"]),
+        "divergence_u_l2": float(diag["divu"]),
+        "divergence_b_l2": float(diag["divb"]),
+        "maxwell_stress_xy": float(diag["maxwell_stress"]),
+        "reynolds_stress": float(diag["reynolds_stress"]),
+        "transport_alpha": float(diag["transport_alpha"]),
+        "butterfly_by_mean": float(butterfly_by_mean),
+    }
 
 
 def _pcf_fluctuation_scalars(solver: Any, state: Any) -> dict[str, float]:

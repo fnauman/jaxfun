@@ -29,8 +29,10 @@ def test_pcf_primitive_3d_zero_state_stays_zero() -> None:
     assert float(diag["divb"]) < 1.0e-12
 
 
-@pytest.mark.parametrize("dealias", [1.0, 1.5])
-def test_pcf_primitive_3d_seeded_mode_one_step_is_finite(dealias: float) -> None:
+@pytest.mark.parametrize("dealias", [1.0, (1.0, 1.5, 1.5)])
+def test_pcf_primitive_3d_seeded_mode_one_step_is_finite(
+    dealias: float | tuple[float, float, float],
+) -> None:
     solver = PCFMRIDNSJax(
         S=1.0,
         omega=2.0 / 3.0,

@@ -64,12 +64,24 @@ def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):
     assert not out.exists()
 
 
-def test_non_validate_run_fails_explicitly_until_solver_is_wired(tmp_path):
+def test_non_validate_run_fails_explicitly_for_unwired_oracle(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    spec["problem_id"] = "pcf_mhd_unwired_smoke"
+    spec["expected_oracle"] = {
+        **spec["expected_oracle"],
+        "type": "unwired_test_oracle",
+    }
+    spec["golden"] = {**spec["golden"], "artifact_id": spec["problem_id"]}
+    spec_path = tmp_path / "pcf_mhd_unwired_smoke.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
     with pytest.raises(
         SolverExecutionNotImplementedError, match="solver execution is not wired"
     ):
         run_problem(
-            config_path=ROOT / "production" / "runs" / "pcf_mhd_divfree.json",
+            config_path=spec_path,
             out=tmp_path / "run",
             capture_device=False,
         )
@@ -117,6 +129,100 @@ def test_pcf_fluct_re400_smoke_runs_from_phase_j5_spec(tmp_path):
     assert "wall_shear_upper" in final
     assert "streak_rms" in final
     assert "roll_rms" in final
+    assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
+
+
+def test_pcf_mhd_divfree_smoke_runs_from_phase_j5_spec(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    spec["resolution"] = {
+        **spec["resolution"],
+        "start": {"Nx": 8, "Ny": 4, "Nz": 4},
+        "dealias": [1.0, 1.0, 1.0],
+        "family": "C",
+    }
+    spec["time"] = {**spec["time"], "dt": 0.001, "final_time": 0.002}
+    spec_path = tmp_path / "pcf_mhd_divfree_smoke.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "pcf_mhd_divfree"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=2,
+        resolution_tier="start",
+        capture_device=False,
+    )
+
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "dns-saturation",
+    }
+    assert metadata["run_options"]["resolution_tier"] == "start"
+    assert metadata["adapter"]["effective_resolution"]["Nx"] == 8
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    final = rows[-1]
+    assert final["kinetic_energy"] > 0.0
+    assert final["magnetic_energy"] > 0.0
+    assert final["total_energy"] > final["magnetic_energy"]
+    assert final["divergence_u_l2"] < 1.0e-4
+    assert final["divergence_b_l2"] < 1.0e-4
+    assert "maxwell_stress_xy" in final
+    assert "reynolds_stress" in final
+    assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
+
+
+def test_exp_pcf_mri_shearbox_growth_smoke_runs_from_phase_j5_spec(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "exp_pcf_mri_shearbox_growth.json").read_text()
+    )
+    spec["resolution"] = {
+        **spec["resolution"],
+        "start": {"Nx": 8, "Ny": 4, "Nz": 6},
+        "dealias": [1.0, 1.0, 1.0],
+        "family": "L",
+    }
+    spec["initial_condition"] = {
+        **spec["initial_condition"],
+        "seeded_modes": {"ky": 0, "kz": [1, 2]},
+    }
+    spec["time"] = {**spec["time"], "dt": 0.001, "final_time": 0.002}
+    spec_path = tmp_path / "exp_pcf_mri_shearbox_growth_smoke.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "exp_pcf_mri_shearbox_growth"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=2,
+        resolution_tier="start",
+        capture_device=False,
+    )
+
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "dns-saturation",
+    }
+    assert metadata["run_options"]["resolution_tier"] == "start"
+    assert metadata["adapter"]["effective_resolution"]["Nx"] == 8
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    final = rows[-1]
+    assert final["magnetic_energy"] > 0.0
+    assert final["divergence_b_l2"] < 1.0e-6
+    assert "maxwell_stress_xy" in final
+    assert "transport_alpha" in final
+    assert "butterfly_by_mean" in final
     assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
 
 
@@ -543,10 +649,22 @@ def test_cli_validate_only_returns_success(tmp_path):
 
 
 def test_cli_non_validate_returns_not_implemented_status(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    spec["problem_id"] = "pcf_mhd_cli_unwired_smoke"
+    spec["expected_oracle"] = {
+        **spec["expected_oracle"],
+        "type": "unwired_test_oracle",
+    }
+    spec["golden"] = {**spec["golden"], "artifact_id": spec["problem_id"]}
+    spec_path = tmp_path / "pcf_mhd_cli_unwired_smoke.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
     code = main(
         [
             "--config",
-            str(ROOT / "production" / "runs" / "pcf_mhd_divfree.json"),
+            str(spec_path),
             "--out",
             str(tmp_path / "run"),
         ]
