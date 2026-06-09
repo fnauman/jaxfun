@@ -37,10 +37,10 @@ Current implemented entry points:
 - `production/compare_goldens.py` validates `schema_version=1` goldens and compares
   tolerance-declared scalars.
 - `production/run_problem.py --validate-only` validates a spec and writes metadata;
-  full solver execution still fails explicitly until solver factories are wired.
+  full solver execution still fails explicitly for DNS/heavy paths until solver factories are wired.
+- `make -C production parity-cheap` runs the seven non-pipe cheap golden comparisons and writes `runs/_report/results.json`; pipe hydro goldens are skipped until the axis-regular radial basis lands.
+- `production/report.py` builds machine-readable summaries from run metadata.
 
 Planned Phase J3/J6 entry points:
 
-- `production/validate_gpu.sh`
-- `production/report.py`
-- `production/Makefile`
+- `production/validate_gpu.sh` full heavy-run execution mode
