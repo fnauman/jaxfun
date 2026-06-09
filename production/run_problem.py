@@ -18,14 +18,16 @@ from typing import Any
 
 try:
     from .adapters import ProductionConfig, load_config
-    from .compare_goldens import resolve_golden
+    from .compare_goldens import compare_problem, compare_to_golden, load_golden, resolve_golden, scalar_hash
     from .device import capture_device_record
+    from .oracles import ProductionOracleNotImplementedError, run_supported_spec
     from .problem_spec import ProblemSpecError, UnsupportedSpecError
 except ImportError:  # pragma: no cover - direct script mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from production.adapters import ProductionConfig, load_config  # type: ignore
-    from production.compare_goldens import resolve_golden  # type: ignore
+    from production.compare_goldens import compare_problem, compare_to_golden, load_golden, resolve_golden, scalar_hash  # type: ignore
     from production.device import capture_device_record  # type: ignore
+    from production.oracles import ProductionOracleNotImplementedError, run_supported_spec  # type: ignore
     from production.problem_spec import ProblemSpecError, UnsupportedSpecError  # type: ignore
 
 
@@ -71,10 +73,42 @@ def run_problem(
     if validate_only:
         return metadata
 
-    raise SolverExecutionNotImplementedError(
-        f"production solver execution is not wired yet for {config.problem_id}; "
-        "contract validation metadata was written, but no DNS or golden comparison was run"
-    )
+    try:
+        diagnostics = run_supported_spec(config.spec)
+    except ProductionOracleNotImplementedError as exc:
+        raise SolverExecutionNotImplementedError(
+            f"{exc}; contract validation metadata was written, but no DNS or golden comparison was run"
+        ) from exc
+
+    _write_json(out_dir / "spec.json", config.spec)
+    _write_diagnostics(out_dir / "diagnostics.jsonl", diagnostics)
+    metadata["execution"] = {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "analytic-oracle",
+    }
+    metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
+
+    if compare_golden:
+        result = _compare_diagnostics(
+            config,
+            diagnostics,
+            explicit_golden=Path(shenfun_golden) if shenfun_golden is not None else None,
+        )
+        metadata["comparison_passed"] = result.passed
+        metadata["comparisons"] = [item.to_dict() for item in result.comparisons]
+        metadata["observables_compared"] = [item.key for item in result.comparisons]
+        metadata["golden_resolution"].update(result.metadata)
+        if not result.passed:
+            _write_json(out_dir / "metadata.json", metadata)
+            raise RuntimeError(f"golden comparison failed for {config.problem_id}")
+
+    if write_golden:
+        golden_path = _write_golden(out_dir / "golden" / "golden.json", config, diagnostics, device_record)
+        metadata["written_golden"] = str(golden_path)
+
+    _write_json(out_dir / "metadata.json", metadata)
+    return metadata
 
 
 def build_metadata(
@@ -153,7 +187,72 @@ def _golden_resolution_metadata(problem_id: str, explicit_golden: Path | None) -
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_json_ready(data), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_diagnostics(path: Path, diagnostics: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    series = diagnostics.get("time_series") or [{"t": 0.0, **diagnostics["scalars"]}]
+    with path.open("w", encoding="utf-8") as fh:
+        for row in series:
+            fh.write(json.dumps(_json_ready(row), sort_keys=True) + "\n")
+
+
+def _compare_diagnostics(
+    config: ProductionConfig,
+    diagnostics: dict[str, Any],
+    *,
+    explicit_golden: Path | None,
+):
+    convention_metadata = {
+        "canonical_axes": config.canonical_axes,
+        "native_axes": config.native_axes,
+        "axis_conventions": config.axis_conventions,
+        "source_files": list(config.source_files),
+    }
+    if explicit_golden is not None:
+        golden = load_golden(explicit_golden)
+        return compare_to_golden(
+            diagnostics["scalars"],
+            golden,
+            golden_path=explicit_golden,
+            convention_metadata=convention_metadata,
+        )
+    return compare_problem(
+        config.problem_id,
+        diagnostics["scalars"],
+        convention_metadata=convention_metadata,
+    )
+
+
+def _write_golden(
+    path: Path,
+    config: ProductionConfig,
+    diagnostics: dict[str, Any],
+    device_record: dict[str, Any],
+) -> Path:
+    scalars = diagnostics["scalars"]
+    data = {
+        "schema_version": 1,
+        "artifact_id": config.artifact_id,
+        "problem_id": config.problem_id,
+        "spec_hash": config.spec["spec_hash"],
+        "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "environment": {
+            "interpreter": sys.executable,
+            "jax": device_record,
+        },
+        "git": {},
+        "source_anchors": config.spec["expected_oracle"].get("source_anchors", []),
+        "tolerance_model": config.spec["tolerance_model"],
+        "diagnostics": diagnostics,
+        "comparison_fields": {
+            "scalars_sha256": scalar_hash(scalars),
+        },
+    }
+    _write_json(path, data)
+    return path
 
 
 def _json_ready(value: Any) -> Any:

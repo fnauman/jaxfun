@@ -24,6 +24,27 @@ def test_report_marks_validate_only_runner_metadata_as_skipped(tmp_path):
     assert record["fallback_rungs"] == [2, 3]
 
 
+def test_report_marks_completed_channel_oracle_as_passed(tmp_path):
+    out = tmp_path / "runs" / "channel_poiseuille_hydro_v1" / "stamp"
+    run_problem(
+        config_path=ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+    report = build_report([out / "metadata.json"])
+    assert report["summary"] == {"passed": 1, "failed": 0, "skipped": 0}
+    record = report["runs"][0]
+    assert record["problem_id"] == "channel_poiseuille_hydro_v1"
+    assert record["outcome"] == "passed"
+    assert record["observables_compared"] == [
+        "divergence_l2",
+        "flow_rate",
+        "kinetic_energy",
+        "pressure_gradient",
+    ]
+
+
 def test_write_report_outputs_json_and_markdown(tmp_path):
     out = tmp_path / "runs" / "tc_supercritical_saturation" / "stamp"
     run_problem(

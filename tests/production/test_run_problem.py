@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from production.problem_spec import UnsupportedSpecError
+from production.compare_goldens import validate_golden
 from production.run_problem import SolverExecutionNotImplementedError, main, run_problem
 
 
@@ -46,6 +47,41 @@ def test_non_validate_run_fails_explicitly_until_solver_is_wired(tmp_path):
             out=tmp_path / "run",
             capture_device=False,
         )
+
+
+def test_channel_analytic_run_writes_diagnostics_and_compares_golden(tmp_path):
+    out = tmp_path / "channel"
+    metadata = run_problem(
+        config_path=ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+    assert metadata["execution"]["status"] == "completed"
+    assert metadata["execution"]["solver_execution_wired"] is True
+    assert metadata["comparison_passed"] is True
+    assert metadata["observables_compared"] == [
+        "divergence_l2",
+        "flow_rate",
+        "kinetic_energy",
+        "pressure_gradient",
+    ]
+    assert (out / "spec.json").exists()
+    line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
+    assert line["pressure_gradient"] == pytest.approx(-0.002)
+
+
+def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
+    out = tmp_path / "channel"
+    run_problem(
+        config_path=ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json",
+        out=out,
+        write_golden=True,
+        capture_device=False,
+    )
+    golden = validate_golden(out / "golden" / "golden.json")
+    assert golden["schema_version"] == 1
+    assert golden["problem_id"] == "channel_poiseuille_hydro_v1"
 
 
 def test_cli_validate_only_returns_success(tmp_path):
