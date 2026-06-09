@@ -204,6 +204,13 @@ def build_metadata(
 def _execution_kind(spec: dict[str, Any]) -> str:
     oracle_type = spec["expected_oracle"]["type"]
     if oracle_type in {
+        "tc_hydro_saturation_ladder",
+        "tc_mri_saturation_ladder",
+        "mri_saturation_ladder",
+        "gpu_generated_saturated_dns",
+    }:
+        return "dns-saturation"
+    if oracle_type in {
         "circular_couette_dns_growth",
         "tc_mri_dns_growth",
         "pcf_hydro_dns_decay",

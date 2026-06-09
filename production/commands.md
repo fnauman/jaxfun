@@ -165,6 +165,19 @@ readable by `jaxfun.io.read_checkpoint`. Production checkpoint attrs include the
 spec hash, schema versions, dtype/shape metadata, device metadata, and the
 diagnostics path.
 
+## Taylor-Couette saturation smoke
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/runs/tc_supercritical_saturation.json \
+  --out runs/tc_supercritical_saturation/smoke \
+  --steps 2
+```
+
+This executes the Phase J5 Taylor-Couette hydro saturation runner path. Full
+saturation uses the spec final time and production resolution and remains a long
+GPU run.
+
 ## Runner metadata validation
 
 ```bash

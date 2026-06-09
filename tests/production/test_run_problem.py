@@ -47,10 +47,7 @@ def test_non_validate_run_fails_explicitly_until_solver_is_wired(tmp_path):
         SolverExecutionNotImplementedError, match="solver execution is not wired"
     ):
         run_problem(
-            config_path=ROOT
-            / "production"
-            / "runs"
-            / "tc_supercritical_saturation.json",
+            config_path=ROOT / "production" / "runs" / "pcf_fluct_re400.json",
             out=tmp_path / "run",
             capture_device=False,
         )
@@ -177,6 +174,45 @@ def test_tc_hydro_linear_run_writes_diagnostics_and_compares_golden(tmp_path):
     line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
     assert line["growth_rate"] == pytest.approx(0.371383777641364)
     assert line["rayleigh_stable"] is False
+
+
+def test_tc_supercritical_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "tc_supercritical_saturation.json").read_text()
+    )
+    spec["resolution"] = {
+        **spec["resolution"],
+        "production": {"Nr": 10, "Nz": 6},
+        "dealias": 1.0,
+    }
+    spec["time"] = {**spec["time"], "final_time": 0.008}
+    spec_path = tmp_path / "tc_supercritical_smoke.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "tc_supercritical"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=2,
+        capture_device=False,
+    )
+
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "dns-saturation",
+    }
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    final = rows[-1]
+    assert final["kinetic_energy"] > 0.0
+    assert final["radial_velocity_linf"] > 0.0
+    assert final["torque"] > 0.0
+    assert final["divergence_l2"] >= 0.0
+    assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
 
 
 @pytest.mark.parametrize(
@@ -395,7 +431,7 @@ def test_cli_non_validate_returns_not_implemented_status(tmp_path):
     code = main(
         [
             "--config",
-            str(ROOT / "production" / "runs" / "tc_supercritical_saturation.json"),
+            str(ROOT / "production" / "runs" / "pcf_fluct_re400.json"),
             "--out",
             str(tmp_path / "run"),
         ]

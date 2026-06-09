@@ -29,6 +29,18 @@ def run_supported_spec(
     if (
         spec["geometry"] == "taylor_couette"
         and spec["physics"] == "hydro"
+        and spec["expected_oracle"]["type"] == "tc_hydro_saturation_ladder"
+    ):
+        return _run_taylor_couette_hydro_saturation(
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
+        )
+    if (
+        spec["geometry"] == "taylor_couette"
+        and spec["physics"] == "hydro"
         and spec["expected_oracle"]["type"] == "circular_couette_dns_growth"
     ):
         return _run_taylor_couette_hydro_dns(
@@ -214,6 +226,91 @@ def _run_taylor_couette_hydro(spec: dict[str, Any]) -> dict[str, Any]:
         "divergence_l2": 0.0,
     }
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
+
+
+def _run_taylor_couette_hydro_saturation(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
+
+    resolution = _selected_resolution(spec)
+    groups = spec["nondimensional_groups"]
+    base = CircularCouette(
+        float(groups["R1"]),
+        float(groups["R2"]),
+        float(groups["Omega1"]),
+        float(groups["Omega2"]),
+    )
+    solver = AxisymmetricTCDNSJax(
+        base,
+        nu=float(groups["nu"]),
+        Nr=int(resolution.get("Nr", resolution.get("N", 40))),
+        Nz=int(resolution.get("Nz", 16)),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=spec["resolution"].get("family", resolution.get("family", "C")),
+        dealias=float(spec["resolution"].get("dealias", 1.0)),
+    )
+    state, eigenvalue = solver.seed_linear_eigenmode(
+        kz_mode=_kz_mode_from_spec(spec, solver.Lz, strict=False),
+        amp=float(spec["initial_condition"].get("amplitude", 1.0e-4)),
+    )
+    initial = solver.diagnostics(state)
+    n_steps = _steps_from_spec(spec, steps=steps)
+    out = _solve_with_optional_checkpoints(
+        solver,
+        state,
+        n_steps,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        state_kind="axisymmetric_tc_hydro_saturation",
+        device_record=device_record,
+    )
+    final = solver.diagnostics(out)
+    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
+    elapsed = n_steps * float(spec["time"]["dt"])
+    energy_growth = (
+        float(final["E"] / initial["E"]) if float(initial["E"]) > 0.0 else 0.0
+    )
+    radial_velocity_linf = _radial_velocity_linf(solver, out)
+    torque = _tc_inner_torque(solver, out)
+    scalars = {
+        "kinetic_energy": float(final["E"]),
+        "growth_rate": float(growth_rate),
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_l2": float(final["continuity_l2"]),
+        "divergence_linf": float(final["div_linf"]),
+        "torque": float(torque),
+        "radial_velocity_linf": float(radial_velocity_linf),
+        "energy_growth_factor": float(energy_growth),
+        "saturation_check_passed": bool(energy_growth > 1.0e3),
+    }
+    return {
+        "scalars": scalars,
+        "time_series": [
+            {
+                "t": 0.0,
+                "kinetic_energy": float(initial["E"]),
+                "growth_rate_linear": float(eigenvalue.real),
+                "divergence_l2": float(initial["continuity_l2"]),
+                "radial_velocity_linf": _radial_velocity_linf(solver, state),
+            },
+            {
+                "t": elapsed,
+                "kinetic_energy": float(final["E"]),
+                "growth_rate": float(growth_rate),
+                "divergence_l2": float(final["continuity_l2"]),
+                "radial_velocity_linf": float(radial_velocity_linf),
+                "torque": float(torque),
+            },
+        ],
+    }
 
 
 def _run_taylor_couette_hydro_dns(
@@ -718,6 +815,32 @@ def _growth_rate_from_energy(e0: Any, e1: Any, steps: int, dt: float) -> float:
     return 0.5 * math.log(float(e1) / float(e0)) / elapsed
 
 
+def _selected_resolution(spec: dict[str, Any]) -> dict[str, Any]:
+    resolution = spec["resolution"]
+    selected = resolution.get("production", resolution)
+    return {**resolution, **selected}
+
+
+def _radial_velocity_linf(solver: Any, state: Any) -> float:
+    import jax.numpy as jnp
+
+    velocity = solver.velocity_physical(state)
+    return float(jnp.max(jnp.abs(velocity[0])))
+
+
+def _tc_inner_torque(solver: Any, state: Any) -> float:
+    import jax.numpy as jnp
+
+    r_inner = float(solver.base.R1)
+    b = float(solver.base.b)
+    nu = float(solver.nu)
+    dut_dr = solver.TD.backward_primitive(state.u[1], (0, 1))
+    ut = solver.TD.backward(state.u[1])
+    perturbation_shear = jnp.mean(dut_dr[:, 0] - ut[:, 0] / r_inner)
+    base_shear = -2.0 * b / (r_inner**2)
+    return float(2.0 * math.pi * nu * r_inner**2 * abs(base_shear + perturbation_shear))
+
+
 def _steps_from_spec(spec: dict[str, Any], *, steps: int | None = None) -> int:
     if steps is not None:
         if steps < 0:
@@ -733,7 +856,7 @@ def _steps_from_spec(spec: dict[str, Any], *, steps: int | None = None) -> int:
     return n_steps
 
 
-def _kz_mode_from_spec(spec: dict[str, Any], Lz: float) -> int:
+def _kz_mode_from_spec(spec: dict[str, Any], Lz: float, *, strict: bool = True) -> int:
     mode = spec.get("mode", {})
     if int(mode.get("azimuthal_wavenumber", 0)) != 0:
         raise ProductionOracleNotImplementedError(
@@ -744,7 +867,7 @@ def _kz_mode_from_spec(spec: dict[str, Any], Lz: float) -> int:
     if kz_mode < 1:
         raise ValueError("axial_wavenumber does not map to a positive Fourier mode")
     resolved = 2.0 * math.pi * kz_mode / float(Lz)
-    if not math.isclose(resolved, kz, rel_tol=1.0e-12, abs_tol=1.0e-12):
+    if strict and not math.isclose(resolved, kz, rel_tol=1.0e-12, abs_tol=1.0e-12):
         raise ValueError(
             f"axial_wavenumber={kz!r} does not map to an integer Fourier "
             f"mode for Lz={Lz!r}"
