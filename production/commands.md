@@ -47,6 +47,28 @@ This runs the four committed non-pipe linear-window DNS goldens with the
 production runner and a 30-minute timeout per run. Use `parity-dns-pcf` or
 `parity-dns-tc` for the geometry-specific subsets.
 
+## Validation script parity modes
+
+```bash
+make -C production validate-cheap
+make -C production validate-dns
+make -C production validate-dns-pcf
+make -C production validate-dns-tc
+```
+
+These use `production/validate_gpu.sh` to run the same wired golden comparisons
+as the parity make targets and write `runs/_report/results.json`. Each executed
+run is wrapped by `JAXFUN_VALIDATE_TIMEOUT_SECONDS`, defaulting to 1800 seconds.
+
+```bash
+make -C production validate-all
+make -C production validate-tc_supercritical_saturation
+```
+
+`validate-all` and direct heavyweight run IDs still use `--validate-only`; the
+heavy saturation solvers are not marked executable until their production runner
+paths are wired.
+
 ## Taylor-Couette MHD cheap parity
 
 ```bash
