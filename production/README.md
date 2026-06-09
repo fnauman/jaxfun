@@ -36,10 +36,11 @@ Current implemented entry points:
 - `production/device.py` captures backend/device/dtype/golden-policy metadata.
 - `production/compare_goldens.py` validates `schema_version=1` goldens and compares
   tolerance-declared scalars.
+- `production/run_problem.py --validate-only` validates a spec and writes metadata;
+  full solver execution still fails explicitly until solver factories are wired.
 
 Planned Phase J3/J6 entry points:
 
-- `production/run_problem.py`
 - `production/validate_gpu.sh`
 - `production/report.py`
 - `production/Makefile`

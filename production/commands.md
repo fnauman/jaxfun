@@ -27,3 +27,15 @@ parity checks that need it.
 The comparator resolves `production/goldens/<problem_id>/golden/golden.json`
 first. If that vendored root is absent it uses `$SHENFUN_GOLDENS_ROOT`, then the
 sibling shenfun checkout path.
+
+## Runner metadata validation
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/runs/tc_supercritical_saturation.json \
+  --out runs/tc_supercritical_saturation/validate_only \
+  --validate-only
+```
+
+Non-`--validate-only` execution currently exits with status 2 until each solver is
+wired into the production runner.
