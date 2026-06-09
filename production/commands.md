@@ -183,6 +183,26 @@ checked-in spec's `start` resolution for local smoke coverage. Full KMM
 production uses the spec final time and production resolution and remains a
 long GPU run.
 
+## PCF MHD/MRI saturation smoke
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/runs/pcf_mhd_divfree.json \
+  --out runs/pcf_mhd_divfree/smoke \
+  --resolution-tier start \
+  --steps 2
+
+.venv/bin/python production/run_problem.py \
+  --config production/runs/exp_pcf_mri_shearbox_growth.json \
+  --out runs/exp_pcf_mri_shearbox_growth/smoke \
+  --resolution-tier start \
+  --steps 2
+```
+
+These execute the Phase J5 primitive-`b` PCF MHD/MRI runner paths at each
+checked-in spec `start` resolution for local smoke coverage. Full saturation uses
+each spec final time and production resolution and remains a long GPU run.
+
 ## Taylor-Couette saturation smoke
 
 ```bash
