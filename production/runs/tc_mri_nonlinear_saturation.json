@@ -46,6 +46,7 @@
     "z_period": 1.0471975511965976
   },
   "resolution": {
+    "smoke": {"Nr": 10, "Nz": 6, "dealias": 1.0},
     "start": {"Nr": 40, "Nz": 24},
     "production": {"Nr": 64, "Nz": 48},
     "dealias": 1.5,

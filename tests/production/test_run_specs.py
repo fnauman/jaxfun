@@ -3,7 +3,6 @@ from pathlib import Path
 
 from production.problem_spec import load_spec
 
-
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "production" / "runs"
 
@@ -31,9 +30,20 @@ def test_stab_pcf_mri_stability_is_not_an_executable_run_spec():
     assert not (RUNS / "stab_PCF_MRI_stability.json").exists()
 
 
-def test_run_specs_carry_start_and_production_resolution():
+def test_run_specs_carry_smoke_start_and_production_resolution():
     for path in RUNS.glob("*.json"):
         raw = json.loads(path.read_text())
+        assert "smoke" in raw["resolution"]
         assert "start" in raw["resolution"]
         assert "production" in raw["resolution"]
         assert raw["time"]["final_time"] > 0.0
+
+
+def test_run_specs_smoke_resolution_is_smaller_than_start():
+    for path in RUNS.glob("*.json"):
+        raw = json.loads(path.read_text())
+        smoke = raw["resolution"]["smoke"]
+        start = raw["resolution"]["start"]
+        for key, smoke_value in smoke.items():
+            if key in start and isinstance(smoke_value, int):
+                assert smoke_value <= start[key], (path.name, key)

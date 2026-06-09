@@ -371,7 +371,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int)
     parser.add_argument(
         "--resolution-tier",
-        choices=["start", "production"],
+        choices=["smoke", "start", "production"],
         help="Materialize a nested resolution tier before execution.",
     )
     parser.add_argument("--validate-only", action="store_true")

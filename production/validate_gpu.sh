@@ -7,11 +7,13 @@ extra_args=()
 has_steps=0
 has_resolution_tier=0
 has_checkpoint_every=0
+smoke_requested=0
 validate_only_requested=0
 full_run=0
 for arg in "$@"; do
   case "$arg" in
     --smoke)
+      smoke_requested=1
       ;;
     --full)
       full_run=1
@@ -46,6 +48,7 @@ python_bin="${PYTHON:-.venv/bin/python}"
 timeout_seconds="${JAXFUN_VALIDATE_TIMEOUT_SECONDS:-1800}"
 logs_root="${JAXFUN_VALIDATE_LOGS_DIR:-logs}"
 heavy_resolution_tier="${JAXFUN_VALIDATE_RESOLUTION_TIER:-start}"
+smoke_resolution_tier="${JAXFUN_VALIDATE_SMOKE_RESOLUTION_TIER:-smoke}"
 heavy_steps="${JAXFUN_VALIDATE_HEAVY_STEPS:-2}"
 heavy_checkpoint_every="${JAXFUN_VALIDATE_CHECKPOINT_EVERY:-}"
 pipe_skip_reason="pipe hydro is parity_pending until the axis-regular radial basis lands"
@@ -84,7 +87,7 @@ usage: production/validate_gpu.sh [all|heavy|cheap|dns|dns-pcf|dns-tc|problem_id
 
 Modes:
   all, heavy   execute production/runs/*.json as bounded smoke by default
-               (default resolution tier start, default 2 steps)
+               (default resolution tier start, default 2 steps; --smoke uses tier smoke)
   cheap        run the seven non-pipe cheap golden comparisons
   dns          run the four committed linear-window DNS golden comparisons
   dns-pcf      run the PCF primitive linear-window DNS golden comparisons
@@ -95,7 +98,7 @@ Modes:
 Heavy-run options:
   --full         run the checked-in spec without smoke defaults
   --validate-only keep metadata-only validation for production/runs specs
-  --smoke        accepted for compatibility; smoke is the default
+  --smoke        use the lighter checked-in smoke resolution tier
 
 Heavy non-validate runs write a schema v1 golden and checkpoint by default.
 Use --checkpoint-every or JAXFUN_VALIDATE_CHECKPOINT_EVERY to set cadence.
@@ -147,8 +150,14 @@ run_heavy_spec() {
   mkdir -p "$out"
   local heavy_args=()
   if [[ "$validate_only_requested" -eq 0 && "$full_run" -eq 0 ]]; then
-    if [[ "$has_resolution_tier" -eq 0 && -n "$heavy_resolution_tier" ]]; then
-      heavy_args+=(--resolution-tier "$heavy_resolution_tier")
+    if [[ "$has_resolution_tier" -eq 0 ]]; then
+      local resolution_tier="$heavy_resolution_tier"
+      if [[ "$smoke_requested" -eq 1 ]]; then
+        resolution_tier="$smoke_resolution_tier"
+      fi
+      if [[ -n "$resolution_tier" ]]; then
+        heavy_args+=(--resolution-tier "$resolution_tier")
+      fi
     fi
     if [[ "$has_steps" -eq 0 && -n "$heavy_steps" ]]; then
       heavy_args+=(--steps "$heavy_steps")

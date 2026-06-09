@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,6 +50,54 @@ def test_resolution_tier_validate_only_materializes_effective_spec(tmp_path):
     }
     assert metadata["adapter"]["solver_args"]["resolution"]["Nr"] == 40
     assert metadata["base_spec_hash"] != metadata["spec_hash"]
+
+
+def test_smoke_resolution_tier_materializes_lightweight_pcf_spec(tmp_path):
+    out = tmp_path / "run"
+    metadata = run_problem(
+        config_path=ROOT / "production" / "runs" / "pcf_mhd_divfree.json",
+        out=out,
+        resolution_tier="smoke",
+        validate_only=True,
+        capture_device=False,
+    )
+
+    assert metadata["run_options"]["resolution_tier"] == "smoke"
+    assert metadata["adapter"]["resolution_tier"] == "smoke"
+    assert metadata["adapter"]["effective_resolution"] == {
+        "Nx": 8,
+        "Ny": 4,
+        "Nz": 4,
+        "dealias": [1.0, 1.0, 1.0],
+        "family": "C",
+    }
+
+
+def test_cli_accepts_smoke_resolution_tier_for_validate_only(tmp_path):
+    out = tmp_path / "cli-smoke"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "production.run_problem",
+            "--config",
+            str(ROOT / "production" / "runs" / "pcf_mhd_divfree.json"),
+            "--out",
+            str(out),
+            "--resolution-tier",
+            "smoke",
+            "--validate-only",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    metadata = json.loads((out / "metadata.json").read_text())
+    assert metadata["run_options"]["resolution_tier"] == "smoke"
+    assert metadata["adapter"]["effective_resolution"]["Nx"] == 8
 
 
 def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):
