@@ -69,10 +69,55 @@ def test_non_validate_run_fails_explicitly_until_solver_is_wired(tmp_path):
         SolverExecutionNotImplementedError, match="solver execution is not wired"
     ):
         run_problem(
-            config_path=ROOT / "production" / "runs" / "pcf_fluct_re400.json",
+            config_path=ROOT / "production" / "runs" / "pcf_mhd_divfree.json",
             out=tmp_path / "run",
             capture_device=False,
         )
+
+
+def test_pcf_fluct_re400_smoke_runs_from_phase_j5_spec(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_fluct_re400.json").read_text()
+    )
+    spec["resolution"] = {
+        **spec["resolution"],
+        "start": {"Nx": 9, "Ny": 4, "Nz": 4},
+        "dealias": [1.0, 1.0, 1.0],
+    }
+    spec["time"] = {**spec["time"], "dt": 0.001, "final_time": 0.002}
+    spec_path = tmp_path / "pcf_fluct_re400_smoke.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "pcf_fluct_re400"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=2,
+        resolution_tier="start",
+        capture_device=False,
+    )
+
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "dns-saturation",
+    }
+    assert metadata["run_options"]["resolution_tier"] == "start"
+    assert metadata["adapter"]["effective_resolution"]["Nx"] == 9
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    final = rows[-1]
+    assert final["kinetic_energy"] > 0.0
+    assert final["total_kinetic_energy"] > final["kinetic_energy"]
+    assert final["divergence_l2"] < 1.0e-4
+    assert "wall_shear_lower" in final
+    assert "wall_shear_upper" in final
+    assert "streak_rms" in final
+    assert "roll_rms" in final
+    assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
 
 
 def test_channel_analytic_run_writes_diagnostics_and_compares_golden(tmp_path):
@@ -501,7 +546,7 @@ def test_cli_non_validate_returns_not_implemented_status(tmp_path):
     code = main(
         [
             "--config",
-            str(ROOT / "production" / "runs" / "pcf_fluct_re400.json"),
+            str(ROOT / "production" / "runs" / "pcf_mhd_divfree.json"),
             "--out",
             str(tmp_path / "run"),
         ]

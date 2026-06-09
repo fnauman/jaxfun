@@ -165,6 +165,21 @@ readable by `jaxfun.io.read_checkpoint`. Production checkpoint attrs include the
 spec hash, schema versions, dtype/shape metadata, device metadata, and the
 diagnostics path.
 
+## PCF fluctuation smoke
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/runs/pcf_fluct_re400.json \
+  --out runs/pcf_fluct_re400/smoke \
+  --resolution-tier start \
+  --steps 2
+```
+
+This executes the Phase J5 plane-Couette fluctuation runner path at the
+checked-in spec's `start` resolution for local smoke coverage. Full KMM
+production uses the spec final time and production resolution and remains a
+long GPU run.
+
 ## Taylor-Couette saturation smoke
 
 ```bash

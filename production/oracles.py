@@ -99,6 +99,19 @@ def run_supported_spec(
             device_record=device_record,
         )
     if (
+        spec["problem_id"] == "pcf_fluct_re400"
+        and spec["geometry"] == "pcf"
+        and spec["physics"] == "hydro"
+        and spec["expected_oracle"]["type"] == "gpu_generated_saturated_dns"
+    ):
+        return _run_pcf_fluctuation_saturation(
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
+        )
+    if (
         spec["geometry"] == "channel"
         and spec["physics"] == "hydro"
         and spec["expected_oracle"]["type"] == "plane_poiseuille_laminar"
@@ -471,6 +484,87 @@ def _run_pcf_primitive_dns(
         )
         first["magnetic_energy"] = float(initial["Emag"])
         last["magnetic_energy"] = float(final["Emag"])
+    return {"scalars": scalars, "time_series": [first, last]}
+
+
+def _run_pcf_fluctuation_saturation(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
+
+    resolution = _selected_resolution(spec)
+    domain = (
+        tuple(float(value) for value in spec["domain"]["x"]),
+        (0.0, float(spec["domain"]["y_period"])),
+        (0.0, float(spec["domain"]["z_period"])),
+    )
+    groups = spec["nondimensional_groups"]
+    solver = PlaneCouetteFluctuationJax(
+        N=(
+            int(resolution.get("Nx", resolution.get("N", 32))),
+            int(resolution.get("Ny", 64)),
+            int(resolution.get("Nz", 32)),
+        ),
+        domain=domain,
+        Re=float(groups["Re"]),
+        U_wall=float(groups.get("U_wall", 1.0)),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "L"),
+        padding_factor=_padding_factor(resolution, dimensions=3),
+        perturbation_amplitude=float(spec["initial_condition"].get("amplitude", 0.1)),
+    )
+    state = solver.initial_state()
+    initial = _pcf_fluctuation_scalars(solver, state)
+    n_steps = _steps_from_spec(spec, steps=steps)
+    out = _solve_with_optional_checkpoints(
+        solver,
+        state,
+        n_steps,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        state_kind="pcf_fluctuation_saturation",
+        device_record=device_record,
+    )
+    final = _pcf_fluctuation_scalars(solver, out)
+    growth_rate = _growth_rate_from_energy(
+        initial["kinetic_energy"], final["kinetic_energy"], n_steps, solver.dt
+    )
+    elapsed = n_steps * float(spec["time"]["dt"])
+    energy_growth = (
+        final["kinetic_energy"] / initial["kinetic_energy"]
+        if initial["kinetic_energy"] > 0.0
+        else 0.0
+    )
+    scalars = {
+        **final,
+        "growth_rate": float(growth_rate),
+        "energy_growth_factor": float(energy_growth),
+    }
+    first = {
+        "t": 0.0,
+        "kinetic_energy": initial["kinetic_energy"],
+        "total_kinetic_energy": initial["total_kinetic_energy"],
+        "divergence_l2": initial["divergence_l2"],
+        "mean_shear": initial["mean_shear"],
+    }
+    last = {
+        "t": elapsed,
+        "kinetic_energy": final["kinetic_energy"],
+        "total_kinetic_energy": final["total_kinetic_energy"],
+        "divergence_l2": final["divergence_l2"],
+        "mean_shear": final["mean_shear"],
+        "growth_rate": float(growth_rate),
+        "wall_shear_lower": final["wall_shear_lower"],
+        "wall_shear_upper": final["wall_shear_upper"],
+        "streak_rms": final["streak_rms"],
+        "roll_rms": final["roll_rms"],
+    }
     return {"scalars": scalars, "time_series": [first, last]}
 
 
@@ -898,6 +992,8 @@ def _solve_with_optional_checkpoints(
 
 
 def _checkpoint_payload(state: Any) -> dict[str, Any]:
+    if hasattr(state, "u") and hasattr(state, "g"):
+        return {"u": state.u, "g": state.g}
     if hasattr(state, "u"):
         return {
             "u": state.u,
@@ -928,6 +1024,42 @@ def _selected_resolution(spec: dict[str, Any]) -> dict[str, Any]:
         return resolution
     selected = resolution.get("production", resolution)
     return {**resolution, **selected}
+
+
+def _padding_factor(
+    resolution: dict[str, Any], *, dimensions: int
+) -> tuple[float, ...]:
+    dealias = resolution.get("dealias", 1.0)
+    if isinstance(dealias, (list, tuple)):
+        values = tuple(float(value) for value in dealias)
+        if len(values) != dimensions:
+            raise ValueError(f"expected {dimensions} dealias values, got {len(values)}")
+        return values
+    return tuple(float(dealias) for _ in range(dimensions))
+
+
+def _pcf_fluctuation_scalars(solver: Any, state: Any) -> dict[str, float]:
+    import jax.numpy as jnp
+
+    diag = solver.diagnostics(state)
+    up = solver._backward_velocity(state.u)
+    total_dv_dx = solver.TD.backward_primitive(state.u[1], (1, 0, 0)) + solver.dUb_dx
+    streak = jnp.sqrt(jnp.mean(jnp.real(up[1] * jnp.conj(up[1]))))
+    roll = jnp.sqrt(
+        jnp.mean(jnp.real(up[0] * jnp.conj(up[0]) + up[2] * jnp.conj(up[2])))
+    )
+    return {
+        "kinetic_energy": float(diag["Epert"]),
+        "total_kinetic_energy": float(diag["Etot"]),
+        "divergence_l2": float(diag["divL2"]),
+        "wall_shear_lower": float(jnp.mean(jnp.real(total_dv_dx[0, :, :]))),
+        "wall_shear_upper": float(jnp.mean(jnp.real(total_dv_dx[-1, :, :]))),
+        "wall_velocity_lower": float(diag["u_bot"]),
+        "wall_velocity_upper": float(diag["u_top"]),
+        "mean_shear": float(diag["mean_shear"]),
+        "streak_rms": float(streak),
+        "roll_rms": float(roll),
+    }
 
 
 def _radial_velocity_linf(solver: Any, state: Any) -> float:
