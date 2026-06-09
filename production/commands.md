@@ -58,7 +58,9 @@ make -C production validate-dns-tc
 
 These use `production/validate_gpu.sh` to run the same wired golden comparisons
 as the parity make targets and write `runs/_report/results.json`. Each executed
-run is wrapped by `JAXFUN_VALIDATE_TIMEOUT_SECONDS`, defaulting to 1800 seconds.
+run is wrapped by `JAXFUN_VALIDATE_TIMEOUT_SECONDS`, defaulting to 1800 seconds,
+and writes `logs/<problem_id>.log` unless `JAXFUN_VALIDATE_LOGS_DIR` overrides the
+log directory.
 
 ```bash
 make -C production validate-all

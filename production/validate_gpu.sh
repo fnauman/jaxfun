@@ -20,6 +20,7 @@ cd "$repo_root"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 python_bin="${PYTHON:-.venv/bin/python}"
 timeout_seconds="${JAXFUN_VALIDATE_TIMEOUT_SECONDS:-1800}"
+logs_root="${JAXFUN_VALIDATE_LOGS_DIR:-logs}"
 
 cheap_parity_ids=(
   pcf_hydro_laminar_v1
@@ -58,6 +59,31 @@ Modes:
 USAGE
 }
 
+run_with_log() {
+  local id="$1"
+  shift
+  local log="${logs_root}/${id}.log"
+  mkdir -p "$logs_root"
+  {
+    echo "timestamp=${timestamp}"
+    echo "mode=${run_id}"
+    echo "problem_id=${id}"
+    printf 'command:'
+    printf ' %q' "$@"
+    printf '\n'
+  } > "$log"
+
+  set +e
+  "$@" >> "$log" 2>&1
+  local status="$?"
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    echo "validation failed for ${id} with exit ${status}; see ${log}" >&2
+    tail -n 80 "$log" >&2 || true
+    return "$status"
+  fi
+}
+
 run_validate_only() {
   local id="$1"
   local config="production/runs/${id}.json"
@@ -67,11 +93,12 @@ run_validate_only() {
   fi
   local out="runs/${id}/${timestamp}"
   mkdir -p "$out"
-  timeout "${timeout_seconds}s" "$python_bin" production/run_problem.py \
-    --config "$config" \
-    --out "$out" \
-    --device auto \
-    --validate-only "${extra_args[@]}"
+  run_with_log "$id" \
+    timeout "${timeout_seconds}s" "$python_bin" production/run_problem.py \
+      --config "$config" \
+      --out "$out" \
+      --device auto \
+      --validate-only "${extra_args[@]}"
 }
 
 run_compare_golden() {
@@ -83,11 +110,12 @@ run_compare_golden() {
   fi
   local out="runs/${id}/${timestamp}"
   mkdir -p "$out"
-  timeout "${timeout_seconds}s" "$python_bin" production/run_problem.py \
-    --config "$config" \
-    --out "$out" \
-    --device auto \
-    --compare-golden "${extra_args[@]}"
+  run_with_log "$id" \
+    timeout "${timeout_seconds}s" "$python_bin" production/run_problem.py \
+      --config "$config" \
+      --out "$out" \
+      --device auto \
+      --compare-golden "${extra_args[@]}"
 }
 
 case "$run_id" in
