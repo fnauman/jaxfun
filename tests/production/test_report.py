@@ -69,3 +69,27 @@ def test_write_report_outputs_json_and_markdown(tmp_path):
     assert data["summary"]["skipped"] == 1
     markdown = paths["markdown"].read_text()
     assert "wall_time_s" in markdown
+    assert "fallback_rungs" in markdown
+    assert "2, 3" in markdown
+
+
+def test_write_report_markdown_includes_observable_comparisons(tmp_path):
+    out = tmp_path / "runs" / "channel_poiseuille_hydro_v1" / "stamp"
+    run_problem(
+        config_path=ROOT
+        / "production"
+        / "examples"
+        / "channel_poiseuille_hydro_v1.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+
+    paths = write_report([out / "metadata.json"], tmp_path / "_report")
+
+    markdown = paths["markdown"].read_text()
+    assert "observables" in markdown
+    assert "flow_rate" in markdown
+    assert "pressure_gradient" in markdown
+    assert "## Comparison Details" in markdown
+    assert "| flow_rate | True | 1.33299739649 | 1.33299739649 | 1e-10 |  |" in markdown

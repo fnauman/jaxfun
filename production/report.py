@@ -95,28 +95,69 @@ def _markdown_summary(report: dict[str, Any]) -> str:
     lines = [
         "# Production Validation Report",
         "",
-        (
-            f"Passed: {summary['passed']}  Failed: {summary['failed']}  "
-            f"Skipped: {summary['skipped']}"
+        "Passed: {passed}  Failed: {failed}  Skipped: {skipped}".format(
+            passed=summary["passed"],
+            failed=summary["failed"],
+            skipped=summary["skipped"],
         ),
         "",
-        "| problem_id | outcome | mode | backend | wall_time_s | reason |",
-        "|---|---|---|---|---:|---|",
+        (
+            "| problem_id | outcome | mode | backend | wall_time_s | "
+            "fallback_rungs | observables | reason |"
+        ),
+        "|---|---|---|---|---:|---|---|---|",
     ]
     for record in report["runs"]:
         lines.append(
             (
                 "| {problem_id} | {outcome} | {mode} | {backend} | "
-                "{wall_time} | {reason} |"
+                "{wall_time} | {fallback_rungs} | {observables} | {reason} |"
             ).format(
-                problem_id=record.get("problem_id"),
-                outcome=record.get("outcome"),
-                mode=record.get("mode"),
-                backend=record.get("backend"),
+                problem_id=_markdown_cell(record.get("problem_id")),
+                outcome=_markdown_cell(record.get("outcome")),
+                mode=_markdown_cell(record.get("mode")),
+                backend=_markdown_cell(record.get("backend")),
                 wall_time=_format_wall_time(record.get("solver_wall_time_seconds")),
-                reason=record.get("reason", ""),
+                fallback_rungs=_markdown_cell(
+                    _join_values(record.get("fallback_rungs", []))
+                ),
+                observables=_markdown_cell(
+                    _join_values(record.get("observables_compared", []))
+                ),
+                reason=_markdown_cell(record.get("reason", "")),
             )
         )
+    comparison_records = [
+        record for record in report["runs"] if record.get("comparisons")
+    ]
+    if comparison_records:
+        lines.extend(["", "## Comparison Details", ""])
+        for record in comparison_records:
+            lines.extend(
+                [
+                    "### {problem_id}".format(
+                        problem_id=_markdown_text(record.get("problem_id"))
+                    ),
+                    "",
+                    "| observable | passed | expected | actual | tolerance | message |",
+                    "|---|---|---:|---:|---:|---|",
+                ]
+            )
+            for item in record.get("comparisons", []):
+                lines.append(
+                    (
+                        "| {key} | {passed} | {expected} | {actual} | "
+                        "{tolerance} | {message} |"
+                    ).format(
+                        key=_markdown_cell(item.get("key")),
+                        passed=_markdown_cell(item.get("passed")),
+                        expected=_markdown_cell(_format_scalar(item.get("expected"))),
+                        actual=_markdown_cell(_format_scalar(item.get("actual"))),
+                        tolerance=_markdown_cell(_format_scalar(item.get("tolerance"))),
+                        message=_markdown_cell(item.get("message", "")),
+                    )
+                )
+            lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -124,6 +165,34 @@ def _format_wall_time(value: Any) -> str:
     if value is None:
         return ""
     return f"{float(value):.3f}"
+
+
+def _join_values(values: Any) -> str:
+    if values is None:
+        return ""
+    if isinstance(values, (list, tuple)):
+        return ", ".join(str(value) for value in values)
+    return str(values)
+
+
+def _format_scalar(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.12g}"
+    return str(value)
+
+
+def _markdown_cell(value: Any) -> str:
+    return _markdown_text(value).replace("\n", " ").replace("|", "\\|")
+
+
+def _markdown_text(value: Any) -> str:
+    return "" if value is None else str(value)
 
 
 def main(argv: list[str] | None = None) -> int:
