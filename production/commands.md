@@ -12,9 +12,10 @@
 .venv/bin/python -m production.device --write production/run_env.json
 ```
 
-Local development runs use `JAXFUN_PRODUCTION_DTYPE=float32` by default through
-the production device metadata. x64 remains enabled after `import jaxfun` for
-parity checks that need it.
+Local production runner processes use `JAXFUN_PRODUCTION_DTYPE=float32` by
+default and set `JAXFUN_ENABLE_X64=0`/`JAX_ENABLE_X64=0` before importing JAX.
+Normal `import jaxfun` still defaults to x64 unless those env vars override it,
+so parity checks that need x64 keep their default behavior.
 
 ## Golden comparison
 
