@@ -8,11 +8,11 @@ goldens so parity checks do not import or require a live shenfun process.
 
 | problem_id | geometry | physics | solver file | status | fallback rung |
 |---|---|---|---|---|---|
-| `pcf_fluct_re400` | pcf | hydro | `examples/pcf_fluctuations_jax.py` | production runner wired; bounded start-tier smoke tested; full KMM run pending | rung 3 |
-| `pcf_mhd_divfree` | pcf | mhd | `examples/pcf_mri_primitive_jax.py` | production runner wired; bounded start-tier smoke tested; full saturation execution pending | rung 3 |
-| `exp_pcf_mri_shearbox_growth` | pcf | mri | `examples/pcf_mri_primitive_jax.py` | production runner wired; bounded start-tier smoke tested; full saturation execution pending | rung 1/2/3 |
-| `tc_supercritical_saturation` | taylor_couette | hydro | `examples/taylor_couette_dns_jax.py` | production runner wired; bounded start-tier smoke tested; full saturation execution pending | rung 2/3 |
-| `tc_mri_nonlinear_saturation` | taylor_couette | mri | `examples/taylor_couette_dns_jax.py` | production runner wired; bounded start-tier smoke tested; full saturation execution pending | rung 1/2/3 |
+| `pcf_fluct_re400` | pcf | hydro | `examples/pcf_fluctuations_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full KMM run pending | rung 3 |
+| `pcf_mhd_divfree` | pcf | mhd | `examples/pcf_mri_primitive_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full saturation execution pending | rung 3 |
+| `exp_pcf_mri_shearbox_growth` | pcf | mri | `examples/pcf_mri_primitive_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full saturation execution pending | rung 1/2/3 |
+| `tc_supercritical_saturation` | taylor_couette | hydro | `examples/taylor_couette_dns_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full saturation execution pending | rung 2/3 |
+| `tc_mri_nonlinear_saturation` | taylor_couette | mri | `examples/taylor_couette_dns_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full saturation execution pending | rung 1/2/3 |
 | `stab_PCF_MRI_stability` | pcf | mri | `examples/pcf_mhd_mri_shearpy_jax.py` | config-undetermined placeholder | not executable |
 
 ## Support matrix
@@ -40,12 +40,23 @@ Current implemented entry points:
   unsupported or intentionally unwired specs still fail explicitly before solver allocation.
 - `make -C production parity-cheap` runs the seven non-pipe cheap golden comparisons and writes `runs/_report/results.json`; pipe hydro goldens are skipped until the axis-regular radial basis lands.
 - `make -C production parity-dns` runs the four committed non-pipe linear-window DNS golden comparisons and writes `runs/_report/results.json`; `parity-dns-pcf` and `parity-dns-tc` run geometry-specific subsets.
-- `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log` with command/status/duration, and writes `runs/_report/results.json`; strict parity subprocesses default to `JAXFUN_VALIDATE_PARITY_DTYPE=float64` for the committed `1e-10` goldens. `all`, `heavy`, and direct production run IDs execute bounded start-tier float32 smoke by default (`--resolution-tier start --steps 2`) unless `--full`, `--validate-only`, `--smoke`, or explicit run args are supplied; `--smoke` selects the lighter checked-in `smoke` resolution tier. Non-validate heavy runs also write `golden/golden.json` and `checkpoints/checkpoints.h5` by default.
+- `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log` with command/status/duration, and writes `runs/_report/results.json`; strict parity subprocesses default to `JAXFUN_VALIDATE_PARITY_DTYPE=float64` for the committed `1e-10` goldens. `all`, `heavy`, and direct production run IDs execute bounded start-tier float32 smoke by default (`--resolution-tier start --steps 2`) unless `--full`, `--validate-only`, `--smoke`, or explicit run args are supplied; `--smoke` selects the lighter checked-in `smoke` resolution tier. Non-validate heavy runs also write `golden/golden.json` and `checkpoints/checkpoints.h5` by default, but reduced/step-limited saturation artifacts are labeled `bounded_saturation_smoke`, not full production saturation goldens.
 - `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths through `production/checkpoint.py`, including spec hash, dtype/shape metadata, device metadata, and diagnostics pointer attrs.
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses and compares final numeric diagnostics for CPU/GPU agreement checks.
-- `production/report.py` builds machine-readable summaries from run metadata.
+- `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, and fallback rung fields.
+
+## Validation scopes
+
+`run_problem.py` writes `metadata.json.validation_scope`, and `report.py` carries the same field into `runs/_report/results.{json,md}`:
+
+- `golden_comparison`: diagnostics were compared against a resolved committed shenfun golden.
+- `cpu_smoke_fallback_oracle`: CPU smoke for a saturation run with rung-1 or rung-2 fallback checks available.
+- `cpu_smoke_finiteness_divergence_only`: CPU smoke for rung-3-only saturation specs such as `pcf_fluct_re400` and `pcf_mhd_divfree`; this proves solver completion, finite diagnostics, and emitted divergence diagnostics, not production parity.
+- `bounded_saturation_smoke`: GPU or CPU saturation execution with `--steps`, `--resolution-tier start`, or `--resolution-tier smoke`; generated golden/checkpoint files are smoke artifacts, not full production saturation goldens.
+- `generated_saturated_golden`: full saturation execution without bounded smoke overrides.
+- `oracle_execution`: analytic, linear, or DNS oracle execution without a committed-golden comparison.
 
 Long-run Phase J5/J6 entry point:
 
-- `production/validate_gpu.sh --full` long-form heavy-run execution mode for saturation specs
+- `production/validate_gpu.sh --full` long-form heavy-run execution mode for saturation specs.

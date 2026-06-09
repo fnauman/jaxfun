@@ -1,0 +1,15 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_validation_scope_docs_cover_bounded_smoke_outputs():
+    readme = (ROOT / "production" / "README.md").read_text()
+    commands = (ROOT / "production" / "commands.md").read_text()
+
+    assert "## Validation scopes" in readme
+    assert "bounded_saturation_smoke" in readme
+    assert "cpu_smoke_finiteness_divergence_only" in readme
+    assert "generated_saturated_golden" in readme
+    assert "not full production saturation goldens" in commands
+    assert "validation_scope=bounded_saturation_smoke" in commands

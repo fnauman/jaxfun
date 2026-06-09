@@ -75,9 +75,11 @@ make -C production validate-tc_supercritical_saturation
 smoke by default (`--resolution-tier start --steps 2`). Pass `--smoke` to use
 the lighter checked-in `smoke` resolution tier for local CPU/consumer-GPU
 development. Non-validate heavy runs also write `golden/golden.json` and
-`checkpoints/checkpoints.h5` by default. Pass `--full` to run the checked-in
-production spec without smoke defaults, or pass `--validate-only` for
-metadata-only validation. `JAXFUN_VALIDATE_RESOLUTION_TIER`,
+`checkpoints/checkpoints.h5` by default. Reduced or step-limited saturation
+runs are reported as `validation_scope=bounded_saturation_smoke`; their generated
+artifacts are smoke diagnostics, not full production saturation goldens. Pass
+`--full` to run the checked-in production spec without smoke defaults, or pass
+`--validate-only` for metadata-only validation. `JAXFUN_VALIDATE_RESOLUTION_TIER`,
 `JAXFUN_VALIDATE_SMOKE_RESOLUTION_TIER`, `JAXFUN_VALIDATE_HEAVY_STEPS`, and
 `JAXFUN_VALIDATE_CHECKPOINT_EVERY` can change the smoke defaults.
 
@@ -186,9 +188,9 @@ diagnostics path.
 ```
 
 This executes the Phase J5 plane-Couette fluctuation runner path at the
-checked-in spec's `start` resolution for local smoke coverage. Full KMM
-production uses the spec final time and production resolution and remains a
-long GPU run.
+checked-in spec's `start` resolution for local smoke coverage and records
+`validation_scope=bounded_saturation_smoke`. Full KMM production uses the spec
+final time and production resolution and remains a long GPU run.
 
 ## PCF MHD/MRI saturation smoke
 
@@ -207,8 +209,9 @@ long GPU run.
 ```
 
 These execute the Phase J5 primitive-`b` PCF MHD/MRI runner paths at each
-checked-in spec `start` resolution for local smoke coverage. Full saturation uses
-each spec final time and production resolution and remains a long GPU run.
+checked-in spec `start` resolution for local smoke coverage and record
+`validation_scope=bounded_saturation_smoke`. Full saturation uses each spec final
+time and production resolution and remains a long GPU run.
 
 ## Taylor-Couette saturation smoke
 
@@ -227,10 +230,10 @@ each spec final time and production resolution and remains a long GPU run.
 ```
 
 These execute the Phase J5 Taylor-Couette hydro and MHD/MRI saturation runner
-paths at each checked-in spec's `start` resolution for local smoke coverage.
-Full saturation uses each spec final time and production resolution and remains
-a long GPU run; omit `--resolution-tier start` or pass
-`--resolution-tier production` for that path.
+paths at each checked-in spec's `start` resolution for local smoke coverage and
+record `validation_scope=bounded_saturation_smoke`. Full saturation uses each
+spec final time and production resolution and remains a long GPU run; omit
+`--resolution-tier start` or pass `--resolution-tier production` for that path.
 
 ## Runner metadata validation
 
