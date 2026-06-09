@@ -1,0 +1,90 @@
+{
+  "family": "shenfun",
+  "problem_id": "pcf_fluct_re400",
+  "geometry": "pcf",
+  "physics": "hydro",
+  "support_state": "experimental",
+  "formulation": {
+    "internal": "KMM velocity-vorticity plane-Couette fluctuation DNS about U_wall*x e_y",
+    "pressure": "pressure recovered from Poisson diagnostics"
+  },
+  "evolved_variables": ["u", "g"],
+  "diagnostic_variables": ["u_x", "u_y", "u_z", "p"],
+  "canonical_axes": {
+    "x": "wall-normal direction",
+    "y": "streamwise direction",
+    "z": "spanwise direction"
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "Re": 400.0,
+    "U_wall": 1.0,
+    "nu": 0.0025
+  },
+  "boundary_conditions": {
+    "velocity": {
+      "type": "no_slip_moving_walls",
+      "lower_wall_u_y": -1.0,
+      "upper_wall_u_y": 1.0
+    }
+  },
+  "domain": {
+    "x": [-1.0, 1.0],
+    "y_period": 12.566370614359172,
+    "z_period": 6.283185307179586
+  },
+  "resolution": {
+    "start": {"Nx": 32, "Ny": 64, "Nz": 32},
+    "production": {"Nx": 64, "Ny": 128, "Nz": 64},
+    "dealias": [1.0, 1.5, 1.5],
+    "family": "L"
+  },
+  "time": {
+    "integrator": "IMEXRK222",
+    "dt": 0.01,
+    "final_time": 50.0
+  },
+  "initial_condition": {
+    "type": "finite_amplitude_fluctuation",
+    "amplitude": 0.1
+  },
+  "forcing": {
+    "type": "moving_wall_shear",
+    "dpdy": 0.0
+  },
+  "diagnostics": [
+    "kinetic_energy",
+    "wall_shear_lower",
+    "wall_shear_upper",
+    "mean_shear",
+    "growth_rate",
+    "divergence_l2",
+    "rms_profiles",
+    "energy_spectra",
+    "ssp_streak_roll"
+  ],
+  "expected_oracle": {
+    "type": "gpu_generated_saturated_dns",
+    "source": "PLAN_jaxfun_production_ready.md Phase J5 inventory; no committed saturated golden exists",
+    "plan_inventory_id": "pcf_fluct_Re400",
+    "fallback_rungs": [3],
+    "notes": "pcf_hydro_laminar_v1 is a decaying linear golden and does not bound turbulent SSP growth"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "growth_rate": 0.002,
+      "kinetic_energy": 0.000001
+    }
+  },
+  "golden": {
+    "artifact_id": "pcf_fluct_re400",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/pcf_fluct_re400.json --out runs/pcf_fluct_re400/<timestamp> --device auto --write-golden"
+  },
+  "unsupported_subcases": []
+}

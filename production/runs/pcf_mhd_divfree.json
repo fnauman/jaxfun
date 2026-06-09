@@ -1,0 +1,92 @@
+{
+  "family": "shenfun",
+  "problem_id": "pcf_mhd_divfree",
+  "geometry": "pcf",
+  "physics": "mhd",
+  "support_state": "experimental",
+  "formulation": {
+    "internal": "primitive-b PCF MHD DNS target; supersedes the old vector-potential DNS path",
+    "pressure": "primitive velocity pressure with direct magnetic components"
+  },
+  "evolved_variables": ["u_x", "u_y", "u_z", "p", "b_x", "b_y", "b_z"],
+  "diagnostic_variables": ["kinetic_energy", "magnetic_energy", "divergence_u", "divergence_b"],
+  "canonical_axes": {
+    "x": "wall-normal direction",
+    "y": "streamwise direction",
+    "z": "spanwise direction"
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "Re": 400.0,
+    "Rm": 400.0,
+    "Pm": 1.0,
+    "nu": 0.0025,
+    "eta_mag": 0.0025,
+    "B0": 0.05
+  },
+  "boundary_conditions": {
+    "velocity": {"type": "no_slip_moving_walls"},
+    "magnetic": {
+      "type": "conducting",
+      "details": "primitive-b target: b_x=0, d_x b_y=d_x b_z=0"
+    }
+  },
+  "domain": {
+    "x": [-1.0, 1.0],
+    "y_period": 12.566370614359172,
+    "z_period": 6.283185307179586
+  },
+  "resolution": {
+    "start": {"Nx": 32, "Ny": 64, "Nz": 32},
+    "production": {"Nx": 64, "Ny": 128, "Nz": 64},
+    "dealias": [1.0, 1.5, 1.5],
+    "family": "L"
+  },
+  "time": {
+    "integrator": "IMEXRK222",
+    "dt": 0.01,
+    "final_time": 10.0
+  },
+  "initial_condition": {
+    "type": "finite_amplitude_velocity_and_magnetic_perturbation",
+    "velocity_amplitude": 0.1,
+    "magnetic_amplitude": 0.05
+  },
+  "forcing": {
+    "type": "moving_wall_shear_plus_imposed_field",
+    "B0": 0.05
+  },
+  "diagnostics": [
+    "kinetic_energy",
+    "magnetic_energy",
+    "total_energy",
+    "maxwell_stress_xy",
+    "divergence_u_l2",
+    "divergence_b_l2",
+    "growth_rate"
+  ],
+  "expected_oracle": {
+    "type": "gpu_generated_saturated_dns",
+    "source": "PLAN_jaxfun_production_ready.md Phase J5 inventory; no committed PCF plain-MHD DNS golden exists",
+    "fallback_rungs": [3],
+    "notes": "Ohmic/Alfven checks are linear sanity floors only; pcf_mhd_conducting_v1 does not bound the nonlinear state"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_u_l2": 1e-10,
+      "divergence_b_l2": 1e-10,
+      "growth_rate": 0.002,
+      "magnetic_energy": 0.000001
+    }
+  },
+  "golden": {
+    "artifact_id": "pcf_mhd_divfree",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/pcf_mhd_divfree.json --out runs/pcf_mhd_divfree/<timestamp> --device auto --write-golden"
+  },
+  "unsupported_subcases": []
+}

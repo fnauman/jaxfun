@@ -55,6 +55,8 @@ def production_run_env(requested: str = "auto") -> dict[str, Any]:
     from .compare_goldens import resolve_golden, vendored_golden_root
 
     device = capture_device_record(requested)
+    run_specs_dir = Path(__file__).resolve().parent / "runs"
+    run_specs = sorted(path.stem for path in run_specs_dir.glob("*.json")) if run_specs_dir.exists() else []
     try:
         resolution = resolve_golden("pcf_hydro_laminar_v1")
         golden_policy = resolution.policy
@@ -73,6 +75,7 @@ def production_run_env(requested: str = "auto") -> dict[str, Any]:
             ".venv/bin/python -m pytest -q tests/production",
         ],
         "known_gated_tests": ["live_shenfun", "spmd", "gpu", "slow", "integration"],
+        "production_run_specs": run_specs,
         "output_locations": {
             "runs": "runs/<problem_id>/<timestamp>",
             "checkpoints": "runs/<problem_id>/<timestamp>/checkpoints",

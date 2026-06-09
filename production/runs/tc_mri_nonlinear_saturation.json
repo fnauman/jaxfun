@@ -1,0 +1,99 @@
+{
+  "family": "shenfun",
+  "problem_id": "tc_mri_nonlinear_saturation",
+  "geometry": "taylor_couette",
+  "physics": "mhd",
+  "support_state": "experimental",
+  "formulation": {
+    "internal": "axisymmetric primitive resistive-MHD Taylor-Couette CNAB2 DNS with imposed axial field",
+    "pressure": "total pressure Pi = p + B0 b_z"
+  },
+  "evolved_variables": ["u_r", "u_theta", "u_z", "Pi", "b_r", "b_theta", "b_z"],
+  "diagnostic_variables": ["kinetic_energy", "magnetic_energy", "maxwell_stress_xy", "divergence_b_l2"],
+  "canonical_axes": {
+    "x": "radial direction",
+    "y": "azimuthal direction",
+    "z": "axial direction"
+  },
+  "native_axes": {
+    "axis_0": "r radial",
+    "axis_1": "theta azimuthal",
+    "axis_2": "z axial"
+  },
+  "nondimensional_groups": {
+    "Re": 1000.0,
+    "Rm": 1000.0,
+    "Pm": 1.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "radius_ratio": 0.5,
+    "Omega1": 1.0,
+    "Omega2": 0.3535533905932738,
+    "B0": 0.1,
+    "nu": 0.001,
+    "eta_mag": 0.001
+  },
+  "boundary_conditions": {
+    "velocity": {"type": "no_slip_rotating_cylinders"},
+    "magnetic": {
+      "type": "conducting",
+      "details": "b_r=0, d(r b_theta)/dr=0, d b_z/dr=0"
+    }
+  },
+  "domain": {
+    "r": [1.0, 2.0],
+    "theta_period": 6.283185307179586,
+    "z_period": 1.0471975511965976
+  },
+  "resolution": {
+    "start": {"Nr": 40, "Nz": 24},
+    "production": {"Nr": 64, "Nz": 48},
+    "dealias": 1.5,
+    "family": "C"
+  },
+  "time": {
+    "integrator": "CNAB2",
+    "dt": 0.002,
+    "final_time": 32.0
+  },
+  "mode": {
+    "azimuthal_wavenumber": 0,
+    "axial_wavenumber": 6.0
+  },
+  "initial_condition": {
+    "type": "linear_eigenmode",
+    "amplitude": 0.0001,
+    "seeded_kz_mode": 1
+  },
+  "forcing": {
+    "type": "rotating_cylinders_imposed_axial_field",
+    "B0": 0.1
+  },
+  "diagnostics": [
+    "magnetic_energy",
+    "growth_rate",
+    "maxwell_stress_xy",
+    "divergence_b_l2",
+    "kinetic_energy"
+  ],
+  "expected_oracle": {
+    "type": "tc_mri_saturation_ladder",
+    "source": "local WKB MRI, taylor_couette_mhd_conducting_v1, taylor_couette_mhd_dns_v1, then GPU-generated saturated DNS golden",
+    "fallback_rungs": [1, 2, 3],
+    "saturation_check": "E_mag[-1] > 2*E_mag[0] and monotone-then-plateau; do not apply fixed linear growth factor at saturation"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 0.0001,
+      "growth_rate": 0.002,
+      "magnetic_energy": 0.000001,
+      "maxwell_stress_xy": 0.000001
+    }
+  },
+  "golden": {
+    "artifact_id": "tc_mri_nonlinear_saturation",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/tc_mri_nonlinear_saturation.json --out runs/tc_mri_nonlinear_saturation/<timestamp> --device auto --write-golden"
+  },
+  "unsupported_subcases": []
+}
