@@ -126,6 +126,21 @@ paths are wired.
   --compare-golden
 ```
 
+## CPU/GPU scalar comparison
+
+```bash
+.venv/bin/python -m production.compare_devices \
+  --config production/examples/channel_poiseuille_hydro_v1.json \
+  --out runs/device_compare_channel \
+  --device-a cpu \
+  --device-b auto \
+  --timeout-seconds 1800
+```
+
+This launches separate runner subprocesses for each device so JAX backend
+selection is process-local, then compares the final numeric diagnostics and writes
+`device_comparison.json`. Use `--device-b gpu` to require CUDA explicitly.
+
 ## Autograd objective smoke
 
 ```bash
