@@ -3,12 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from production.problem_spec import UnsupportedSpecError, load_spec, spec_hash, validate_spec
-
+from production.problem_spec import (
+    UnsupportedSpecError,
+    load_spec,
+    spec_hash,
+    validate_spec,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = ROOT / "production" / "examples"
 GOLDENS = ROOT / "production" / "goldens"
+PROMOTIONS = ROOT / "production" / "promotions"
 
 
 NON_PIPE_ACCEPTED = [
@@ -35,13 +40,29 @@ def test_non_pipe_specs_validate_and_match_vendored_golden_hash(problem_id):
 
 
 def test_pipe_hydro_rejected_until_axis_regular_basis_lands():
-    with pytest.raises(UnsupportedSpecError, match="pipe hydro is parity_pending.*axis-regularity.*pipe_hagen_poiseuille_v1.*pipe_womersley_v1"):
+    with pytest.raises(
+        UnsupportedSpecError,
+        match=(
+            "pipe hydro is parity_pending.*axis-regularity.*"
+            "pipe_hagen_poiseuille_v1.*pipe_womersley_v1"
+        ),
+    ):
         load_spec(EXAMPLES / "pipe_hagen_poiseuille_v1.json")
+
+    record = (PROMOTIONS / "pipe_hydro_axis_regular_basis.md").read_text()
+    assert "axis-regular radial basis" in record
+    assert "singular weighted-Galerkin penalties" in record
+    assert "pipe_hagen_poiseuille_v1" in record
+    assert "pipe_womersley_v1" in record
 
 
 def test_pipe_hash_can_still_be_computed_for_vendored_golden_validation():
-    spec = load_spec(EXAMPLES / "pipe_hagen_poiseuille_v1.json", allow_unimplemented=True)
-    golden = json.loads((GOLDENS / "pipe_hagen_poiseuille_v1" / "golden" / "golden.json").read_text())
+    spec = load_spec(
+        EXAMPLES / "pipe_hagen_poiseuille_v1.json", allow_unimplemented=True
+    )
+    golden = json.loads(
+        (GOLDENS / "pipe_hagen_poiseuille_v1" / "golden" / "golden.json").read_text()
+    )
     assert spec["spec_hash"] == golden["spec_hash"]
 
 
@@ -52,7 +73,11 @@ def test_pipe_mhd_rejection_matches_shenfun_contract():
 
 def test_tc_insulating_m1_rejection_names_axisymmetric_requirement():
     with pytest.raises(UnsupportedSpecError, match="axisymmetric m=0"):
-        load_spec(EXAMPLES / "unsupported" / "taylor_couette_mhd_insulating_m1_unsupported_v1.json")
+        load_spec(
+            EXAMPLES
+            / "unsupported"
+            / "taylor_couette_mhd_insulating_m1_unsupported_v1.json"
+        )
 
 
 def test_pm_equals_rm_over_re_invariant_is_enforced():
