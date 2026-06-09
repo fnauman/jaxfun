@@ -1,0 +1,9 @@
+{
+  "artifact_id": "pcf_hydro_primitive_dns_v1",
+  "geometry": "pcf",
+  "physics": "hydro",
+  "problem_id": "pcf_hydro_primitive_dns_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "496a991492e7a1166c51d6dfdd1b1769e71b494fa7a3d0985ec954f78cdfeeeb",
+  "support_state": "production"
+}

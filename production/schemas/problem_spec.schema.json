@@ -1,0 +1,177 @@
+{
+  "$id": "https://fn-shenfun.local/demo/production/problem_spec.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "boundary_conditions": {
+      "required": [
+        "velocity"
+      ],
+      "type": "object"
+    },
+    "canonical_axes": {
+      "properties": {
+        "x": {
+          "type": "string"
+        },
+        "y": {
+          "type": "string"
+        },
+        "z": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "type": "object"
+    },
+    "diagnostic_variables": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "domain": {
+      "type": "object"
+    },
+    "evolved_variables": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "expected_oracle": {
+      "required": [
+        "type",
+        "source"
+      ],
+      "type": "object"
+    },
+    "family": {
+      "const": "shenfun"
+    },
+    "forcing": {
+      "type": "object"
+    },
+    "formulation": {
+      "type": "object"
+    },
+    "geometry": {
+      "enum": [
+        "pcf",
+        "channel",
+        "taylor_couette",
+        "pipe"
+      ]
+    },
+    "golden": {
+      "required": [
+        "artifact_id",
+        "regeneration_command"
+      ],
+      "type": "object"
+    },
+    "initial_condition": {
+      "type": "object"
+    },
+    "native_axes": {
+      "properties": {
+        "axis_0": {
+          "type": "string"
+        },
+        "axis_1": {
+          "type": "string"
+        },
+        "axis_2": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "axis_0",
+        "axis_1",
+        "axis_2"
+      ],
+      "type": "object"
+    },
+    "nondimensional_groups": {
+      "type": "object"
+    },
+    "physics": {
+      "enum": [
+        "hydro",
+        "mhd",
+        "mri"
+      ]
+    },
+    "problem_id": {
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$",
+      "type": "string"
+    },
+    "resolution": {
+      "type": "object"
+    },
+    "support_state": {
+      "enum": [
+        "production",
+        "experimental",
+        "unsupported"
+      ]
+    },
+    "time": {
+      "required": [
+        "integrator",
+        "dt",
+        "final_time"
+      ],
+      "type": "object"
+    },
+    "tolerance_model": {
+      "required": [
+        "kind",
+        "scalars"
+      ],
+      "type": "object"
+    },
+    "unsupported_subcases": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "family",
+    "problem_id",
+    "geometry",
+    "physics",
+    "support_state",
+    "formulation",
+    "evolved_variables",
+    "diagnostic_variables",
+    "canonical_axes",
+    "native_axes",
+    "nondimensional_groups",
+    "boundary_conditions",
+    "domain",
+    "resolution",
+    "time",
+    "initial_condition",
+    "forcing",
+    "diagnostics",
+    "expected_oracle",
+    "tolerance_model",
+    "golden",
+    "unsupported_subcases"
+  ],
+  "title": "shenfun production problem spec",
+  "type": "object"
+}

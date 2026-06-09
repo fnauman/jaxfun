@@ -1,0 +1,9 @@
+{
+  "artifact_id": "taylor_couette_mhd_conducting_v1",
+  "geometry": "taylor_couette",
+  "physics": "mhd",
+  "problem_id": "taylor_couette_mhd_conducting_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "781a00329c253325a6493cc65347b0c3ea9caf14ddf73aecf261a1e48883b711",
+  "support_state": "production"
+}

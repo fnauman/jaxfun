@@ -1,0 +1,58 @@
+{
+  "artifact_id": "taylor_couette_hydro_v1",
+  "comparison_fields": {
+    "scalars_sha256": "8781c89ab571d0309c5fb9f07d0978a972604c259a49cb89afa62705b905449f"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_l2": 0.0,
+      "eigenvalue_imag": 2.773705684522106e-17,
+      "eigenvalue_real": 0.371383777641364,
+      "growth_rate": 0.371383777641364,
+      "kinetic_energy": 0.9923087622739892,
+      "rayleigh_stable": false
+    },
+    "time_series": [
+      {
+        "energy_factor": 1.0,
+        "t": 0.0
+      },
+      {
+        "energy_factor": 1.007455329159826,
+        "t": 0.01
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-07T00:00:00+00:00",
+  "git": {
+    "branch": "main",
+    "commit": "1507c20ffc1b798bf92bf119876fba097df57e93",
+    "worktree_status_short": []
+  },
+  "problem_id": "taylor_couette_hydro_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:392",
+    "demo/test_taylor_couette.py:1"
+  ],
+  "spec_hash": "64b62254a7685b7b8cf75f80d32df3f905dc1f318c895f7bd73db60fe0b34e79",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "growth_rate": 1e-10,
+      "kinetic_energy": 1e-10
+    }
+  }
+}

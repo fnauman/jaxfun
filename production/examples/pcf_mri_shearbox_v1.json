@@ -1,0 +1,116 @@
+{
+  "boundary_conditions": {
+    "magnetic": {
+      "dns_convention": "A=0 at walls",
+      "type": "conducting"
+    },
+    "velocity": {
+      "base_flow": "U_y=-S*x",
+      "type": "no_slip_shearbox_walls"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "growth_rate",
+    "magnetic_energy",
+    "q_shear",
+    "divergence_b"
+  ],
+  "diagnostics": [
+    "growth_rate",
+    "local_mri_growth",
+    "q_shear",
+    "divergence_b_l2"
+  ],
+  "domain": {
+    "x": [
+      -2.0,
+      2.0
+    ],
+    "y_period": 4.0,
+    "z_period": 1.0
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p",
+    "b_x",
+    "b_y",
+    "b_z",
+    "phi"
+  ],
+  "expected_oracle": {
+    "source": "Balbus-Hawley analytic optimum + pcf_mhd_mri_shearpy.py",
+    "source_anchors": [
+      "solver_survey.md:187",
+      "demo/test_pcf_mhd_mri_shearpy.py:1"
+    ],
+    "type": "local_ideal_mri"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "type": "rotation_shear_imposed_field"
+  },
+  "formulation": {
+    "internal": "primitive linear shearbox MHD; DNS path uses vector potential induction",
+    "pressure": "velocity and magnetic-pressure constraints"
+  },
+  "geometry": "pcf",
+  "golden": {
+    "artifact_id": "pcf_mri_shearbox_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/pcf_mri_shearbox_v1.json --out demo/production/goldens/pcf_mri_shearbox_v1 --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 0.001,
+    "type": "axisymmetric_channel_mode"
+  },
+  "mode": {
+    "spanwise_wavenumber": 1.0,
+    "streamwise_wavenumber": 0.0
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "By": 0.0,
+    "Bz": 0.025,
+    "Omega": 0.6666666666666666,
+    "Pm": 1.0,
+    "Re": 1000.0,
+    "Rm": 1000.0,
+    "S": 1.0
+  },
+  "physics": "mri",
+  "problem_id": "pcf_mri_shearbox_v1",
+  "random_seed": null,
+  "resolution": {
+    "family": "L",
+    "nx": 32,
+    "ny": 8,
+    "nz": 16
+  },
+  "support_state": "production",
+  "time": {
+    "dt": 0.001,
+    "final_time": 0.01,
+    "integrator": "IMEXRK222"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b_l2": 1e-08,
+      "growth_rate": 1e-08,
+      "local_mri_growth": 1e-08
+    }
+  },
+  "unsupported_subcases": [
+    "DNS growth-rate matching beyond smoke is tracked as a hardening item"
+  ]
+}

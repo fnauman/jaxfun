@@ -1,0 +1,111 @@
+{
+  "boundary_conditions": {
+    "magnetic": null,
+    "velocity": {
+      "lower": {
+        "u_y": -1.0
+      },
+      "type": "no_slip_moving_walls",
+      "upper": {
+        "u_y": 1.0
+      }
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "growth_rate",
+    "wall_shear",
+    "divergence_u"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "growth_rate",
+    "wall_shear_lower",
+    "wall_shear_upper",
+    "divergence_l2"
+  ],
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 4.0,
+    "z_period": 4.0
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p"
+  ],
+  "expected_oracle": {
+    "source": "analytic + demo/_pcf_linear.py",
+    "source_anchors": [
+      "solver_survey.md:94",
+      "demo/_pcf_linear.py:1"
+    ],
+    "type": "plane_couette_laminar"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "type": "none"
+  },
+  "formulation": {
+    "internal": "primitive variables / dense linear collocation",
+    "notes": "Laminar profile is analytic; linear eigenvalue comes from _pcf_linear.PlaneCouetteLinear.",
+    "pressure": "Lagrange multiplier pressure"
+  },
+  "geometry": "pcf",
+  "golden": {
+    "artifact_id": "pcf_hydro_laminar_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/pcf_hydro_laminar_v1.json --out demo/production/goldens/pcf_hydro_laminar_v1 --write-golden"
+  },
+  "initial_condition": {
+    "formula": "u_y=x",
+    "type": "laminar_profile"
+  },
+  "mode": {
+    "spanwise_wavenumber": 1.0,
+    "streamwise_wavenumber": 0.0
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "Re": 1000.0,
+    "U_wall": 1.0
+  },
+  "physics": "hydro",
+  "problem_id": "pcf_hydro_laminar_v1",
+  "random_seed": null,
+  "resolution": {
+    "family": "C",
+    "nx": 64,
+    "ny": 8,
+    "nz": 8
+  },
+  "support_state": "production",
+  "time": {
+    "dt": 0.001,
+    "final_time": 0.01,
+    "integrator": "linear_eigenproblem"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "growth_rate": 1e-10,
+      "kinetic_energy": 1e-10
+    }
+  },
+  "unsupported_subcases": [
+    "nonlinear production DNS promotion remains a separate solver-level hardening item"
+  ]
+}

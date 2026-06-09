@@ -1,0 +1,21 @@
+{
+  "diagnostic_scalars": {
+    "divergence_b_l2": 0.0,
+    "divergence_u_l2": 0.0,
+    "eigenvalue_imag": -8.185144173842378e-17,
+    "eigenvalue_real": 0.03942186027206309,
+    "growth_rate": 0.03942186027206309,
+    "kinetic_energy": 0.009710293182545411,
+    "local_mri_growth": 0.04314039305398187,
+    "local_mri_smax_over_omega": 0.7499999944199642,
+    "magnetic_bc": "conducting",
+    "magnetic_energy": 0.49028970681745465,
+    "maxwell_stress_xy": 0.04120488742512107,
+    "q_shear": 1.5,
+    "total_energy": 0.5000000000000001
+  },
+  "problem_id": "pcf_mri_shearbox_v1",
+  "schema_version": 1,
+  "spec_hash": "507eae14c5177c46b3e5bb99254dbdd83037fa85c51bd8812aaab86af1dd7fa3",
+  "time": 0.01
+}

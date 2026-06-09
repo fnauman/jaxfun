@@ -1,0 +1,12 @@
+{
+  "diagnostic_scalars": {
+    "divergence_l2": 0.0,
+    "flow_rate": 1.5707963267948966,
+    "flow_rate_exact": 1.5707963267948966,
+    "kinetic_energy": 3.2898681336964515
+  },
+  "problem_id": "pipe_hagen_poiseuille_v1",
+  "schema_version": 1,
+  "spec_hash": "da647a8f5742dbc0646bbeaab2b94c768e4a0b3a65fcb2cd2c5f5de3e37c8a1c",
+  "time": 0.01
+}

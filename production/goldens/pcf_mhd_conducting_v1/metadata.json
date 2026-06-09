@@ -1,0 +1,9 @@
+{
+  "artifact_id": "pcf_mhd_conducting_v1",
+  "geometry": "pcf",
+  "physics": "mhd",
+  "problem_id": "pcf_mhd_conducting_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "e1f306bc6e4cda68b08219b01f878219208b140ff12190b89500ea9702c1049f",
+  "support_state": "production"
+}

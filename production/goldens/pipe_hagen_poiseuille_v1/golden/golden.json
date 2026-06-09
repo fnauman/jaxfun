@@ -1,0 +1,61 @@
+{
+  "artifact_id": "pipe_hagen_poiseuille_v1",
+  "comparison_fields": {
+    "scalars_sha256": "a7790b0b39b8420da5a01b652616801ed6b3565f28e10aa6102308ffefc613b0"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_l2": 0.0,
+      "flow_rate": 1.5707963267948966,
+      "flow_rate_exact": 1.5707963267948966,
+      "kinetic_energy": 3.2898681336964515
+    },
+    "time_series": [
+      {
+        "divergence_l2": 0.0,
+        "flow_rate": 1.5707963267948968,
+        "kinetic_energy": 3.2898681336964533,
+        "t": 0.0
+      },
+      {
+        "divergence_l2": 0.0,
+        "flow_rate": 1.5707963267948966,
+        "kinetic_energy": 3.2898681336964515,
+        "t": 0.010000000000000002
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-08T00:00:00+00:00",
+  "git": {
+    "branch": "shenfun-production-dns",
+    "commit": "a91e2812ebc07c161774067c2270f168bc55def9",
+    "worktree_status_short": []
+  },
+  "problem_id": "pipe_hagen_poiseuille_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:482",
+    "demo/test_pipe_flow_dns.py:1"
+  ],
+  "spec_hash": "da647a8f5742dbc0646bbeaab2b94c768e4a0b3a65fcb2cd2c5f5de3e37c8a1c",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "flow_rate": 1e-10,
+      "flow_rate_exact": 1e-10,
+      "kinetic_energy": 1e-10
+    }
+  }
+}

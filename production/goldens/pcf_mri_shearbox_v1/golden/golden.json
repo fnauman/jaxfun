@@ -1,0 +1,65 @@
+{
+  "artifact_id": "pcf_mri_shearbox_v1",
+  "comparison_fields": {
+    "scalars_sha256": "288dfc877cde4bc65924de8bddb6ffc97053538da68f29ecb45246ec1fe76938"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_b_l2": 0.0,
+      "divergence_u_l2": 0.0,
+      "eigenvalue_imag": -8.185144173842378e-17,
+      "eigenvalue_real": 0.03942186027206309,
+      "growth_rate": 0.03942186027206309,
+      "kinetic_energy": 0.009710293182545411,
+      "local_mri_growth": 0.04314039305398187,
+      "local_mri_smax_over_omega": 0.7499999944199642,
+      "magnetic_bc": "conducting",
+      "magnetic_energy": 0.49028970681745465,
+      "maxwell_stress_xy": 0.04120488742512107,
+      "q_shear": 1.5,
+      "total_energy": 0.5000000000000001
+    },
+    "time_series": [
+      {
+        "energy_factor": 1.0,
+        "t": 0.0
+      },
+      {
+        "energy_factor": 1.0007887481037574,
+        "t": 0.01
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-07T00:00:00+00:00",
+  "git": {
+    "branch": "main",
+    "commit": "1507c20ffc1b798bf92bf119876fba097df57e93",
+    "worktree_status_short": []
+  },
+  "problem_id": "pcf_mri_shearbox_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:187",
+    "demo/test_pcf_mhd_mri_shearpy.py:1"
+  ],
+  "spec_hash": "507eae14c5177c46b3e5bb99254dbdd83037fa85c51bd8812aaab86af1dd7fa3",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b_l2": 1e-08,
+      "growth_rate": 1e-08,
+      "local_mri_growth": 1e-08
+    }
+  }
+}

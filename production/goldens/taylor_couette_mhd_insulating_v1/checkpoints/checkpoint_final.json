@@ -1,0 +1,16 @@
+{
+  "diagnostic_scalars": {
+    "divergence_b_l2": 0.0,
+    "eigenvalue_imag": -4.775588289047524e-17,
+    "eigenvalue_real": 0.25995071622317967,
+    "growth_rate": 0.25995071622317967,
+    "kinetic_energy": 0.39229831895219663,
+    "magnetic_bc": "insulating",
+    "magnetic_energy": 0.6077016810478038,
+    "total_energy": 1.0000000000000004
+  },
+  "problem_id": "taylor_couette_mhd_insulating_v1",
+  "schema_version": 1,
+  "spec_hash": "154c8940ace0ef9a6a28bf53e195f3479cdcd04fb921c977723409ef9b4026fb",
+  "time": 0.01
+}

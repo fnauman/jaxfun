@@ -1,0 +1,105 @@
+{
+  "boundary_conditions": {
+    "magnetic": null,
+    "velocity": {
+      "axis": "regular at r=0",
+      "type": "no_slip_wall_axis_regular",
+      "wall": "u=0 at r=R"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "flow_rate",
+    "forcing_phase",
+    "divergence_u"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "flow_rate",
+    "forcing_phase",
+    "divergence_l2"
+  ],
+  "domain": {
+    "r": [
+      0.0,
+      1.0
+    ],
+    "theta_period": 6.283185307179586,
+    "z_period": 6.283185307179586
+  },
+  "evolved_variables": [
+    "u_r",
+    "u_theta",
+    "u_z",
+    "p"
+  ],
+  "expected_oracle": {
+    "source": "nonlinear DNS demo/pipe_flow_dns.py (PipeFlowDNS, CNAB2); Womersley Bessel cross-check",
+    "source_anchors": [
+      "solver_survey.md:482",
+      "demo/test_pipe_flow_dns.py:8"
+    ],
+    "type": "pipe_womersley"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "amplitude": 1.0,
+    "omega": 9.0,
+    "type": "oscillatory_axial_body_force"
+  },
+  "formulation": {
+    "internal": "primitive variables cylindrical DNS / Womersley analytic oracle",
+    "pressure": "time-dependent axial body force"
+  },
+  "geometry": "pipe",
+  "golden": {
+    "artifact_id": "pipe_womersley_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/pipe_womersley_v1.json --out demo/production/goldens/pipe_womersley_v1 --write-golden"
+  },
+  "initial_condition": {
+    "type": "womersley_exact_profile"
+  },
+  "native_axes": {
+    "axis_0": "r radial",
+    "axis_1": "theta azimuthal",
+    "axis_2": "z axial"
+  },
+  "nondimensional_groups": {
+    "R": 1.0,
+    "Re": 1.0,
+    "alpha": 3.0,
+    "nu": 1.0,
+    "omega": 9.0
+  },
+  "physics": "hydro",
+  "problem_id": "pipe_womersley_v1",
+  "random_seed": null,
+  "resolution": {
+    "Nr": 32,
+    "Ntheta": 4,
+    "Nz": 4,
+    "family": "C"
+  },
+  "spec_hash": "e633d0a97893a3b6b8984c73b4be701b674e10f6c031192273b2c9af8b9e009f",
+  "support_state": "production",
+  "time": {
+    "dt": 0.001,
+    "final_time": 0.01,
+    "integrator": "CNAB2"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-08,
+      "flow_rate": 1e-08,
+      "forcing_phase": 1e-08,
+      "kinetic_energy": 1e-08
+    }
+  },
+  "unsupported_subcases": []
+}

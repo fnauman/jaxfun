@@ -1,0 +1,9 @@
+{
+  "artifact_id": "taylor_couette_hydro_dns_v1",
+  "geometry": "taylor_couette",
+  "physics": "hydro",
+  "problem_id": "taylor_couette_hydro_dns_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "d7de2715251046b3671f2d695782872b62ba230ae60cc6bf711840e20fc30d46",
+  "support_state": "production"
+}

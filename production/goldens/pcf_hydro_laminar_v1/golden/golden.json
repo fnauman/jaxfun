@@ -1,0 +1,59 @@
+{
+  "artifact_id": "pcf_hydro_laminar_v1",
+  "comparison_fields": {
+    "scalars_sha256": "b046563b826f413b787ee57b3079827e285a04000cc3ae8ee1a8d1267ac283a3"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_l2": 0.0,
+      "eigenvalue_imag": 0.0,
+      "eigenvalue_real": -0.0034674010999505545,
+      "growth_rate": -0.0034674010999505545,
+      "kinetic_energy": 0.33350130175527004,
+      "wall_shear_lower": 1.0,
+      "wall_shear_upper": 1.0
+    },
+    "time_series": [
+      {
+        "energy_factor": 1.0,
+        "t": 0.0
+      },
+      {
+        "energy_factor": 0.9999306543825195,
+        "t": 0.01
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-07T00:00:00+00:00",
+  "git": {
+    "branch": "main",
+    "commit": "1507c20ffc1b798bf92bf119876fba097df57e93",
+    "worktree_status_short": []
+  },
+  "problem_id": "pcf_hydro_laminar_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:94",
+    "demo/_pcf_linear.py:1"
+  ],
+  "spec_hash": "3eccd12835195f7a979d3cdcff237c104c5ba892c6f2def9e033ee364735d30a",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "growth_rate": 1e-10,
+      "kinetic_energy": 1e-10
+    }
+  }
+}

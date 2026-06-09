@@ -1,0 +1,29 @@
+# jaxfun production commands
+
+## Contract and comparator smoke
+
+```bash
+.venv/bin/python -m pytest -q tests/production
+```
+
+## Device capture
+
+```bash
+.venv/bin/python -m production.device --write production/run_env.json
+```
+
+Local development runs use `JAXFUN_PRODUCTION_DTYPE=float32` by default through
+the production device metadata. x64 remains enabled after `import jaxfun` for
+parity checks that need it.
+
+## Golden comparison
+
+```bash
+.venv/bin/python -m production.compare_goldens \
+  --problem-id pcf_hydro_laminar_v1 \
+  --actual path/to/scalars.json
+```
+
+The comparator resolves `production/goldens/<problem_id>/golden/golden.json`
+first. If that vendored root is absent it uses `$SHENFUN_GOLDENS_ROOT`, then the
+sibling shenfun checkout path.

@@ -1,0 +1,9 @@
+{
+  "artifact_id": "pipe_womersley_v1",
+  "geometry": "pipe",
+  "physics": "hydro",
+  "problem_id": "pipe_womersley_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "e633d0a97893a3b6b8984c73b4be701b674e10f6c031192273b2c9af8b9e009f",
+  "support_state": "production"
+}

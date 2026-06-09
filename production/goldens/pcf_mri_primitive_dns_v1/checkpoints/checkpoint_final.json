@@ -1,0 +1,15 @@
+{
+  "diagnostic_scalars": {
+    "divergence_b": 1.2059592510565076e-20,
+    "divergence_u": 2.179501738089397e-19,
+    "growth_rate": 0.4423942905528427,
+    "growth_rate_linear": 0.442394261692112,
+    "kinetic_energy": 1.1605217318506321e-16,
+    "magnetic_bc": "conducting",
+    "magnetic_energy": 1.9283911859012667e-16
+  },
+  "problem_id": "pcf_mri_primitive_dns_v1",
+  "schema_version": 1,
+  "spec_hash": "3ee8accf0502d92cc8e5a8660cf3c6cb682f4f555605e3e8f4b5e4b021e74a14",
+  "time": 0.6
+}

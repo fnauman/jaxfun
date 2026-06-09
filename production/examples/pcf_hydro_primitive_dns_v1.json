@@ -1,0 +1,105 @@
+{
+  "boundary_conditions": {
+    "magnetic": null,
+    "velocity": {
+      "type": "no_slip_walls",
+      "wall": "u=0 at x=+-1"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "growth_rate",
+    "growth_rate_linear",
+    "kinetic_energy",
+    "divergence_u"
+  ],
+  "diagnostics": [
+    "growth_rate",
+    "growth_rate_linear",
+    "kinetic_energy",
+    "magnetic_energy",
+    "divergence_u"
+  ],
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 6.283185307179586,
+    "z_period": 1.0
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p"
+  ],
+  "expected_oracle": {
+    "source": "nonlinear DNS demo/pcf_mri_primitive.py (AxisymmetricPCFMRIDNS, B0=0 hydro, CNAB2); linear-eigenmode seed, DNS decay rate cross-checked against demo/_pcf_linear.py (mhd=False)",
+    "source_anchors": [
+      "demo/test_pcf_mri_primitive.py:1",
+      "demo/_pcf_linear.py:196"
+    ],
+    "type": "pcf_hydro_dns_decay"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "type": "none"
+  },
+  "formulation": {
+    "internal": "primitive-variable plane-Couette axisymmetric (ky=0) CNAB2 saddle-point DNS, B0=0 (hydro); velocity fluctuations about the U=-S x base flow",
+    "pressure": "velocity pressure Pi with null-space pinning"
+  },
+  "geometry": "pcf",
+  "golden": {
+    "artifact_id": "pcf_hydro_primitive_dns_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/pcf_hydro_primitive_dns_v1.json --out demo/production/goldens/pcf_hydro_primitive_dns_v1 --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 0.0001,
+    "type": "linear_eigenmode"
+  },
+  "mode": {
+    "axial_mode": 1,
+    "streamwise_wavenumber": 0.0
+  },
+  "native_axes": {
+    "axis_0": "z spanwise (Fourier)",
+    "axis_1": "x wall-normal (Chebyshev)",
+    "axis_2": "y streamwise (invariant, ky=0)"
+  },
+  "nondimensional_groups": {
+    "Omega": 0.0,
+    "Re": 100.0,
+    "S": 1.0,
+    "nu": 0.01
+  },
+  "physics": "hydro",
+  "problem_id": "pcf_hydro_primitive_dns_v1",
+  "random_seed": null,
+  "resolution": {
+    "Nx": 40,
+    "Nz": 16,
+    "family": "C"
+  },
+  "support_state": "production",
+  "time": {
+    "dt": 0.002,
+    "final_time": 0.4,
+    "integrator": "CNAB2"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_u": 1e-09,
+      "growth_rate": 1e-06,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-09
+    }
+  },
+  "unsupported_subcases": []
+}

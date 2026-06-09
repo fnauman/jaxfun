@@ -1,0 +1,12 @@
+{
+  "diagnostic_scalars": {
+    "divergence_l2": 0.0,
+    "flow_rate": 1.3329973964894601,
+    "kinetic_energy": 0.5333332994772644,
+    "pressure_gradient": -0.002
+  },
+  "problem_id": "channel_poiseuille_hydro_v1",
+  "schema_version": 1,
+  "spec_hash": "133ffbbd3b8837c96203c74d02dffa88a2d7d358a1458893b06b5e23a9192b49",
+  "time": 0.0
+}

@@ -1,0 +1,9 @@
+{
+  "vendored_at_utc": "2026-06-09T17:13:58+00:00",
+  "source": "/home/nauman/cfd/fn_shenfun/demo/production/goldens",
+  "source_repo": "/home/nauman/cfd/fn_shenfun",
+  "source_branch": "shenfun-production-dns",
+  "source_commit": "dcaa42cf605e4ea8f05dbe8533d13dcc9556256b",
+  "contents": "Vendored shenfun production golden directories, including spec.json and golden/golden.json for all 13 committed artifacts.",
+  "policy": "jaxfun resolves production/goldens/<problem_id>/golden/golden.json first and falls back to SHENFUN_GOLDENS_ROOT only when the vendored directory is absent."
+}

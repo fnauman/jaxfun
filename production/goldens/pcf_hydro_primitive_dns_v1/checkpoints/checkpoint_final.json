@@ -1,0 +1,13 @@
+{
+  "diagnostic_scalars": {
+    "divergence_u": 2.2372833005765998e-23,
+    "growth_rate": -0.4194582116466933,
+    "growth_rate_linear": -0.4194581870462016,
+    "kinetic_energy": 1.3173846238454914e-10,
+    "magnetic_energy": 0.0
+  },
+  "problem_id": "pcf_hydro_primitive_dns_v1",
+  "schema_version": 1,
+  "spec_hash": "496a991492e7a1166c51d6dfdd1b1769e71b494fa7a3d0985ec954f78cdfeeeb",
+  "time": 0.4
+}

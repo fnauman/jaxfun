@@ -1,0 +1,116 @@
+{
+  "boundary_conditions": {
+    "magnetic": {
+      "details": "vacuum matching implemented only for m=0, kz != 0 flux-function path",
+      "type": "insulating"
+    },
+    "velocity": {
+      "type": "no_slip_rotating_cylinders"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "growth_rate",
+    "magnetic_energy",
+    "divergence_b",
+    "magnetic_bc"
+  ],
+  "diagnostics": [
+    "magnetic_energy",
+    "growth_rate",
+    "magnetic_bc",
+    "divergence_b_l2"
+  ],
+  "domain": {
+    "r": [
+      1.0,
+      2.0
+    ],
+    "theta_period": 6.283185307179586,
+    "z_period": 6.283185307179586
+  },
+  "evolved_variables": [
+    "u_r",
+    "u_theta",
+    "u_z",
+    "p",
+    "chi",
+    "b_theta"
+  ],
+  "expected_oracle": {
+    "source": "demo/taylor_couette_mri.py flux-function path",
+    "source_anchors": [
+      "solver_survey.md:200",
+      "demo/test_taylor_couette.py:245"
+    ],
+    "type": "tc_mhd_linear_insulating"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "B0": 0.1,
+    "type": "imposed_axial_field"
+  },
+  "formulation": {
+    "internal": "m=0 poloidal flux-function magnetic formulation",
+    "pressure": "velocity pressure; magnetic solenoidality by flux function"
+  },
+  "geometry": "taylor_couette",
+  "golden": {
+    "artifact_id": "taylor_couette_mhd_insulating_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/taylor_couette_mhd_insulating_v1.json --out demo/production/goldens/taylor_couette_mhd_insulating_v1 --write-golden"
+  },
+  "initial_condition": {
+    "type": "linear_eigenmode"
+  },
+  "mode": {
+    "axial_wavenumber": 3.0,
+    "azimuthal_wavenumber": 0
+  },
+  "native_axes": {
+    "axis_0": "r radial",
+    "axis_1": "theta azimuthal",
+    "axis_2": "z axial"
+  },
+  "nondimensional_groups": {
+    "B0": 0.1,
+    "Omega1": 1.0,
+    "Omega2": 0.3535533905932738,
+    "Pm": 1.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "Re": 1000.0,
+    "Rm": 1000.0,
+    "eta_mag": 0.001,
+    "nu": 0.001,
+    "radius_ratio": 0.5
+  },
+  "physics": "mhd",
+  "problem_id": "taylor_couette_mhd_insulating_v1",
+  "random_seed": null,
+  "resolution": {
+    "N": 28,
+    "family": "C"
+  },
+  "spec_hash": "154c8940ace0ef9a6a28bf53e195f3479cdcd04fb921c977723409ef9b4026fb",
+  "support_state": "production",
+  "time": {
+    "dt": 0.001,
+    "final_time": 0.01,
+    "integrator": "linear_eigenproblem"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b_l2": 1e-08,
+      "growth_rate": 1e-08,
+      "magnetic_energy": 1e-08
+    }
+  },
+  "unsupported_subcases": [
+    "non-axisymmetric insulating walls are unsupported and schema-rejected"
+  ]
+}

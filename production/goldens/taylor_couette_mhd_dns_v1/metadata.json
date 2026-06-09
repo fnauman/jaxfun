@@ -1,0 +1,9 @@
+{
+  "artifact_id": "taylor_couette_mhd_dns_v1",
+  "geometry": "taylor_couette",
+  "physics": "mhd",
+  "problem_id": "taylor_couette_mhd_dns_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "91840b2337b47a0a458118e6dfc5fb4a4f178a346b8a51adcb270321db9f55b7",
+  "support_state": "production"
+}

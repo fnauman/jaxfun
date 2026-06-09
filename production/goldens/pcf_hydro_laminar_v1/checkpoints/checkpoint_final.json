@@ -1,0 +1,15 @@
+{
+  "diagnostic_scalars": {
+    "divergence_l2": 0.0,
+    "eigenvalue_imag": 0.0,
+    "eigenvalue_real": -0.0034674010999505545,
+    "growth_rate": -0.0034674010999505545,
+    "kinetic_energy": 0.33350130175527004,
+    "wall_shear_lower": 1.0,
+    "wall_shear_upper": 1.0
+  },
+  "problem_id": "pcf_hydro_laminar_v1",
+  "schema_version": 1,
+  "spec_hash": "3eccd12835195f7a979d3cdcff237c104c5ba892c6f2def9e033ee364735d30a",
+  "time": 0.01
+}
