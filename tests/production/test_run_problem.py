@@ -180,6 +180,58 @@ def test_tc_hydro_linear_run_writes_diagnostics_and_compares_golden(tmp_path):
     ("problem_id", "expected_keys"),
     [
         (
+            "pcf_hydro_primitive_dns_v1",
+            [
+                "divergence_u",
+                "growth_rate",
+                "growth_rate_linear",
+                "kinetic_energy",
+            ],
+        ),
+        (
+            "pcf_mri_primitive_dns_v1",
+            [
+                "divergence_b",
+                "divergence_u",
+                "growth_rate",
+                "growth_rate_linear",
+                "kinetic_energy",
+                "magnetic_energy",
+            ],
+        ),
+    ],
+)
+def test_pcf_primitive_dns_runs_compare_dns_goldens(
+    tmp_path, problem_id, expected_keys
+):
+    out = tmp_path / problem_id
+    metadata = run_problem(
+        config_path=ROOT / "production" / "examples" / f"{problem_id}.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "dns-linear-window",
+    }
+    assert metadata["comparison_passed"] is True
+    assert metadata["observables_compared"] == expected_keys
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    assert rows[-1]["growth_rate"] == pytest.approx(
+        rows[0]["growth_rate_linear"], abs=5.0e-7
+    )
+
+
+@pytest.mark.parametrize(
+    ("problem_id", "expected_keys"),
+    [
+        (
             "taylor_couette_hydro_dns_v1",
             [
                 "divergence_linf",

@@ -41,6 +41,22 @@ def run_supported_spec(
             spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
         )
     if (
+        spec["geometry"] == "pcf"
+        and spec["physics"] == "hydro"
+        and spec["expected_oracle"]["type"] == "pcf_hydro_dns_decay"
+    ):
+        return _run_pcf_primitive_dns(
+            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+        )
+    if (
+        spec["geometry"] == "pcf"
+        and spec["physics"] == "mri"
+        and spec["expected_oracle"]["type"] == "pcf_mri_dns_growth"
+    ):
+        return _run_pcf_primitive_dns(
+            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+        )
+    if (
         spec["geometry"] == "channel"
         and spec["physics"] == "hydro"
         and spec["expected_oracle"]["type"] == "plane_poiseuille_laminar"
@@ -249,6 +265,82 @@ def _run_taylor_couette_hydro_dns(
             },
         ],
     }
+
+
+def _run_pcf_primitive_dns(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
+) -> dict[str, Any]:
+    from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
+
+    resolution = spec["resolution"]
+    groups = spec["nondimensional_groups"]
+    is_hydro = spec["physics"] == "hydro"
+    solver = AxisymmetricPCFMRIDNSJax(
+        S=float(groups.get("S", 1.0)),
+        omega=float(groups.get("Omega", 0.0)),
+        B0=0.0
+        if is_hydro
+        else float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
+        nu=float(groups["nu"]),
+        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        Nx=int(resolution.get("Nx", resolution.get("N", 40))),
+        Nz=int(resolution.get("Nz", 16)),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "C"),
+        dealias=1.0,
+    )
+    seed = solver.seed_hydro_eigenmode if is_hydro else solver.seed_linear_eigenmode
+    state, eigenvalue = seed(
+        kz_mode=int(spec.get("mode", {}).get("axial_mode", 1)),
+        amp=float(spec["initial_condition"].get("amplitude", 1.0e-7)),
+    )
+    initial = solver.diagnostics(state)
+    n_steps = _steps_from_spec(spec, steps=steps)
+    out = _solve_with_optional_checkpoints(
+        solver,
+        state,
+        n_steps,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        state_kind="axisymmetric_pcf_primitive",
+    )
+    final = solver.diagnostics(out)
+    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
+    elapsed = n_steps * float(spec["time"]["dt"])
+    scalars = {
+        "kinetic_energy": float(final["Ekin"]),
+        "magnetic_energy": float(final["Emag"]),
+        "growth_rate": growth_rate,
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_u": float(final["divu"]),
+    }
+    first = {
+        "t": 0.0,
+        "kinetic_energy": float(initial["Ekin"]),
+        "growth_rate_linear": float(eigenvalue.real),
+    }
+    last = {
+        "t": elapsed,
+        "kinetic_energy": float(final["Ekin"]),
+        "growth_rate": growth_rate,
+    }
+    if not is_hydro:
+        magnetic_bc = _magnetic_bc(spec)
+        scalars.update(
+            {
+                "divergence_b": float(final["divb"]),
+                "magnetic_bc": magnetic_bc,
+            }
+        )
+        first["magnetic_energy"] = float(initial["Emag"])
+        last["magnetic_energy"] = float(final["Emag"])
+    return {"scalars": scalars, "time_series": [first, last]}
 
 
 def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:

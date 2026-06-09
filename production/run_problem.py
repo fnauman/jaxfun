@@ -196,7 +196,12 @@ def build_metadata(
 
 def _execution_kind(spec: dict[str, Any]) -> str:
     oracle_type = spec["expected_oracle"]["type"]
-    if oracle_type in {"circular_couette_dns_growth", "tc_mri_dns_growth"}:
+    if oracle_type in {
+        "circular_couette_dns_growth",
+        "tc_mri_dns_growth",
+        "pcf_hydro_dns_decay",
+        "pcf_mri_dns_growth",
+    }:
         return "dns-linear-window"
     if "linear" in oracle_type or oracle_type in {
         "circular_couette_base_flow",

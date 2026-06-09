@@ -37,14 +37,15 @@ make -C production parity-cheap
 This runs the seven non-pipe cheap goldens and writes `runs/_report/results.json`.
 Pipe hydro remains skipped until the axis-regular radial basis lands.
 
-## Taylor-Couette DNS parity
+## Linear-window DNS parity
 
 ```bash
-make -C production parity-dns-tc
+make -C production parity-dns
 ```
 
-This runs the two committed Taylor-Couette linear-window DNS goldens with the
-production runner and a 30-minute timeout per run.
+This runs the four committed non-pipe linear-window DNS goldens with the
+production runner and a 30-minute timeout per run. Use `parity-dns-pcf` or
+`parity-dns-tc` for the geometry-specific subsets.
 
 ## Taylor-Couette MHD cheap parity
 
