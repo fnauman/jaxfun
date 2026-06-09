@@ -114,6 +114,33 @@ def test_pcf_mhd_and_mri_linear_runs_compare_goldens(tmp_path, problem_id, expec
     assert line["divergence_b_l2"] == 0.0
 
 
+@pytest.mark.parametrize(
+    "problem_id",
+    [
+        "taylor_couette_mhd_conducting_v1",
+        "taylor_couette_mhd_insulating_v1",
+    ],
+)
+def test_tc_mhd_linear_runs_compare_goldens(tmp_path, problem_id):
+    out = tmp_path / problem_id
+    metadata = run_problem(
+        config_path=ROOT / "production" / "examples" / f"{problem_id}.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+    assert metadata["execution"]["status"] == "completed"
+    assert metadata["comparison_passed"] is True
+    assert metadata["observables_compared"] == [
+        "divergence_b_l2",
+        "growth_rate",
+        "magnetic_energy",
+    ]
+    line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
+    assert line["magnetic_bc"] in {"conducting", "insulating"}
+    assert line["divergence_b_l2"] == 0.0
+
+
 def test_tc_hydro_linear_run_writes_diagnostics_and_compares_golden(tmp_path):
     out = tmp_path / "tc"
     metadata = run_problem(

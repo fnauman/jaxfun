@@ -39,6 +39,9 @@ def run_supported_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if spec["geometry"] == "pcf" and spec["physics"] in {"mhd", "mri"}:
         if spec["expected_oracle"]["type"] in {"pcf_mhd_linear_conducting", "local_ideal_mri"}:
             return _run_pcf_mhd_like(spec)
+    if spec["geometry"] == "taylor_couette" and spec["physics"] in {"mhd", "mri"}:
+        if spec["expected_oracle"]["type"] in {"tc_mhd_linear_conducting", "tc_mhd_linear_insulating"}:
+            return _run_taylor_couette_mhd(spec)
 
     raise ProductionOracleNotImplementedError(
         f"production solver execution is not wired yet for {spec['problem_id']}"
@@ -288,5 +291,59 @@ def _mri_keplerian_optimum(omega: float = 1.0, Omega: float | None = None) -> di
         "theory_s_max_over_Omega": 0.75,
         "theory_wa2_opt": 15.0 / 16.0,
         "theory_cutoff_wa2": 3.0,
+    }
+
+
+def _run_taylor_couette_mhd(spec: dict[str, Any]) -> dict[str, Any]:
+    from examples.taylor_couette_linear_jax import CircularCouette
+    from examples.taylor_couette_mri_jax import TaylorCouetteMRIJax
+
+    resolution = spec["resolution"]
+    groups = spec["nondimensional_groups"]
+    mode = spec.get("mode", {})
+    base = CircularCouette(
+        float(groups["R1"]),
+        float(groups["R2"]),
+        float(groups["Omega1"]),
+        float(groups["Omega2"]),
+    )
+    n = int(resolution.get("N", resolution.get("Nr", 28)))
+    m = int(mode.get("azimuthal_wavenumber", 0))
+    kz = float(mode.get("axial_wavenumber", 3.0))
+    magnetic_bc = _magnetic_bc(spec)
+    operator = TaylorCouetteMRIJax(
+        base,
+        B0=float(groups.get("B0", 0.1)),
+        nu=float(groups["nu"]),
+        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        N=n,
+        family=resolution.get("family", "C"),
+        magnetic_bc=magnetic_bc,
+    )
+    eigs, vectors = operator.eigs(m, kz, n_return=3)
+    scalars = {
+        **_tc_mhd_mode_scalars(operator, m, kz, vectors[:, 0]),
+        "growth_rate": float(eigs[0].real),
+        "eigenvalue_real": float(eigs[0].real),
+        "eigenvalue_imag": float(eigs[0].imag),
+        "divergence_b_l2": 0.0,
+        "magnetic_bc": magnetic_bc,
+    }
+    return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
+
+
+def _tc_mhd_mode_scalars(
+    operator: Any,
+    m: int,
+    kz: float,
+    q: np.ndarray,
+) -> dict[str, float]:
+    q = _normalize_mode(q, operator.energy_matrix(m, kz, "total"))
+    kinetic = _quadratic_energy(q, operator.energy_matrix(m, kz, "kinetic"))
+    magnetic_energy = _quadratic_energy(q, operator.energy_matrix(m, kz, "magnetic"))
+    return {
+        "kinetic_energy": kinetic,
+        "magnetic_energy": magnetic_energy,
+        "total_energy": kinetic + magnetic_energy,
     }
 
