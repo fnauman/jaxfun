@@ -42,6 +42,7 @@ Current implemented entry points:
 - `make -C production parity-dns` runs the four committed non-pipe linear-window DNS golden comparisons and writes `runs/_report/results.json`; `parity-dns-pcf` and `parity-dns-tc` run geometry-specific subsets.
 - `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log`, and writes `runs/_report/results.json`; `all`, `heavy`, and direct heavyweight run IDs remain validate-only.
 - `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths under `runs/<problem_id>/<timestamp>/checkpoints/checkpoints.h5`.
+- `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/report.py` builds machine-readable summaries from run metadata.
 
 Planned Phase J3/J6 entry points:

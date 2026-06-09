@@ -126,6 +126,15 @@ paths are wired.
   --compare-golden
 ```
 
+## Autograd objective smoke
+
+```bash
+.venv/bin/python -m pytest -q tests/production/test_objectives.py -n 0
+```
+
+This checks the production objective wrappers with finite-difference gradients on
+a reduced Plane Couette solver.
+
 ## Runner checkpoint smoke
 
 ```bash
