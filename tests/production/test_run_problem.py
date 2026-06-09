@@ -319,6 +319,18 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
     record = read_checkpoint(checkpoint_path)
     assert record.tstep == 4
     assert record.attrs["problem_id"] == "taylor_couette_hydro_dns_v1"
+    assert record.attrs["artifact_id"] == "taylor_couette_hydro_dns_v1"
+    assert record.attrs["spec_hash"] == metadata["spec_hash"]
+    assert record.attrs["checkpoint_schema_version"] == 1
+    assert record.attrs["solver_schema_version"] == 1
+    assert record.attrs["diagnostics_path"].endswith("diagnostics.jsonl")
+    dtype_metadata = json.loads(record.attrs["dtype_metadata_json"])
+    assert dtype_metadata["production_run_dtype"] == "float32"
+    assert dtype_metadata["field_dtypes"]
+    assert dtype_metadata["field_shapes"]
+    device_metadata = json.loads(record.attrs["device_metadata_json"])
+    assert device_metadata == {"capture_skipped": True}
+    assert record.attrs["prng_state_json"] == ""
     payload = record.fields["state"]
     restarted = AxisymmetricTCState(
         u=tuple(payload["u"]),

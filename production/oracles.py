@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from . import observables
+from .checkpoint import write_production_checkpoint
 
 
 class ProductionOracleNotImplementedError(NotImplementedError):
@@ -21,6 +22,7 @@ def run_supported_spec(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a supported production spec and return canonical diagnostics."""
 
@@ -30,7 +32,11 @@ def run_supported_spec(
         and spec["expected_oracle"]["type"] == "circular_couette_dns_growth"
     ):
         return _run_taylor_couette_hydro_dns(
-            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -38,7 +44,11 @@ def run_supported_spec(
         and spec["expected_oracle"]["type"] == "tc_mri_dns_growth"
     ):
         return _run_taylor_couette_mhd_dns(
-            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
         )
     if (
         spec["geometry"] == "pcf"
@@ -46,7 +56,11 @@ def run_supported_spec(
         and spec["expected_oracle"]["type"] == "pcf_hydro_dns_decay"
     ):
         return _run_pcf_primitive_dns(
-            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
         )
     if (
         spec["geometry"] == "pcf"
@@ -54,7 +68,11 @@ def run_supported_spec(
         and spec["expected_oracle"]["type"] == "pcf_mri_dns_growth"
     ):
         return _run_pcf_primitive_dns(
-            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
         )
     if (
         spec["geometry"] == "channel"
@@ -204,6 +222,7 @@ def _run_taylor_couette_hydro_dns(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
 
@@ -239,6 +258,7 @@ def _run_taylor_couette_hydro_dns(
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
         state_kind="axisymmetric_tc_hydro",
+        device_record=device_record,
     )
     final = solver.diagnostics(out)
     growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
@@ -273,6 +293,7 @@ def _run_pcf_primitive_dns(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
 
@@ -309,6 +330,7 @@ def _run_pcf_primitive_dns(
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
         state_kind="axisymmetric_pcf_primitive",
+        device_record=device_record,
     )
     final = solver.diagnostics(out)
     growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
@@ -531,6 +553,7 @@ def _run_taylor_couette_mhd_dns(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
 
@@ -573,6 +596,7 @@ def _run_taylor_couette_mhd_dns(
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
         state_kind="axisymmetric_tc_mhd",
+        device_record=device_record,
     )
     final = solver.diagnostics(out)
     growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
@@ -630,6 +654,7 @@ def _solve_with_optional_checkpoints(
     out_dir: str | Path | None,
     checkpoint_every: int | None,
     state_kind: str,
+    device_record: dict[str, Any] | None = None,
 ) -> Any:
     if checkpoint_every is None:
         return solver.solve(state, steps)
@@ -638,22 +663,22 @@ def _solve_with_optional_checkpoints(
     if out_dir is None:
         raise ValueError("out_dir is required when checkpoint_every is set")
 
-    from jaxfun.io import Cadence, write_checkpoint
+    from jaxfun.io import Cadence
 
     checkpoint_path = Path(out_dir) / "checkpoints" / "checkpoints.h5"
+    diagnostics_path = Path(out_dir) / "diagnostics.jsonl"
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
     def on_checkpoint(t: float, tstep: int, checkpoint_state: Any) -> None:
-        write_checkpoint(
+        write_production_checkpoint(
             checkpoint_path,
             {"state": _checkpoint_payload(checkpoint_state)},
             t=t,
             tstep=tstep,
-            attrs={
-                "problem_id": spec["problem_id"],
-                "state_kind": state_kind,
-                "schema_version": 1,
-            },
+            spec=spec,
+            state_kind=state_kind,
+            device_record=device_record,
+            diagnostics_path=diagnostics_path,
         )
 
     out = solver.solve_with_cadence(

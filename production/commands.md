@@ -146,7 +146,9 @@ a reduced Plane Couette solver.
 ```
 
 This writes `checkpoints/checkpoints.h5` with coefficient-space state payloads
-readable by `jaxfun.io.read_checkpoint`.
+readable by `jaxfun.io.read_checkpoint`. Production checkpoint attrs include the
+spec hash, schema versions, dtype/shape metadata, device metadata, and the
+diagnostics path.
 
 ## Runner metadata validation
 

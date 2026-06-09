@@ -102,6 +102,7 @@ def run_problem(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            device_record=device_record,
         )
     except ProductionOracleNotImplementedError as exc:
         metadata["timing"] = _solver_timing(solver_started_at, solver_start)
