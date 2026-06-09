@@ -28,6 +28,15 @@ The comparator resolves `production/goldens/<problem_id>/golden/golden.json`
 first. If that vendored root is absent it uses `$SHENFUN_GOLDENS_ROOT`, then the
 sibling shenfun checkout path.
 
+## PCF hydro cheap parity
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/examples/pcf_hydro_laminar_v1.json \
+  --out runs/pcf_hydro_laminar_v1/smoke \
+  --compare-golden
+```
+
 ## Channel analytic parity
 
 ```bash

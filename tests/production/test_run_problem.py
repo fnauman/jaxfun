@@ -71,6 +71,26 @@ def test_channel_analytic_run_writes_diagnostics_and_compares_golden(tmp_path):
     assert line["pressure_gradient"] == pytest.approx(-0.002)
 
 
+def test_pcf_hydro_laminar_run_writes_diagnostics_and_compares_golden(tmp_path):
+    out = tmp_path / "pcf"
+    metadata = run_problem(
+        config_path=ROOT / "production" / "examples" / "pcf_hydro_laminar_v1.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+    assert metadata["execution"]["status"] == "completed"
+    assert metadata["comparison_passed"] is True
+    assert metadata["observables_compared"] == [
+        "divergence_l2",
+        "growth_rate",
+        "kinetic_energy",
+    ]
+    line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
+    assert line["growth_rate"] == pytest.approx(-0.0034674010999505545)
+    assert line["wall_shear_lower"] == pytest.approx(1.0)
+
+
 def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
     out = tmp_path / "channel"
     run_problem(
