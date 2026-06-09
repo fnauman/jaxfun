@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from production.compare_goldens import validate_golden
+from production.oracles import _channel_poiseuille_kmm_state
 from production.problem_spec import UnsupportedSpecError
 from production.run_problem import SolverExecutionNotImplementedError, main, run_problem
 
@@ -226,7 +227,23 @@ def test_exp_pcf_mri_shearbox_growth_smoke_runs_from_phase_j5_spec(tmp_path):
     assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
 
 
-def test_channel_analytic_run_writes_diagnostics_and_compares_golden(tmp_path):
+def test_channel_driven_kmm_state_recovers_poiseuille_profile():
+    spec = json.loads(
+        (
+            ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json"
+        ).read_text()
+    )
+
+    record = _channel_poiseuille_kmm_state(spec)
+
+    assert record["solver"].N == (64, 8, 8)
+    assert record["solver"].dpdy == pytest.approx(-0.002)
+    assert record["pressure_gradient"] == pytest.approx(-0.002)
+    assert record["profile_linf"] < 2.0e-5
+    assert record["divergence_l2"] < 2.0e-5
+
+
+def test_channel_driven_kmm_run_writes_diagnostics_and_compares_golden(tmp_path):
     out = tmp_path / "channel"
     metadata = run_problem(
         config_path=ROOT

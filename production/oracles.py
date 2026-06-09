@@ -176,6 +176,8 @@ def run_supported_spec(
 
 
 def _run_channel_poiseuille(spec: dict[str, Any]) -> dict[str, Any]:
+    _channel_poiseuille_kmm_state(spec)
+
     resolution = spec["resolution"]
     groups = spec["nondimensional_groups"]
     n = int(resolution.get("nx", resolution.get("N", 64)))
@@ -194,6 +196,72 @@ def _run_channel_poiseuille(spec: dict[str, Any]) -> dict[str, Any]:
         "divergence_l2": 0.0,
     }
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
+
+
+def _channel_poiseuille_kmm_state(spec: dict[str, Any]) -> dict[str, Any]:
+    import jax.numpy as jnp
+
+    from examples.channelflow_kmm import KMM, KMMState
+
+    resolution = spec["resolution"]
+    groups = spec["nondimensional_groups"]
+    domain = spec["domain"]
+    x0, x1 = (float(v) for v in domain["x"])
+    if not (np.isclose(x0, -1.0) and np.isclose(x1, 1.0)):
+        raise ProductionOracleNotImplementedError(
+            "channel Poiseuille KMM oracle is wired for the half-gap domain [-1, 1]"
+        )
+
+    re = float(groups["Re"])
+    u_center = float(groups.get("U_center", 1.0))
+    pressure_gradient = -2.0 * u_center / re
+    solver = KMM(
+        N=(
+            int(resolution.get("nx", resolution.get("N", 64))),
+            int(resolution.get("ny", 8)),
+            int(resolution.get("nz", 8)),
+        ),
+        domain=(
+            (x0, x1),
+            (0.0, float(domain.get("y_period", 4.0))),
+            (0.0, float(domain.get("z_period", 4.0))),
+        ),
+        nu=1.0 / re,
+        dt=max(float(spec["time"].get("dt", 0.0)), 1.0e-3),
+        family=resolution.get("family", "C"),
+        padding_factor=(1.0, 1.0, 1.0),
+        dpdy=pressure_gradient,
+    )
+    v00 = solver.L00.solve(-solver.dpdy_rhs)
+    g = jnp.zeros(solver.TD.num_dofs, dtype=complex)
+    state = KMMState(
+        u=solver._reconstruct_velocity(
+            jnp.zeros(solver.TB.num_dofs, dtype=complex),
+            g,
+            v00,
+            jnp.zeros_like(v00),
+        ),
+        g=g,
+    )
+    x = solver.D00.mesh()
+    profile = solver.D00.backward(v00)
+    expected = u_center * (1.0 - x**2)
+    profile_linf = float(jnp.max(jnp.abs(profile - expected)))
+    divergence_l2 = float(solver.divergence_l2(state))
+    dtype_eps = np.finfo(np.asarray(profile).dtype).eps
+    tolerance = max(1.0e-10, 100.0 * float(dtype_eps))
+    if profile_linf > tolerance or divergence_l2 > tolerance:
+        raise RuntimeError(
+            "driven channel KMM steady state did not recover Poiseuille "
+            f"(profile_linf={profile_linf}, divergence_l2={divergence_l2})"
+        )
+    return {
+        "solver": solver,
+        "state": state,
+        "profile_linf": profile_linf,
+        "divergence_l2": divergence_l2,
+        "pressure_gradient": pressure_gradient,
+    }
 
 
 def _run_plane_couette_laminar(spec: dict[str, Any]) -> dict[str, Any]:

@@ -10,8 +10,8 @@ Required implementation work:
 
 - Add an axis-regular radial basis equivalent to shenfun one-sided-free
   `bc=(None, 0)` for a free/regular pipe axis and no-slip wall.
-- Add the `m`-dependent `r^|m|` pole selection or equivalent singular
-  weighted-Galerkin penalties with cylindrical measure `sqrt_det_g = r`.
+- Add the `m`-dependent `r^|m|` pole selection or equivalent
+  singular weighted-Galerkin penalties with cylindrical measure `sqrt_det_g = r`.
 - Implement `examples/pipe_flow_dns_jax.py` for hydro pipe DNS with
   `(u_r, u_theta, u_z, p)` in Fourier(theta) x Fourier(z) x radial spaces.
 - Emit pipe hydro observables: `flow_rate`, `flow_rate_exact`,
