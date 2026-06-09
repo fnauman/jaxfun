@@ -4,7 +4,6 @@ from pathlib import Path
 from production.report import build_report, write_report
 from production.run_problem import run_problem
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -27,7 +26,10 @@ def test_report_marks_validate_only_runner_metadata_as_skipped(tmp_path):
 def test_report_marks_completed_channel_oracle_as_passed(tmp_path):
     out = tmp_path / "runs" / "channel_poiseuille_hydro_v1" / "stamp"
     run_problem(
-        config_path=ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json",
+        config_path=ROOT
+        / "production"
+        / "examples"
+        / "channel_poiseuille_hydro_v1.json",
         out=out,
         compare_golden=True,
         capture_device=False,
@@ -43,6 +45,9 @@ def test_report_marks_completed_channel_oracle_as_passed(tmp_path):
         "kinetic_energy",
         "pressure_gradient",
     ]
+    assert record["solver_wall_time_seconds"] is not None
+    assert record["solver_started_at_utc"]
+    assert record["solver_finished_at_utc"]
 
 
 def test_write_report_outputs_json_and_markdown(tmp_path):
@@ -58,3 +63,5 @@ def test_write_report_outputs_json_and_markdown(tmp_path):
     assert paths["markdown"].exists()
     data = json.loads(paths["json"].read_text())
     assert data["summary"]["skipped"] == 1
+    markdown = paths["markdown"].read_text()
+    assert "wall_time_s" in markdown

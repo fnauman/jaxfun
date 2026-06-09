@@ -13,7 +13,9 @@ def load_metadata(path: str | Path) -> dict[str, Any]:
         return json.load(fh)
 
 
-def record_from_metadata(metadata: dict[str, Any], *, metadata_path: str | Path | None = None) -> dict[str, Any]:
+def record_from_metadata(
+    metadata: dict[str, Any], *, metadata_path: str | Path | None = None
+) -> dict[str, Any]:
     execution = metadata.get("execution", {})
     device = metadata.get("device", {})
     status = execution.get("status", "unknown")
@@ -29,6 +31,7 @@ def record_from_metadata(metadata: dict[str, Any], *, metadata_path: str | Path 
         reason = f"execution status {status!r}"
 
     expected_oracle = metadata.get("expected_oracle", {})
+    timing = metadata.get("timing", {})
     return {
         "problem_id": metadata.get("problem_id"),
         "metadata_path": str(metadata_path) if metadata_path is not None else None,
@@ -46,11 +49,17 @@ def record_from_metadata(metadata: dict[str, Any], *, metadata_path: str | Path 
         "golden_resolution": metadata.get("golden_resolution", {}),
         "observables_compared": metadata.get("observables_compared", []),
         "comparisons": metadata.get("comparisons", []),
+        "solver_wall_time_seconds": timing.get("solver_wall_time_seconds"),
+        "solver_started_at_utc": timing.get("solver_started_at_utc"),
+        "solver_finished_at_utc": timing.get("solver_finished_at_utc"),
     }
 
 
 def build_report(metadata_paths: list[str | Path]) -> dict[str, Any]:
-    records = [record_from_metadata(load_metadata(path), metadata_path=path) for path in metadata_paths]
+    records = [
+        record_from_metadata(load_metadata(path), metadata_path=path)
+        for path in metadata_paths
+    ]
     summary = {
         "passed": sum(1 for record in records if record["outcome"] == "passed"),
         "failed": sum(1 for record in records if record["outcome"] == "failed"),
@@ -61,16 +70,22 @@ def build_report(metadata_paths: list[str | Path]) -> dict[str, Any]:
 
 def find_metadata_files(runs_root: str | Path) -> list[Path]:
     root = Path(runs_root)
-    return sorted(path for path in root.glob("*/*/metadata.json") if "_report" not in path.parts)
+    return sorted(
+        path for path in root.glob("*/*/metadata.json") if "_report" not in path.parts
+    )
 
 
-def write_report(metadata_paths: list[str | Path], out_dir: str | Path) -> dict[str, Path]:
+def write_report(
+    metadata_paths: list[str | Path], out_dir: str | Path
+) -> dict[str, Path]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     report = build_report(metadata_paths)
     json_path = out / "results.json"
     md_path = out / "results.md"
-    json_path.write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
     md_path.write_text(_markdown_summary(report), encoding="utf-8")
     return {"json": json_path, "markdown": md_path}
 
@@ -80,22 +95,35 @@ def _markdown_summary(report: dict[str, Any]) -> str:
     lines = [
         "# Production Validation Report",
         "",
-        f"Passed: {summary['passed']}  Failed: {summary['failed']}  Skipped: {summary['skipped']}",
+        (
+            f"Passed: {summary['passed']}  Failed: {summary['failed']}  "
+            f"Skipped: {summary['skipped']}"
+        ),
         "",
-        "| problem_id | outcome | mode | backend | reason |",
-        "|---|---|---|---|---|",
+        "| problem_id | outcome | mode | backend | wall_time_s | reason |",
+        "|---|---|---|---|---:|---|",
     ]
     for record in report["runs"]:
         lines.append(
-            "| {problem_id} | {outcome} | {mode} | {backend} | {reason} |".format(
+            (
+                "| {problem_id} | {outcome} | {mode} | {backend} | "
+                "{wall_time} | {reason} |"
+            ).format(
                 problem_id=record.get("problem_id"),
                 outcome=record.get("outcome"),
                 mode=record.get("mode"),
                 backend=record.get("backend"),
+                wall_time=_format_wall_time(record.get("solver_wall_time_seconds")),
                 reason=record.get("reason", ""),
             )
         )
     return "\n".join(lines) + "\n"
+
+
+def _format_wall_time(value: Any) -> str:
+    if value is None:
+        return ""
+    return f"{float(value):.3f}"
 
 
 def main(argv: list[str] | None = None) -> int:
