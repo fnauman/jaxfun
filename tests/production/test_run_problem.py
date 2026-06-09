@@ -213,6 +213,14 @@ def test_pcf_mhd_divfree_smoke_runs_from_phase_j5_spec(tmp_path):
     }
     assert metadata["run_options"]["resolution_tier"] == "start"
     assert metadata["adapter"]["effective_resolution"]["Nx"] == 8
+    assert metadata["validation_scope"]["kind"] == "bounded_saturation_smoke"
+    assert metadata["validation_scope"]["bounded_smoke"] is True
+    assert metadata["validation_scope"]["steps_override"] == 2
+    assert metadata["validation_scope"]["resolution_tier"] == "start"
+    assert (
+        "not a full production saturation golden"
+        in metadata["validation_scope"]["reason"]
+    )
     rows = [
         json.loads(line)
         for line in (out / "diagnostics.jsonl").read_text().splitlines()

@@ -37,7 +37,8 @@ def record_from_metadata(
     if (
         status == "completed"
         and not reason
-        and validation_scope_kind == "cpu_smoke_finiteness_divergence_only"
+        and validation_scope_kind
+        in {"cpu_smoke_finiteness_divergence_only", "bounded_saturation_smoke"}
     ):
         reason = validation_scope_reason
     timing = metadata.get("timing", {})

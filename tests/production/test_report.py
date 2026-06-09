@@ -117,6 +117,56 @@ def test_report_labels_rung3_cpu_smoke_as_finiteness_only(tmp_path):
     assert "not production parity" in markdown
 
 
+def test_report_labels_bounded_gpu_smoke_as_not_full_saturation(tmp_path):
+    reason = (
+        "executed a step-limited or reduced-resolution saturation smoke run; "
+        "generated artifacts are smoke diagnostics, not a full production "
+        "saturation golden"
+    )
+    metadata = {
+        "problem_id": "pcf_mhd_divfree",
+        "out_dir": "runs/pcf_mhd_divfree/stamp",
+        "geometry": "pcf",
+        "physics": "mhd",
+        "expected_oracle": {"fallback_rungs": [3]},
+        "device": {
+            "mode": "gpu",
+            "default_backend": "gpu",
+            "degraded": False,
+        },
+        "execution": {
+            "status": "completed",
+            "solver_execution_wired": True,
+            "execution_kind": "dns-saturation",
+        },
+        "validation_scope": {
+            "kind": "bounded_saturation_smoke",
+            "reason": reason,
+            "checked_observables": ["divergence_b_l2", "magnetic_energy"],
+            "steps_override": 2,
+            "resolution_tier": "smoke",
+            "bounded_smoke": True,
+        },
+        "timing": {"solver_wall_time_seconds": 1.25},
+    }
+
+    record = record_from_metadata(metadata, metadata_path="runs/x/metadata.json")
+
+    assert record["outcome"] == "passed"
+    assert record["validation_scope"] == "bounded_saturation_smoke"
+    assert record["reason"] == reason
+
+    metadata_path = tmp_path / "runs" / "pcf_mhd_divfree" / "stamp" / "metadata.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    paths = write_report([metadata_path], tmp_path / "_report")
+
+    markdown = paths["markdown"].read_text()
+    assert "bounded_saturation_smoke" in markdown
+    assert "not a full production saturation golden" in markdown
+    assert "divergence_b_l2, magnetic_energy" in markdown
+
+
 def test_report_accepts_explicit_skipped_records():
     reason = "pipe hydro is parity_pending until the axis-regular radial basis lands"
 
