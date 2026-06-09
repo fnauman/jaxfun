@@ -227,6 +227,74 @@ def test_tc_dns_runs_compare_dns_goldens(tmp_path, problem_id, expected_keys):
     )
 
 
+def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
+    pytest.importorskip("h5py")
+    import math
+
+    import jax.numpy as jnp
+
+    from examples.taylor_couette_dns_jax import (
+        AxisymmetricTCDNSJax,
+        AxisymmetricTCState,
+        CircularCouette,
+    )
+    from jaxfun.io import read_checkpoint
+
+    spec = json.loads(
+        (
+            ROOT / "production" / "examples" / "taylor_couette_hydro_dns_v1.json"
+        ).read_text()
+    )
+    spec["resolution"] = {**spec["resolution"], "Nr": 10, "Nz": 6}
+    spec["time"] = {**spec["time"], "final_time": 0.004}
+    spec_path = tmp_path / "tc_dns_checkpoint.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "run"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=4,
+        checkpoint_every=2,
+        capture_device=False,
+    )
+    checkpoint_path = out / "checkpoints" / "checkpoints.h5"
+    assert metadata["checkpoint_path"] == str(checkpoint_path)
+
+    record = read_checkpoint(checkpoint_path)
+    assert record.tstep == 4
+    assert record.attrs["problem_id"] == "taylor_couette_hydro_dns_v1"
+    payload = record.fields["state"]
+    restarted = AxisymmetricTCState(
+        u=tuple(payload["u"]),
+        p=payload["p"],
+        nonlinear_old=tuple(payload["nonlinear_old"]),
+        have_old=payload["have_old"],
+    )
+
+    groups = spec["nondimensional_groups"]
+    solver = AxisymmetricTCDNSJax(
+        CircularCouette(groups["R1"], groups["R2"], groups["Omega1"], groups["Omega2"]),
+        nu=groups["nu"],
+        Nr=spec["resolution"]["Nr"],
+        Nz=spec["resolution"]["Nz"],
+        Lz=spec["domain"]["z_period"],
+        dt=spec["time"]["dt"],
+        family=spec["resolution"]["family"],
+        dealias=1.0,
+    )
+    kz_mode = round(spec["mode"]["axial_wavenumber"] * solver.Lz / (2.0 * math.pi))
+    state0, _ = solver.seed_linear_eigenmode(
+        kz_mode=kz_mode, amp=spec["initial_condition"]["amplitude"]
+    )
+    direct = solver.solve(state0, 6)
+    continued = solver.solve(restarted, 2)
+
+    for got, expected in zip(continued.u, direct.u, strict=True):
+        assert jnp.allclose(got, expected, rtol=1.0e-12, atol=1.0e-12)
+    assert jnp.allclose(continued.p, direct.p, rtol=1.0e-12, atol=1.0e-12)
+
+
 def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
     out = tmp_path / "channel"
     run_problem(

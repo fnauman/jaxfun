@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,7 +16,11 @@ class ProductionOracleNotImplementedError(NotImplementedError):
 
 
 def run_supported_spec(
-    spec: dict[str, Any], *, steps: int | None = None
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
 ) -> dict[str, Any]:
     """Run a supported production spec and return canonical diagnostics."""
 
@@ -24,13 +29,17 @@ def run_supported_spec(
         and spec["physics"] == "hydro"
         and spec["expected_oracle"]["type"] == "circular_couette_dns_growth"
     ):
-        return _run_taylor_couette_hydro_dns(spec, steps=steps)
+        return _run_taylor_couette_hydro_dns(
+            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+        )
     if (
         spec["geometry"] == "taylor_couette"
         and spec["physics"] in {"mhd", "mri"}
         and spec["expected_oracle"]["type"] == "tc_mri_dns_growth"
     ):
-        return _run_taylor_couette_mhd_dns(spec, steps=steps)
+        return _run_taylor_couette_mhd_dns(
+            spec, steps=steps, out_dir=out_dir, checkpoint_every=checkpoint_every
+        )
     if (
         spec["geometry"] == "channel"
         and spec["physics"] == "hydro"
@@ -177,6 +186,8 @@ def _run_taylor_couette_hydro_dns(
     spec: dict[str, Any],
     *,
     steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
 
@@ -204,8 +215,17 @@ def _run_taylor_couette_hydro_dns(
     )
     initial = solver.diagnostics(state)
     n_steps = _steps_from_spec(spec, steps=steps)
-    growth_rate, out = solver.growth_rate(state, n_steps)
+    out = _solve_with_optional_checkpoints(
+        solver,
+        state,
+        n_steps,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        state_kind="axisymmetric_tc_hydro",
+    )
     final = solver.diagnostics(out)
+    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
     elapsed = n_steps * float(spec["time"]["dt"])
     scalars = {
         "kinetic_energy": float(final["E"]),
@@ -417,6 +437,8 @@ def _run_taylor_couette_mhd_dns(
     spec: dict[str, Any],
     *,
     steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
 
@@ -451,8 +473,17 @@ def _run_taylor_couette_mhd_dns(
     )
     initial = solver.diagnostics(state)
     n_steps = _steps_from_spec(spec, steps=steps)
-    growth_rate, out = solver.growth_rate(state, n_steps)
+    out = _solve_with_optional_checkpoints(
+        solver,
+        state,
+        n_steps,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        state_kind="axisymmetric_tc_mhd",
+    )
     final = solver.diagnostics(out)
+    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
     elapsed = n_steps * float(spec["time"]["dt"])
     scalars = {
         "kinetic_energy": float(final["Ekin"]),
@@ -496,6 +527,78 @@ def _tc_mhd_mode_scalars(
         "magnetic_energy": magnetic_energy,
         "total_energy": kinetic + magnetic_energy,
     }
+
+
+def _solve_with_optional_checkpoints(
+    solver: Any,
+    state: Any,
+    steps: int,
+    *,
+    spec: dict[str, Any],
+    out_dir: str | Path | None,
+    checkpoint_every: int | None,
+    state_kind: str,
+) -> Any:
+    if checkpoint_every is None:
+        return solver.solve(state, steps)
+    if checkpoint_every <= 0:
+        raise ValueError("checkpoint_every must be positive")
+    if out_dir is None:
+        raise ValueError("out_dir is required when checkpoint_every is set")
+
+    from jaxfun.io import Cadence, write_checkpoint
+
+    checkpoint_path = Path(out_dir) / "checkpoints" / "checkpoints.h5"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def on_checkpoint(t: float, tstep: int, checkpoint_state: Any) -> None:
+        write_checkpoint(
+            checkpoint_path,
+            {"state": _checkpoint_payload(checkpoint_state)},
+            t=t,
+            tstep=tstep,
+            attrs={
+                "problem_id": spec["problem_id"],
+                "state_kind": state_kind,
+                "schema_version": 1,
+            },
+        )
+
+    out = solver.solve_with_cadence(
+        state,
+        steps,
+        Cadence(checkpoint_every=checkpoint_every),
+        block_size=max(1, int(checkpoint_every)),
+        on_checkpoint=on_checkpoint,
+    )
+    if steps == 0 or steps % int(checkpoint_every) != 0:
+        on_checkpoint(float(steps) * float(solver.dt), int(steps), out)
+    return out
+
+
+def _checkpoint_payload(state: Any) -> dict[str, Any]:
+    if hasattr(state, "u"):
+        return {
+            "u": state.u,
+            "p": state.p,
+            "nonlinear_old": state.nonlinear_old,
+            "have_old": state.have_old,
+        }
+    if hasattr(state, "x"):
+        return {
+            "x": state.x,
+            "p": state.p,
+            "nonlinear_old": state.nonlinear_old,
+            "have_old": state.have_old,
+        }
+    raise TypeError(f"unsupported checkpoint state type {type(state).__name__}")
+
+
+def _growth_rate_from_energy(e0: Any, e1: Any, steps: int, dt: float) -> float:
+    elapsed = int(steps) * float(dt)
+    if elapsed <= 0.0:
+        raise ValueError("growth-rate diagnostics require at least one DNS step")
+    return 0.5 * math.log(float(e1) / float(e0)) / elapsed
 
 
 def _steps_from_spec(spec: dict[str, Any], *, steps: int | None = None) -> int:

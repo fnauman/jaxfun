@@ -101,6 +101,19 @@ production runner and a 30-minute timeout per run.
   --compare-golden
 ```
 
+## Runner checkpoint smoke
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/examples/taylor_couette_hydro_dns_v1.json \
+  --out runs/taylor_couette_hydro_dns_v1/checkpoint_smoke \
+  --steps 4 \
+  --checkpoint-every 2
+```
+
+This writes `checkpoints/checkpoints.h5` with coefficient-space state payloads
+readable by `jaxfun.io.read_checkpoint`.
+
 ## Runner metadata validation
 
 ```bash

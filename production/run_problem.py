@@ -94,7 +94,12 @@ def run_problem(
         return metadata
 
     try:
-        diagnostics = run_supported_spec(config.spec, steps=steps)
+        diagnostics = run_supported_spec(
+            config.spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+        )
     except ProductionOracleNotImplementedError as exc:
         raise SolverExecutionNotImplementedError(
             f"{exc}; contract validation metadata was written, but no DNS "
@@ -109,6 +114,9 @@ def run_problem(
         "execution_kind": _execution_kind(config.spec),
     }
     metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
+    checkpoint_path = out_dir / "checkpoints" / "checkpoints.h5"
+    if checkpoint_path.exists():
+        metadata["checkpoint_path"] = str(checkpoint_path)
 
     if compare_golden:
         result = _compare_diagnostics(

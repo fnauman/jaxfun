@@ -40,6 +40,7 @@ Current implemented entry points:
   full solver execution still fails explicitly for unwired DNS/heavy paths.
 - `make -C production parity-cheap` runs the seven non-pipe cheap golden comparisons and writes `runs/_report/results.json`; pipe hydro goldens are skipped until the axis-regular radial basis lands.
 - `make -C production parity-dns-tc` runs the two Taylor-Couette linear-window DNS golden comparisons and writes `runs/_report/results.json`.
+- `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths under `runs/<problem_id>/<timestamp>/checkpoints/checkpoints.h5`.
 - `production/report.py` builds machine-readable summaries from run metadata.
 
 Planned Phase J3/J6 entry points:
