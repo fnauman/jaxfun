@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
+from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax, PCFMRIDNSJax
 
 
 def test_pcf_primitive_dns_zero_state_stays_zero() -> None:
@@ -15,6 +15,47 @@ def test_pcf_primitive_dns_zero_state_stays_zero() -> None:
     assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
     assert float(diag["divu"]) < 1.0e-12
     assert float(diag["divb"]) < 1.0e-12
+
+
+def test_pcf_primitive_3d_zero_state_stays_zero() -> None:
+    solver = PCFMRIDNSJax(Nx=8, Ny=4, Nz=4, dt=1.0e-3, dealias=1.0)
+    state = solver.step(solver.zero_state())
+    diag = solver.diagnostics(state)
+
+    assert all(jnp.allclose(component, 0.0, atol=1.0e-12) for component in state.x)
+    assert jnp.allclose(state.p, 0.0, atol=1.0e-12)
+    assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
+    assert float(diag["divu"]) < 1.0e-12
+    assert float(diag["divb"]) < 1.0e-12
+
+
+@pytest.mark.parametrize("dealias", [1.0, 1.5])
+def test_pcf_primitive_3d_seeded_mode_one_step_is_finite(dealias: float) -> None:
+    solver = PCFMRIDNSJax(
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nx=8,
+        Ny=4,
+        Nz=4,
+        Ly=4.0,
+        Lz=1.0,
+        dt=1.0e-3,
+        dealias=dealias,
+    )
+    state, eig = solver.seed_linear_eigenmode(ky_mode=1, kz_mode=1, amp=1.0e-7)
+    out = solver.step(state)
+    diag = solver.diagnostics(out)
+
+    assert eig.real == pytest.approx(float(eig.real))
+    assert all(jnp.isfinite(component).all() for component in out.x)
+    assert jnp.isfinite(out.p).all()
+    assert float(diag["E"]) > 0.0
+    assert float(diag["divu"]) < 1.0e-7
+    assert float(diag["divb"]) < 1.0e-7
+    assert bool(jnp.isfinite(diag["transport_alpha"]))
 
 
 @pytest.mark.skipif(
