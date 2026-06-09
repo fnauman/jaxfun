@@ -10,9 +10,12 @@ conda activate shenfun
 export PYTHONPATH="$PWD/demo:${PYTHONPATH}"
 ```
 
-The Taylor-Couette examples use the Chebyshev radial family (`family="C"`) in
-this checkout because the optional fast Legendre wrapper was not available in
-the local environment during verification.
+The Taylor-Couette solvers default to the Legendre radial family
+(`family="L"`), which requires shenfun's compiled extensions (`fastgl` and
+`Leg2Cheb`).  The examples below pass `family="C"` (Chebyshev) so they run
+without those extensions; pass `family="L"` when shenfun is built (or installed)
+with them.  See the "Legendre `fastgl` note" near the end for the partial
+source-only fallback.
 
 ## Summary
 
@@ -356,32 +359,46 @@ insulating target_Rm 16.5 target_S 5.21 best_kz 1.25 max_growth -0.0002758203714
 conda run -n shenfun python -m py_compile \
   demo/_linear_analysis.py \
   demo/_pcf_linear.py \
+  demo/pcf_galerkin_linear.py \
+  demo/pcf_imexrk_linear.py \
   demo/pcf_fluctuations_corrected.py \
   demo/pcf_mhd_divfree.py \
   demo/pcf_mhd_mri_shearpy.py \
   demo/taylor_couette_linear.py \
   demo/taylor_couette_mri.py \
-  demo/taylor_couette_dns.py
+  demo/taylor_couette_collocation.py \
+  demo/taylor_couette_imexrk.py \
+  demo/taylor_couette_dns.py \
+  demo/taylor_couette_imexrk_dns.py \
+  demo/thin_gap_common.py \
+  demo/thin_gap_compare.py
 
 # Dense linear / non-modal layer (pure-numpy PCF + Chebyshev TC; fast, no Legendre)
 conda run -n shenfun pytest -q demo/test_couette_linear.py
+
+# Apples-to-apples thin-gap comparison (eigenvalues, non-modal, DNS-style)
+conda run -n shenfun pytest -q demo/test_thin_gap_comparison.py
 
 # Cylindrical-solver modal benchmarks (Legendre family="L" by default)
 conda run -n shenfun pytest -q demo/test_taylor_couette.py
 ```
 
-Verified results: `py_compile` clean; `test_couette_linear.py` `10 passed`.
+Verified results: `py_compile` clean; `test_couette_linear.py` `10 passed`;
+`test_thin_gap_comparison.py` `30 passed`; `test_taylor_couette.py` `25 passed`.
 
-`test_taylor_couette.py` previously reported `25 passed`.  Note: that suite
-defaults to the Legendre family (`family="L"`), which needs shenfun's optional
-fast-Gauss-Legendre extension (`shenfun.legendre.fastgl.fastgl_wrap`).  When that
-compiled wrapper is **absent**, `shenfun.legendre.fastgl` is supposed to fall
-back to NumPy, but the fallback only catches `ModuleNotFoundError` and the bare
-`from . import fastgl_wrap` can instead raise an `ImportError` ("partially
-initialized module ... circular import"), which makes every `family="L"` test
-error out at import.  If you hit `17 failed, 8 passed` with that traceback, the
-new dense-layer code is **not** at fault (the failures reproduce on a pristine
-tree); build the `fastgl` extension, or run the Chebyshev path, e.g.
+> **Legendre `fastgl` note (partial source-only fix).**  The cylindrical solvers
+> default to `family="L"`, which relies on shenfun's compiled extensions.  When
+> the `fastgl` wrapper is absent the bare `from . import fastgl_wrap` raises a
+> plain `ImportError` ("partially initialized module ... circular import"), not
+> `ModuleNotFoundError`.  The fallback in `shenfun/legendre/fastgl/__init__.py`
+> now catches `ImportError` and substitutes a NumPy Gauss-Legendre rule for both
+> `leggauss` and `getGLPair`, removing that crash and the `getGLPair`-is-`None`
+> trap.  This does **not** fully enable a source-only `family="L"`: the Legendre
+> `DLT` additionally needs the compiled `Leg2Cheb` (`shenfun.optimization.cython`),
+> so a checkout without built extensions still fails when constructing a Legendre
+> space.  The numbers below were produced against a built/installed shenfun
+> (`test_taylor_couette.py` `25 passed`); without compiled extensions use the
+> Chebyshev path:
 
 ```bash
 conda run -n shenfun python - <<'PY'

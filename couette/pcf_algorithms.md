@@ -1,17 +1,32 @@
 # Plane-Couette (MHD) solvers — algorithm & numerics reference
 
 Audit-oriented description of the numerical methods used by the Cartesian
-plane-Couette flow (PCF) demos in this directory:
+plane-Couette flow (PCF) **nonlinear DNS** solvers in this directory.  Sections
+1-12 describe those KMM solvers; the **linear-stability and apples-to-apples
+comparison layer** (added later) is in [§13](#13-linear-stability-and-apples-to-apples-comparison-layer).
 
 | file | class | physics | base class |
 |------|-------|---------|------------|
 | `pcf_fluctuations_corrected.py` | `PlaneCouetteFluctuation` | hydrodynamic PCF (fluctuation form) | `ChannelFlow.KMM` |
+| `pcf_fluctuations_divV.py` | `PlaneCouetteFluctuation` | hydro PCF variant, extra `div(u)` diagnostics | `KMM` |
 | `pcf_mhd_divfree.py` | `PlaneCouetteMHDDivFree` | resistive MHD, divergence-free `B` via vector potential | `KMM` |
 | `pcf_mhd_mri_shearpy.py` | `PlaneCouetteMRIShearpy` | MHD + rotation/shear + imposed net field (MRI) | `PlaneCouetteMHDDivFree` |
 | `test_pcf_mhd_divfree.py` | — | pytest: `div(B)`/`div(u)` at roundoff | — |
 | `test_pcf_mhd_mri_shearpy.py` | — | pytest: net-flux MRI exponential growth | — |
 
-The three solvers form an inheritance chain
+> **Multiple approaches.**  PCF is solved/analysed here several complementary
+> ways.  *Nonlinear DNS:* the KMM velocity-vorticity solvers in this table
+> (Sections 1-12).  *Linear stability* (eigenvalues / optimal transient growth):
+> a dense Chebyshev-collocation operator (`_pcf_linear.PlaneCouetteLinear`) **and**
+> a shenfun-Galerkin operator (`pcf_galerkin_linear.PlaneCouetteGalerkinLinear`)
+> -- same primitive variables, different discretisation; the DNS scripts also
+> expose the collocation operator through a `--linear {eigs,nonmodal}` flag.
+> *DNS-style linear time stepping:* `pcf_imexrk_linear.PlaneCouetteIMEXRKLinearStepper`.
+> All of these, plus the thin-gap PCF↔Taylor-Couette comparison, are covered in
+> [§13](#13-linear-stability-and-apples-to-apples-comparison-layer).  See
+> `README_Couette.md` ("Which approach to use") for a decision table.
+
+The three KMM solvers form an inheritance chain
 (`KMM → PlaneCouetteFluctuation`, and `KMM → PlaneCouetteMHDDivFree →
 PlaneCouetteMRIShearpy`), so the velocity discretization and time integration
 are **identical** across all three; the MHD solvers only add a magnetic field
@@ -174,9 +189,11 @@ are pre-factored once per Fourier mode in `assemble()`.
 ### 4.2 Time stepper
 
 `self.PDE = globals().get(timestepper)` selects a shenfun IMEX additive
-Runge–Kutta integrator by name. Default here is **`IMEXRK222`** (the
-2-stage, 2nd-order, L-stable Ascher–Ruuth–Spiteri (2,2,2) scheme);
-`IMEXRK3` and `IMEXRK443` are also accepted. The driver loop is
+Runge–Kutta integrator by name. The base `KMM` constructor default is
+`IMEXRK3`, but the PCF subclasses here set **`IMEXRK222`** (the 2-stage,
+2nd-order, L-stable Ascher–Ruuth–Spiteri (2,2,2) scheme) as their default; the
+`--timestepper` CLI flag overrides it (`IMEXRK111/222/3/443` accepted). The
+driver loop is
 (`pcf_mhd_divfree.py:458-495`, mirroring `KMM.solve`):
 
 ```
@@ -409,3 +426,80 @@ Common flags: `--family {C,L}`, `--nx/--ny/--nz`, `--Re`, `--Rm`, `--dt`,
 `--max-divb-l2/--max-divu-l2` with `--assert-every-step`. MPI: `mpirun -np K
 python …` (wall-normal `x` stays local; the `(0,0)`-mode solve and the
 spectral/parasite diagnostics assume an `x`-slab decomposition).
+
+All three DNS CLIs also accept `--linear {dns,eigs,nonmodal}` (default `dns` =
+normal time integration). With `eigs`/`nonmodal` the script does **not** step in
+time; it builds a dense `_pcf_linear.PlaneCouetteLinear` at the matching
+parameters and prints the leading spectrum / optimal transient growth — see §13.
+
+---
+
+## 13. Linear-stability and apples-to-apples comparison layer
+
+Sections 1-12 cover the nonlinear KMM DNS. The linear analysis is done by
+separate, lighter operators that share a common backend with the Taylor-Couette
+linear solvers — by design, so the two geometries can be compared term-for-term.
+
+### 13.1 Two PCF linear operators (collocation and Galerkin)
+
+Both solve the primitive-variable perturbation problem for `U(x) = Uoffset +
+Uprime·x` with `q(x)·exp(s t + i k_y y + i k_z z)` (requires `k_y²+k_z² > 0`),
+returning the generalized spectrum `L q = s M q` and energy-norm optimal
+transient growth. Velocity is no-slip Dirichlet; pressure is a Lagrange
+multiplier; MHD adds primitive `b=(b_x,b_y,b_z)` with a **magnetic-pressure**
+multiplier `phi` enforcing `div(b)=0`, and an imposed uniform `B0=(0,b_y,b_z)`.
+
+| | `_pcf_linear.PlaneCouetteLinear` | `pcf_galerkin_linear.PlaneCouetteGalerkinLinear` |
+|---|---|---|
+| discretisation | dense **Chebyshev-collocation** (`cheb_lobatto`) | **shenfun-Galerkin** (`inner`/`Dx`, sympy `1/r`-free Cartesian coeffs) |
+| dependencies | NumPy + SciPy only (no shenfun) | shenfun + sympy |
+| energy norm | nodal quadrature (`diag(weights)`) | modal Gram matrix (`inner`) |
+| BC walls (`magnetic_bc`) | `conducting` (`b_x=0`, Neumann `b_y'=b_z'=0`) / `dirichlet` (`b=0`, diagnostic) | same |
+| API | `.couette(...)`, `.shearpy(...)`, `.eigs(ky,kz)`, `.growth_rate`, `.nonmodal_growth(...,energy=)` | `.couette(...)`, `.shearbox(...)`, `.eigs`, `.nonmodal_growth`, `.assemble_parts` |
+
+They agree to spectral accuracy where they overlap; the *non-modal* gain differs
+by the norm discretisation (Gram vs nodal), so transient growth is only
+apples-to-apples **within** one discretisation (Galerkin↔Galerkin or
+collocation↔collocation). The collocation operator is what the DNS `--linear`
+flag wraps.
+
+### 13.2 Shared backend (`_linear_analysis.py`)
+
+`FINITE_CAP = 1e8` (drops the spurious infinite eigenvalues from the singular-`M`
+constraint rows; insensitive 1e6-1e12); `finite_eigensystem` (filter + sort by
+`Re(s)`); `transient_growth_from_eigs` (finite modal expansion → energy-norm
+propagator SVD); `parse_times`; `match_eigenvalues` (one-to-one Hungarian
+set-match of two spectra — orientation/tie-break robust); and the IMEXRK
+`imex_tableau` / `imexrk_step` shared with §13.3. Pure NumPy/SciPy.
+
+### 13.3 DNS-style linear time stepping (`pcf_imexrk_linear.py`)
+
+`PlaneCouetteIMEXRKLinearStepper` advances the **Galerkin** operator with the
+same IMEXRK tableaux as the PCF DNS (`IMEXRK111/222/443`, default 222), using the
+shared `imexrk_step`. Split `diffusion` (default: viscous/resistive diffusion +
+the pressure/continuity and magnetic-pressure/solenoidal saddle-point rows
+implicit; advection/coupling explicit) mirrors the DNS IMEX split; `full` is a
+stiff implicit reference. The constraint (zero-mass) blocks are pinned per stage:
+`pblocks=[3,7]` for MHD (`p` and `phi`) or `[3]` for hydro. Seeding the leading
+eigenmode and integrating recovers `Re(s)` to ~1e-8 — this is the only path that
+exercises the time integrator itself, and the PCF side of `thin_gap_compare --dns`.
+
+### 13.4 Thin-gap apples-to-apples comparison
+
+`thin_gap_common.py` (no shenfun) maps a plane/shearing-box state to a circular
+annulus (`ShearScales`, `annulus_for_plane_couette_limit`,
+`annulus_for_shearing_box_limit`); `thin_gap_compare.py` then compares the PCF
+operators above against the Taylor-Couette operators at three levels —
+eigenvalues (set-matched), `--nonmodal` (Galerkin↔Galerkin and
+collocation↔collocation pairings), and `--dns` (shared IMEXRK). The non-rotating
+`--limit plane` is a **singular** limit (the annulus is Rayleigh/Taylor-unstable
+at finite curvature); `--limit shearing` is the natural test. See
+`taylor_couette_algorithms.md` §5 and `README_Couette.md`.
+
+### 13.5 Linear-layer tests
+
+`test_couette_linear.py` (operator unit tests: half-gap reference scaling,
+eig/non-modal sanity, the synthetic transient-growth check) and
+`test_thin_gap_comparison.py` (the apples-to-apples regressions: set-matching,
+plane-limit curvature convergence, Rayleigh flag, PCF IMEXRK eigenmode growth,
+DNS-style PCF↔TC agreement, the two non-modal pairings).

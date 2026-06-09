@@ -61,7 +61,14 @@ class PlaneCouetteLinear:
 
     Coordinates follow the PCF demos: ``x`` is wall-normal, ``y`` streamwise, and
     ``z`` spanwise/vertical.  The base flow is ``U(x) e_y`` with constant
-    ``Uprime``.  When ``mhd=True`` a uniform imposed field
+    ``Uprime``.  The wall-normal grid is the Chebyshev-Lobatto set on the **fixed**
+    reference interval ``x_hat in [-1, 1]``.  To represent a physical half-gap
+    ``h != 1`` (``x = h*x_hat``) without changing physical time, rescale the
+    inputs into reference coordinates: ``ky_hat = ky*h``, ``kz_hat = kz*h``,
+    ``nu_hat = nu/h**2``, ``eta_hat = eta/h**2``, ``bz_hat = bz/h`` (the
+    eigenvalues ``s`` are then returned in physical units).  ``thin_gap_compare``
+    does exactly this; see ``test_pcf_existing_collocation_reference_scales_with_half_gap``.
+    When ``mhd=True`` a uniform imposed field
     ``B0=(0, by, bz)`` is included and magnetic perturbations are projected with
     a magnetic-pressure Lagrange multiplier.
 

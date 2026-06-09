@@ -2,6 +2,14 @@
 
 Date: 2026-05-28
 
+> **See also.**  This is the *nonlinear DNS* (vector-potential `B=curl(A)`)
+> solver.  Its linear-stability siblings — the dense collocation
+> `_pcf_linear.PlaneCouetteLinear` and Galerkin
+> `pcf_galerkin_linear.PlaneCouetteGalerkinLinear` (primitive `b` + magnetic
+> pressure) — plus the apples-to-apples PCF↔Taylor-Couette comparison
+> (`thin_gap_compare.py`) are documented in `pcf_algorithms.md` §13 and
+> `README_Couette.md`.
+
 ## Implemented solver
 
 The new solver is `demo/pcf_mhd_divfree.py`. It keeps the existing `ChannelFlow.KMM` Plane Couette velocity formulation, but it does not advance the magnetic field components directly. Instead it advances a vector potential `A` and derives
@@ -25,6 +33,10 @@ This is the key intervention. `B` is recomputed from `A` before every nonlinear 
 The wall model is the simple vector-potential and no-normal-flux model implied by `A_y = A_z = 0` at the walls, so `B_x = d_y A_z - d_z A_y = 0` at `x = +/-1`. This is enough for a local PCF MHD integrator with a discrete solenoidal magnetic field.
 
 ## Why earlier direct-B attempts failed
+
+*(Historical: the `pcf_mhd.py` / `pcf_mhd_fixed.py` exploratory files referenced
+below were removed once the vector-potential solver landed; this section is kept
+because it explains why the surviving `pcf_mhd_divfree.py` uses `B = curl(A)`.)*
 
 `pcf_mhd.py` evolved `B` directly in a TD-based vector space and also stored curl-like quantities in TD components. That is incompatible with the wall-normal derivative mapping: an x-derivative of a Dirichlet field naturally lives in the unconstrained `TC` space, not another `TD` space. Those extra projections break the operator identities that the scheme needs.
 

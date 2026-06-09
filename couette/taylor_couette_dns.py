@@ -311,6 +311,10 @@ class AxisymmetricTCDNS:
         # shift nonlinear history
         self.N_old[:] = self.N_hat
         self._have_old = True
+        if not hasattr(self, "_t"):
+            self._t, self._tstep = 0.0, 0
+        self._t += self.dt
+        self._tstep += 1
 
     # ------------------------------------------------------------------
     # initial conditions
@@ -446,8 +450,6 @@ class AxisymmetricTCDNS:
         nsteps = int(round(end_time / self.dt))
         for k in range(1, nsteps + 1):
             self.step()
-            self._tstep += 1
-            self._t += self.dt
             if assert_finite and not np.all(np.isfinite(self.u_hat)):
                 raise RuntimeError(f"non-finite velocity at t={self._t:g}")
             if (moderror and self._tstep % moderror == 0) or k == nsteps:
@@ -479,6 +481,29 @@ class AxisymmetricTCDNS:
         E1 = self.energy()
         dt_meas = n1 * self.dt
         return 0.5 * math.log(E1 / E0) / dt_meas
+
+    # ------------------------------------------------------------------
+    # checkpoint / restart (exact CNAB2 continuation)
+    # ------------------------------------------------------------------
+    def state_dict(self):
+        """Serializable state for an exact restart: perturbation velocity
+        coefficients, the Adams-Bashforth-2 history, and the clock."""
+        return {
+            "u_hat": np.array(self.u_hat, copy=True),
+            "N_old": np.array(self.N_old, copy=True),
+            "have_old": bool(self._have_old),
+            "t": float(getattr(self, "_t", 0.0)),
+            "tstep": int(getattr(self, "_tstep", 0)),
+        }
+
+    def load_state_dict(self, state):
+        """Restore a checkpoint produced by :meth:`state_dict`."""
+        self.u_hat[:] = state["u_hat"]
+        self.N_old[:] = state["N_old"]
+        self._have_old = bool(state["have_old"])
+        self._t = float(state["t"])
+        self._tstep = int(state["tstep"])
+        return self
 
 
 # ===========================================================================
@@ -682,6 +707,10 @@ class TaylorCouetteDNS:
         self.p_hat[:] = self.sol[3]
         self.N_old[:] = self.N_hat
         self._have_old = True
+        if not hasattr(self, "_t"):
+            self._t, self._tstep = 0.0, 0
+        self._t += self.dt
+        self._tstep += 1
 
     # ------------------------------------------------------------------
     def seed_linear_eigenmode(self, m=1, kz_mode=1, amp=1e-6, which=0):
@@ -769,8 +798,6 @@ class TaylorCouetteDNS:
         nsteps = int(round(end_time / self.dt))
         for k in range(1, nsteps + 1):
             self.step()
-            self._tstep += 1
-            self._t += self.dt
             if assert_finite and not np.all(np.isfinite(self.u_hat)):
                 raise RuntimeError(f"non-finite velocity at t={self._t:g}")
             if (moderror and self._tstep % moderror == 0) or k == nsteps:
@@ -1066,6 +1093,10 @@ class AxisymmetricMRIDNS:
         self.p_hat[:] = self.sol[3]
         self.N_old[:] = self.N_hat
         self._have_old = True
+        if not hasattr(self, "_t"):
+            self._t, self._tstep = 0.0, 0
+        self._t += self.dt
+        self._tstep += 1
 
     # ------------------------------------------------------------------
     def seed_linear_eigenmode(self, kz_mode=1, amp=1e-6, which=0):
@@ -1176,8 +1207,6 @@ class AxisymmetricMRIDNS:
         nsteps = int(round(end_time / self.dt))
         for k in range(1, nsteps + 1):
             self.step()
-            self._tstep += 1
-            self._t += self.dt
             if assert_finite and not np.all(np.isfinite(self.x)):
                 raise RuntimeError(f"non-finite field at t={self._t:g}")
             if (moderror and self._tstep % moderror == 0) or k == nsteps:
@@ -1188,6 +1217,29 @@ class AxisymmetricMRIDNS:
                     print(f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
                           f"divu={d['divu']:.1e} divb={d['divb']:.1e}")
         return self.diagnostics(self._t, self._tstep)
+
+    # ------------------------------------------------------------------
+    # checkpoint / restart (exact CNAB2 continuation)
+    # ------------------------------------------------------------------
+    def state_dict(self):
+        """Serializable state for an exact restart: the six (u, b) field
+        coefficients, the Adams-Bashforth-2 history, and the clock."""
+        return {
+            "x": np.array(self.x, copy=True),
+            "N_old": np.array(self.N_old, copy=True),
+            "have_old": bool(self._have_old),
+            "t": float(getattr(self, "_t", 0.0)),
+            "tstep": int(getattr(self, "_tstep", 0)),
+        }
+
+    def load_state_dict(self, state):
+        """Restore a checkpoint produced by :meth:`state_dict`."""
+        self.x[:] = state["x"]
+        self.N_old[:] = state["N_old"]
+        self._have_old = bool(state["have_old"])
+        self._t = float(state["t"])
+        self._tstep = int(state["tstep"])
+        return self
 
 
 # ===========================================================================
@@ -1507,6 +1559,10 @@ class TaylorCouetteMRIDNS:
         self.p_hat[:] = self.sol[3]
         self.N_old[:] = self.N_hat
         self._have_old = True
+        if not hasattr(self, "_t"):
+            self._t, self._tstep = 0.0, 0
+        self._t += self.dt
+        self._tstep += 1
 
     # ------------------------------------------------------------------
     def seed_linear_eigenmode(self, m=0, kz_mode=1, amp=1e-6, which=0):
@@ -1635,8 +1691,6 @@ class TaylorCouetteMRIDNS:
         nsteps = int(round(end_time / self.dt))
         for k in range(1, nsteps + 1):
             self.step()
-            self._tstep += 1
-            self._t += self.dt
             if assert_finite and not np.all(np.isfinite(self.x)):
                 raise RuntimeError(f"non-finite field at t={self._t:g}")
             if (moderror and self._tstep % moderror == 0) or k == nsteps:

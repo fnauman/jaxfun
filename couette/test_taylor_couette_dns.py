@@ -115,6 +115,87 @@ def test_incompressibility_to_roundoff():
         assert dns.divergence_linf() < 1e-9 * max(umax, 1e-12)
 
 
+# ---------------------------------------------------------------------------
+# Production gates: restart-equivalence, temporal order, energy-balance closure
+# ---------------------------------------------------------------------------
+def test_restart_equivalence_axisym():
+    """PRODUCTION GATE (restart): a checkpoint taken mid-run via state_dict() and
+    reloaded into a fresh axisymmetric TC DNS reproduces the uninterrupted run
+    bit-for-bit, including the Adams-Bashforth-2 nonlinear history."""
+    def fresh():
+        d = AxisymmetricTCDNS(CircularCouette(1.0, 2.0, 1.0, 0.0), nu=1e-2,
+                              Nr=24, Nz=8, Lz=2.0, dt=2e-3, family="C", dealias=1.0)
+        d.set_perturbation(amp=1e-4, kz_mode=1)
+        return d
+
+    nsteps, split = 20, 10
+    direct = fresh()
+    for _ in range(nsteps):
+        direct.step()
+
+    first = fresh()
+    for _ in range(split):
+        first.step()
+    checkpoint = first.state_dict()
+    assert checkpoint["t"] == pytest.approx(split * first.dt)
+    assert checkpoint["tstep"] == split
+
+    restarted = fresh()
+    restarted.load_state_dict(checkpoint)
+    restarted.run((nsteps - split) * restarted.dt)
+
+    assert np.max(np.abs(np.array(direct.u_hat) - np.array(restarted.u_hat))) < 1e-12
+    assert direct.state_dict()["t"] == pytest.approx(nsteps * direct.dt)
+    assert restarted.state_dict()["t"] == pytest.approx(nsteps * restarted.dt)
+    assert direct.state_dict()["tstep"] == restarted.state_dict()["tstep"] == nsteps
+    assert abs(direct.energy() - restarted.energy()) < 1e-12
+
+
+@pytest.mark.slow
+def test_temporal_order_cnab2_axisym():
+    """PRODUCTION GATE (temporal order): the axisymmetric TC DNS is 2nd-order in
+    time. The measured growth-rate error vs the linear eigenvalue shrinks like
+    dt^2 under refinement (fitted log-log slope ~2)."""
+    base = CircularCouette(1.0, 2.0, 1.0, 0.0)
+    kz = 3.13
+    Lz = 2 * math.pi / kz
+
+    def rate_error(dt, T=0.4):
+        d = AxisymmetricTCDNS(base, nu=1e-2, Nr=40, Nz=8, Lz=Lz, dt=dt,
+                              family="C", dealias=1.0)
+        s_lin = d.seed_linear_eigenmode(kz_mode=1, amp=1e-6)
+        e0 = d.energy()
+        d.run(T)
+        s_dns = 0.5 * math.log(d.energy() / e0) / T
+        return abs(s_dns - s_lin.real)
+
+    dts = [4e-3, 2e-3, 1e-3]
+    errs = [rate_error(dt) for dt in dts]
+    assert all(b < a for a, b in zip(errs, errs[1:]))
+    slope = float(np.polyfit(np.log(dts), np.log(errs), 1)[0])
+    assert slope > 1.8
+
+
+def test_energy_balance_single_exponential():
+    """PRODUCTION GATE (energy balance): in the linear regime the kinetic-energy
+    budget closes to a single clean exponential -- the growth rate measured over
+    two successive windows agrees, so d ln E / dt (shear production minus viscous
+    dissipation, per unit energy) is steady."""
+    base = CircularCouette(1.0, 2.0, 1.0, 0.0)
+    d = AxisymmetricTCDNS(base, nu=1e-2, Nr=40, Nz=8, Lz=2 * math.pi / 3.13,
+                          dt=1e-3, family="C", dealias=1.0)
+    d.seed_linear_eigenmode(kz_mode=1, amp=1e-6)
+    d.run(0.2)
+    e0 = d.energy()
+    d.run(0.1)
+    e1 = d.energy()
+    d.run(0.1)
+    e2 = d.energy()
+    r1 = 0.5 * math.log(e1 / e0) / 0.1
+    r2 = 0.5 * math.log(e2 / e1) / 0.1
+    assert abs(r1 - r2) / abs(r1) < 1e-6
+
+
 def test_dealiased_step_is_finite():
     base = CircularCouette(1.0, 2.0, 1.0, 0.0)
     dns = AxisymmetricTCDNS(base, nu=1e-2, Nr=32, Nz=16, Lz=2.0, dt=2e-3,
@@ -227,6 +308,88 @@ def test_mri_growth_matches_eigensolver():
     assert abs(s_dns - s.real) < 1e-3 * abs(s.real)
     assert d["divu"] < 1e-9
     assert d["divb"] < 1e-9
+
+
+def test_mri_restart_equivalence():
+    """PRODUCTION GATE (restart, MHD): a checkpoint taken mid-run via state_dict()
+    and reloaded into a fresh axisymmetric MRI DNS reproduces the uninterrupted run
+    bit-for-bit (the six (u,b) field coefficients + the AB2 history)."""
+    base = _kep_base()
+
+    def fresh():
+        d = AxisymmetricMRIDNS(base, B0=0.1, nu=1e-3, eta_mag=1e-3, Nr=32, Nz=8,
+                               Lz=2 * math.pi / 6.0, dt=2e-3, family="C", dealias=1.0)
+        d.seed_linear_eigenmode(kz_mode=1, amp=1e-6)
+        return d
+
+    nsteps, split = 16, 8
+    direct = fresh()
+    for _ in range(nsteps):
+        direct.step()
+
+    first = fresh()
+    for _ in range(split):
+        first.step()
+    checkpoint = first.state_dict()
+    assert checkpoint["t"] == pytest.approx(split * first.dt)
+    assert checkpoint["tstep"] == split
+
+    restarted = fresh()
+    restarted.load_state_dict(checkpoint)
+    restarted.run((nsteps - split) * restarted.dt)
+
+    assert np.max(np.abs(np.array(direct.x) - np.array(restarted.x))) < 1e-12
+    assert direct.state_dict()["t"] == pytest.approx(nsteps * direct.dt)
+    assert restarted.state_dict()["t"] == pytest.approx(nsteps * restarted.dt)
+    assert direct.state_dict()["tstep"] == restarted.state_dict()["tstep"] == nsteps
+    de, dm = direct.energy()
+    re, rm = restarted.energy()
+    assert abs(de - re) < 1e-14 and abs(dm - rm) < 1e-14
+
+
+def test_mri_energy_balance_single_exponential():
+    """PRODUCTION GATE (energy balance, MHD): in the linear MRI regime the total
+    (kinetic + magnetic) energy grows as a single clean exponential -- the growth
+    rate measured over two successive windows agrees, so MRI production minus
+    (viscous + Ohmic) dissipation per unit energy is steady."""
+    base = _kep_base()
+    d = AxisymmetricMRIDNS(base, B0=0.1, nu=1e-3, eta_mag=1e-3, Nr=40, Nz=8,
+                           Lz=2 * math.pi / 6.0, dt=2e-3, family="C", dealias=1.0)
+    d.seed_linear_eigenmode(kz_mode=1, amp=1e-7)
+    d.run(0.3)
+    e0 = sum(d.energy())
+    d.run(0.2)
+    e1 = sum(d.energy())
+    d.run(0.2)
+    e2 = sum(d.energy())
+    r1 = 0.5 * math.log(e1 / e0) / 0.2
+    r2 = 0.5 * math.log(e2 / e1) / 0.2
+    assert abs(r1 - r2) / abs(r1) < 1e-3
+
+
+@pytest.mark.slow
+def test_mri_temporal_order_cnab2():
+    """PRODUCTION GATE (temporal order, MHD): the axisymmetric MRI DNS is 2nd-order
+    in time -- the measured growth-rate error vs the linear MRI eigenvalue shrinks
+    like dt^2 under refinement (fitted log-log slope ~2)."""
+    base = _kep_base()
+    kz = 6.0
+    Lz = 2 * math.pi / kz
+
+    def rate_error(dt, T=0.4):
+        d = AxisymmetricMRIDNS(base, B0=0.1, nu=1e-3, eta_mag=1e-3, Nr=40, Nz=8,
+                               Lz=Lz, dt=dt, family="C", dealias=1.0)
+        s_lin = d.seed_linear_eigenmode(kz_mode=1, amp=1e-7)
+        e0 = d.diagnostics(0, 0)["E"]
+        df = d.run(T)
+        s_dns = 0.5 * math.log(df["E"] / e0) / T
+        return abs(s_dns - s_lin.real)
+
+    dts = [4e-3, 2e-3, 1e-3]
+    errs = [rate_error(dt) for dt in dts]
+    assert all(b < a for a, b in zip(errs, errs[1:]))
+    slope = float(np.polyfit(np.log(dts), np.log(errs), 1)[0])
+    assert slope > 1.8
 
 
 def test_mri_random_seed_is_solenoidal():

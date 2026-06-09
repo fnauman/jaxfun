@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.linalg import eig, svdvals
+from scipy.optimize import linear_sum_assignment
 
 # Single shared magnitude cap for the *non-modal* (transient-growth) modal
 # basis.  Generalised eigenproblems ``L q = s M q`` with singular ``M`` (the
@@ -85,6 +86,104 @@ def transient_growth_from_eigs(evals, evecs, metric, times, metric_rtol=1.0e-10)
             }
         )
     return out
+
+
+def match_eigenvalues(reference, candidates):
+    r"""Nearest-neighbour match each reference eigenvalue to a candidate set.
+
+    The plane-Couette and Taylor-Couette spectra must be compared as *sets*, not
+    by their single "leading" eigenvalue.  A (near-)conjugate-symmetric spectrum
+    has growth rates that are degenerate between the ``+`` and ``-`` frequency
+    members of a conjugate pair, so which one sorts first is an arbitrary
+    numerical tie-break.  Plane Couette at small ``ky`` is essentially
+    conjugate-symmetric while the Taylor-Couette ``m`` term lifts the degeneracy,
+    so the two "leading" picks can disagree in the *sign* of the frequency even
+    though the full spectra agree.  Matching each reference eigenvalue to its
+    nearest neighbour in the complex plane is tie-break- and orientation-robust
+    and yields a genuine full-complex comparison.
+
+    The matching is **one-to-one**: a minimum-cost (Hungarian) assignment
+    consumes each candidate at most once, so two references can never collapse
+    onto the same nearest candidate and silently hide an unmatched outlier --
+    that outlier instead surfaces as a large residual (or, when there are fewer
+    candidates than references, as a ``nan`` match).
+
+    Returns a list of dicts ``{'ref', 'match', 'delta'}`` (one per reference
+    eigenvalue), where ``delta = match - ref`` is the complex residual.
+    """
+    ref = np.asarray(reference, dtype=complex)
+    cand = np.asarray(candidates, dtype=complex)
+    nan = complex(float("nan"), float("nan"))
+    out = [{"ref": complex(z), "match": nan, "delta": nan} for z in ref]
+    if ref.size == 0 or cand.size == 0:
+        return out
+    cost = np.abs(ref[:, None] - cand[None, :])      # (n_ref, n_cand)
+    rows, cols = linear_sum_assignment(cost)         # one-to-one min-cost match
+    for r, c in zip(rows, cols):
+        out[int(r)] = {"ref": complex(ref[r]), "match": complex(cand[c]),
+                       "delta": complex(cand[c] - ref[r])}
+    return out
+
+
+def imex_tableau(name):
+    """Return the shenfun IMEXRK ``(a, b)`` Butcher tableau by scheme name.
+
+    Shared by the plane-Couette and Taylor-Couette linear IMEXRK steppers so the
+    two geometries are advanced by the *same* time-integration coefficients.
+    """
+    name = name.upper()
+    if name == "IMEXRK111":
+        a = np.array([[0, 0], [0, 1]], dtype=float)
+        b = np.array([[0, 0], [1, 0]], dtype=float)
+    elif name == "IMEXRK222":
+        gamma = (2 - np.sqrt(2)) / 2
+        delta = 1 - 1 / (2 * gamma)
+        a = np.array([[0, 0, 0],
+                      [0, gamma, 0],
+                      [0, 1 - gamma, gamma]], dtype=float)
+        b = np.array([[0, 0, 0],
+                      [gamma, 0, 0],
+                      [delta, 1 - delta, 0]], dtype=float)
+    elif name == "IMEXRK443":
+        a = np.array([[0, 0, 0, 0, 0],
+                      [0, 1 / 2, 0, 0, 0],
+                      [0, 1 / 6, 1 / 2, 0, 0],
+                      [0, -1 / 2, 1 / 2, 1 / 2, 0],
+                      [0, 3 / 2, -3 / 2, 1 / 2, 1 / 2]], dtype=float)
+        b = np.array([[0, 0, 0, 0, 0],
+                      [1 / 2, 0, 0, 0, 0],
+                      [11 / 18, 1 / 18, 0, 0, 0],
+                      [5 / 6, -5 / 6, 1 / 2, 0, 0],
+                      [1 / 4, 7 / 4, 3 / 4, -7 / 4, 0]], dtype=float)
+    else:
+        raise ValueError("scheme must be IMEXRK111, IMEXRK222, or IMEXRK443")
+    return a, b
+
+
+def imexrk_step(q0, Aimp, Aexp, M, a, b, dt, solve_stage):
+    """Advance one IMEXRK descriptor-system step ``M q' = (Aimp + Aexp) q``.
+
+    ``Aimp`` is treated implicitly (diffusion + saddle-point constraint rows),
+    ``Aexp`` explicitly (advection and the remaining couplings).  ``solve_stage``
+    is an operator-specific callback ``solve_stage(gamma, rhs)`` that solves
+    ``(M - dt*gamma*Aimp) x = rhs`` with the operator's constraint rows pinned.
+
+    Shared between the plane-Couette and Taylor-Couette linear steppers so a
+    DNS-style time-stepped comparison uses identical integrator logic on both.
+    """
+    q0 = np.asarray(q0, dtype=complex)
+    stages = []
+    nstages = a.shape[0] - 1
+    Mq0 = M @ q0
+    for rk in range(nstages):
+        rhs = np.array(Mq0, dtype=complex, copy=True)
+        for j in range(rk + 1):
+            source = q0 if j == 0 else stages[j - 1]
+            rhs = rhs + dt * b[rk + 1, j] * (Aexp @ source)
+        for j in range(rk):
+            rhs = rhs + dt * a[rk + 1, j + 1] * (Aimp @ stages[j])
+        stages.append(solve_stage(a[rk + 1, rk + 1], rhs))
+    return stages[-1]
 
 
 def print_eigenvalues(evals, header="leading eigenvalues"):

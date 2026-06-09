@@ -5,11 +5,15 @@ cylindrical-annulus (Taylor–Couette) demos in this directory:
 
 | file | class(es) | what it computes | method |
 |------|-----------|------------------|--------|
-| `taylor_couette_linear.py` | `CircularCouette`, `TaylorCouetteLinear` | hydrodynamic linear stability (growth rate `s`) | global generalized eigenproblem |
-| `taylor_couette_mri.py` | `TaylorCouetteMRI` (+ local WKB helpers) | resistive-MHD linear stability (MRI) | global generalized eigenproblem |
-| `taylor_couette_dns.py` | `AxisymmetricTCDNS`, `TaylorCouetteDNS`, `AxisymmetricMRIDNS`, `TaylorCouetteMRIDNS` | nonlinear time-stepping DNS (hydro & MHD, 2-D & 3-D) | IMEX CNAB2 pseudo-spectral |
+| `taylor_couette_linear.py` | `CircularCouette`, `TaylorCouetteLinear` | hydrodynamic linear stability (growth rate `s`, non-modal growth) | global generalized eigenproblem, **shenfun-Galerkin** |
+| `taylor_couette_mri.py` | `TaylorCouetteMRI` (+ local WKB helpers) | resistive-MHD linear stability (MRI) | global generalized eigenproblem, **shenfun-Galerkin** |
+| `taylor_couette_collocation.py` | `TaylorCouetteCollocationLinear` | hydro + MHD linear stability (cross-check / thin-gap partner) | dense **Chebyshev-collocation** |
+| `taylor_couette_imexrk.py` | `TaylorCouetteIMEXRKLinearStepper` | DNS-style linear time stepping of the Galerkin operators | dense descriptor-system **IMEXRK** |
+| `taylor_couette_dns.py` | `AxisymmetricTCDNS`, `TaylorCouetteDNS`, `AxisymmetricMRIDNS`, `TaylorCouetteMRIDNS` | nonlinear time-stepping DNS (hydro & MHD, 2-D & 3-D) | IMEX **CNAB2** pseudo-spectral |
+| `taylor_couette_imexrk_dns.py` | `AxisymmetricTCIMEXRKDNS`, `AxisymmetricMRIIMEXRKDNS` | axisymmetric nonlinear DNS companion (hydro + conducting MHD) | IMEX **IMEXRK** pseudo-spectral |
 | `test_taylor_couette.py` | — | pytest vs published linear benchmarks | — |
 | `test_taylor_couette_dns.py` | — | pytest vs linear theory & saturation | — |
+| `test_thin_gap_comparison.py` | — | pytest: collocation↔Galerkin agreement + apples-to-apples PCF↔TC | — |
 
 These are the cylindrical companions to the Cartesian plane-Couette demos
 (`pcf_*.py`): they use the **true annulus** `r ∈ [R1, R2]` and the exact
@@ -17,6 +21,31 @@ circular-Couette base flow, so curvature physics (`Ω(r)=a+b/r²`, the Rayleigh
 criterion, epicyclic frequency `κ²`, global wall BCs) is captured directly.
 Physics/validation history lives in `taylor_couette_notes.md`; this file is
 about *how the operators are discretized and solved*.
+
+## 0. Solution approaches (orientation)
+
+Several tasks have **more than one implementation**; the alternatives agree
+where they overlap (checked by `test_thin_gap_comparison.py`):
+
+- **Linear discretisation:** shenfun composite-basis **Galerkin**
+  (`taylor_couette_linear.py`, `taylor_couette_mri.py`; §2.1-2.7) vs dense
+  **Chebyshev-collocation** (`taylor_couette_collocation.py`; §2.8). Galerkin is
+  the production path (critical-Re/Rm, default); collocation is the thin-gap
+  cross-check and the reliable MHD transient-growth partner (it carries a
+  magnetic-pressure projection the Galerkin conducting operator lacks).
+- **Linear time stepping:** the eigen/non-modal route above, vs the DNS-style
+  IMEXRK stepper (`taylor_couette_imexrk.py`; §2.9).
+- **Nonlinear DNS scheme:** **CNAB2** (`taylor_couette_dns.py`; all four classes,
+  3-D supported; §3) vs **IMEXRK** (`taylor_couette_imexrk_dns.py`; axisymmetric
+  only; §3.8). Both nonlinear DNS solvers are **conducting-wall only** for MHD.
+- **MHD walls:** `conducting` (any `m`) vs `insulating` (vacuum match,
+  flux-function, `m=0` only; §2.6). **Insulating is a linear-analysis capability
+  only** — the linear operators (`taylor_couette_mri`, `taylor_couette_collocation`)
+  and the DNS scripts' `--linear-analysis --magnetic-bc insulating` flag (which
+  runs the linear operator, not the time-stepping DNS).
+- **PCF↔TC apples-to-apples** comparison: `thin_gap_compare.py` (§5).
+
+See `README_Couette.md` ("Which approach to use") for a one-glance decision table.
 
 ---
 
@@ -173,11 +202,60 @@ while `ν = Pm·η` and `B0 = S·η/d` are updated consistently — the paramete
 for standard MRI threshold comparisons (conducting `Rm_min ≈ 24.7`, insulating
 `≈ 16.5` as `Pm → 0`).
 
+### 2.8 Dense Chebyshev-collocation operator (`taylor_couette_collocation.py`)
+
+`TaylorCouetteCollocationLinear` is the collocation counterpart to the
+shenfun-Galerkin §2.4-2.5 operators: a **strong-form** discretisation on
+Chebyshev–Lobatto points (`_pcf_linear.cheb_lobatto`, mapped to `[R1,R2]`), with
+the cylindrical `1/r`, `1/r²` carried as `diag(1/r)` matrices and BC rows
+imposed by row-replacement. It is **NumPy/SciPy only** (no shenfun; SciPy only
+for `eig` and the insulating Bessel `iv,kv`). Intended as a thin-gap cross-check,
+not a replacement for the Galerkin solvers.
+
+Two differences from the Galerkin MRI operator matter:
+
+- **Conducting MHD** is an **8-block** system `(u_r,u_θ,u_z,p,b_r,b_θ,b_z,φ)` —
+  it adds a **magnetic-pressure multiplier `φ`** (mirroring the PCF operators)
+  that projects `b` divergence-free. The Galerkin `TaylorCouetteMRI` conducting
+  operator is 7-field with **no** such multiplier (it relies on the conducting
+  BCs). The leading eigenvalues agree either way, but only the φ-projected
+  collocation operator gives reliable MHD **transient growth** — hence the
+  collocation↔collocation rule for non-modal MHD (§5, `README_Couette.md`).
+- **Insulating** reuses the same `m=0` poloidal flux-function `χ`/`b_θ` 6-block
+  form as the Galerkin operator (Bessel vacuum match).
+
+API mirrors the Galerkin operators: `.eigs(m,kz)`, `.growth_rate`,
+`.nonmodal_growth(m,kz,times,energy=)` (insulating energy needs an explicit
+`kz`), `.energy_matrix`. The dense energy norm is the **nodal quadrature**
+`diag(weights·r)` (vs the Galerkin Gram matrix) — so non-modal growth is only
+comparable collocation↔collocation.
+
+### 2.9 DNS-style linear time stepping (`taylor_couette_imexrk.py`)
+
+`TaylorCouetteIMEXRKLinearStepper` advances the **same** generalized systems
+assembled by `TaylorCouetteLinear` / `TaylorCouetteMRI` (via `assemble_parts`,
+so `L = L0 + ν Lnu + η Leta`, `M` singular) as a dense descriptor system
+`M q' = (Aimp + Aexp) q` using the shenfun IMEXRK tableaux. It shares
+`imex_tableau` and the step core `imexrk_step` with the PCF stepper
+(`pcf_imexrk_linear.py`) through `_linear_analysis.py`, which is what makes the
+`--dns` comparison advance both geometries with **identical** integrator logic.
+
+`--split diffusion` (default) treats diffusion plus the pressure/continuity
+saddle-point rows implicitly and the base-flow couplings explicitly; `--split
+full` is a stiff fully-implicit reference. `--scheme` is `IMEXRK111/222/443`
+(default 222); the pressure block (index 3) is pinned per stage; `integrate`
+requires an integer number of `dt` steps. Seeding the leading eigenmode recovers
+its `Re(s)` — the time-integration consistency check, and the TC side of
+`thin_gap_compare --dns`.
+
 ---
 
-## 3. Nonlinear DNS — `taylor_couette_dns.py`
+## 3. Nonlinear DNS
 
-Four classes, increasing capability; all share the same algorithmic skeleton:
+`taylor_couette_dns.py` provides four **CNAB2** classes (§3.1-3.7);
+`taylor_couette_imexrk_dns.py` provides an axisymmetric **IMEXRK** companion
+(§3.8) that reuses the same formulation, spaces and nonlinear terms. Four CNAB2
+classes, increasing capability, all sharing the same algorithmic skeleton:
 
 ```
 AxisymmetricTCDNS   (hydro,  r–z, ∂_θ=0)
@@ -262,6 +340,10 @@ terms); the quadratic nonlinearities are explicit. The base-flow couplings
 imposed-field `B0 ∂_z`) are linear and so are also integrated implicitly via
 Crank–Nicolson.
 
+CNAB2 is not the only stepper: `taylor_couette_imexrk_dns.py` (§3.8) keeps this
+exact formulation but advances with shenfun IMEXRK tableaux (axisymmetric only),
+which is also what the PCF DNS uses.
+
 ### 3.4 Nonlinear term — pseudo-spectral, 3/2 dealiased
 
 `nonlinear(out)` (`:251`, `:649`, `:1001`, `:1437`):
@@ -327,6 +409,25 @@ momentum dealiasing (an explicit ordering invariant in the code).
 (lazy-init). So a growth-rate measured across two calls must use the elapsed
 time `d2['t'] − d1['t']`, not `end_time` — the tests do exactly this.
 
+### 3.8 IMEXRK companion (`taylor_couette_imexrk_dns.py`)
+
+An additive alternative to the CNAB2 stepper of §3.3 that keeps the formulation,
+spectral spaces, nonlinear terms and coupled velocity-pressure (saddle-point)
+solve identical, but advances in time with the shenfun **IMEXRK** tableaux
+(`IMEXRK111/222/443`, `--timestepper`) instead of Crank–Nicolson + AB2. Each RK
+stage does its own coupled implicit solve (diffusion + base couplings + pressure
+implicit; nonlinear advection/Lorentz/EMF explicit), with the stage LHS factor
+cached by the stage coefficient γ.
+
+Scope: **axisymmetric only** — `AxisymmetricTCIMEXRKDNS` (hydro, subclasses
+`AxisymmetricTCDNS`) and `AxisymmetricMRIIMEXRKDNS` (conducting-wall MHD/MRI,
+subclasses `AxisymmetricMRIDNS`); there is no 3-D (`m≠0`) IMEXRK class. It
+supports the same `--seed-linear` eigenmode seeding and reports the measured
+growth, so it both cross-checks the CNAB2 result and matches the PCF DNS
+integrator (the shared `imex_tableau` from `taylor_couette_imexrk.py`). Use
+CNAB2 (§3) for 3-D / non-axisymmetric runs. Neither nonlinear DNS does insulating
+walls — those are a linear-analysis-only capability (§2.6).
+
 ---
 
 ## 4. Tests
@@ -362,20 +463,68 @@ time `d2['t'] − d1['t']`, not `end_time` — the tests do exactly this.
   Taylor-vortex state; seeded MRI amplifies the field by orders of magnitude
   then saturates (axisymmetric and non-axisymmetric), `div(b)` bounded.
 
+### `test_thin_gap_comparison.py` (cross-checks + apples-to-apples)
+- **Collocation ↔ Galerkin agreement:** `TaylorCouetteCollocationLinear` matches
+  `TaylorCouetteLinear` (hydro) and `TaylorCouetteMRI` (MHD conducting and
+  insulating) leading eigenvalues; insulating guards (`m≠0`, `kz=0`) raise.
+- **Shared IMEXRK stepper:** `TaylorCouetteIMEXRKLinearStepper` (hydro / MHD /
+  insulating) recovers the seeded eigenmode growth; integer-step guard.
+- **Apples-to-apples PCF↔TC:** eigenvalue set-matching; shearing-limit hydro/MHD
+  match in the local frame; plane-limit curvature convergence; Rayleigh flag;
+  collocation↔collocation MHD non-modal agreement; DNS-style growth agreement.
+
 ---
 
-## 5. Running
+## 5. Thin-gap apples-to-apples comparison
+
+`thin_gap_compare.py` places the plane-Couette (`pcf_*`) and Taylor-Couette
+linear operators on a common footing and compares them at three levels with
+**matched discretisation**. `thin_gap_common.py` (no shenfun) supplies the
+scalings (`ShearScales`) and the annulus maps
+(`annulus_for_plane_couette_limit`, `annulus_for_shearing_box_limit`) that turn
+a plane/shearing-box mid-gap state into a circular annulus; the TC eigenvalues
+are reported in the **local frame** rotating at the mid-gap `Ω0` (analytic
+Doppler shift `+i m Ω0`).
+
+1. **Eigenvalues** — matched as *sets* (`_linear_analysis.match_eigenvalues`,
+   one-to-one Hungarian assignment), robust to the `±`-frequency tie-break of a
+   near-conjugate-symmetric spectrum and to the PCF `+ky` vs TC `+m` orientation.
+2. **Non-modal growth** (`--nonmodal`) — only apples-to-apples *within* a
+   discretisation: Galerkin↔Galerkin (modal Gram norm) and
+   collocation↔collocation (nodal quadrature norm). MHD magnetic/total transient
+   growth is reliable only in the collocation pairing (§2.8); for the Galerkin
+   pairing use `--energy kinetic`.
+3. **DNS-style** (`--dns`) — both geometries advanced by the same IMEXRK
+   integrator (§2.9 + `pcf_imexrk_linear.py`), comparing measured eigenmode growth.
+
+`--limit` defaults to **`plane`**, the *singular* non-rotating limit: the annulus
+is centrifugally (Taylor) unstable at any finite curvature, so the residual is
+`O(curvature)` and the tool prints a Rayleigh-stability warning. Use
+`--limit shearing` (Rayleigh-stable) as the natural test, or a very small
+`--curvature` (`1e-4` or below) for the plane limit.
+
+---
+
+## 6. Running
 
 ```bash
 # from demo/, in the shenfun conda environment
 # linear stability (kz scan or single kz):
 python taylor_couette_linear.py --R1 1 --R2 2 --Omega1 1 --Omega2 0 --m 0
 python taylor_couette_mri.py --magnetic-bc conducting --B0 0.1 --eta-mag 1e-3 --local-check
+# alternative discretisation / time stepper:
+python taylor_couette_collocation.py --m 0 --kz 3.16 --nu 1e-3        # dense collocation
+python taylor_couette_imexrk.py --m 0 --kz 3.0 --end-time 0.05        # DNS-style IMEXRK (linear)
 
 # nonlinear DNS (axisymmetric default; --Ntheta>0 for full 3D; --mhd for MRI):
 python taylor_couette_dns.py --Omega2 0 --nu 1e-2 --Nr 48 --Nz 32 --end-time 2
 python taylor_couette_dns.py --mhd --Ntheta 8 --B0 0.1 --eta-mag 1e-3 --m 1
+python taylor_couette_imexrk_dns.py --seed-linear --kz-mode 1 --end-time 0.1   # axisym IMEXRK companion
+
+# apples-to-apples PCF <-> TC comparison:
+python thin_gap_compare.py --limit shearing --mhd --B0 0.05 --nonmodal --dns
 ```
 
 Tests: `conda run -n shenfun pytest -q demo/test_taylor_couette.py
-demo/test_taylor_couette_dns.py` (slow benchmarks are marked `@pytest.mark.slow`).
+demo/test_taylor_couette_dns.py demo/test_thin_gap_comparison.py` (slow
+benchmarks are marked `@pytest.mark.slow`).

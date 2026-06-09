@@ -7,6 +7,15 @@ circular-Couette base flow, so the curvature physics (the `Ω(r)=a+b/r²` profil
 the Rayleigh criterion, epicyclic frequency `κ²`, global boundary conditions) is
 captured directly.
 
+> **See also (added after this note was first written).**  Besides the
+> shenfun-Galerkin linear solvers and CNAB2 DNS described here, the directory now
+> also has a dense Chebyshev-**collocation** linear operator
+> (`taylor_couette_collocation.py`), an **IMEXRK** linear stepper
+> (`taylor_couette_imexrk.py`) and an axisymmetric **IMEXRK DNS** companion
+> (`taylor_couette_imexrk_dns.py`), plus the apples-to-apples PCF↔TC comparison
+> (`thin_gap_compare.py`).  These are documented in `taylor_couette_algorithms.md`
+> (§0, §2.8-2.9, §3.8, §5) and `README_Couette.md` ("Which approach to use").
+
 | file | what it is | status |
 |------|------------|--------|
 | `taylor_couette_linear.py` | hydrodynamic linear-stability eigensolver | **validated** |

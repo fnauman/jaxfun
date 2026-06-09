@@ -2,6 +2,13 @@
 
 Date: 2026-05-30
 
+> **See also.**  The wall-bounded MRI shearpy *DNS* here can be cross-checked
+> against its linear operators — `_pcf_linear.PlaneCouetteLinear.shearpy(...)`
+> (dense collocation; used in `couette_linear_benchmarks.md`) and
+> `pcf_galerkin_linear` — and against the Taylor-Couette MRI in the thin-gap
+> limit via `thin_gap_compare.py --limit shearing --mhd` (the rotating,
+> Rayleigh-stable limit).  See `pcf_algorithms.md` §13 and `README_Couette.md`.
+
 Companion to `demo/pcf_mhd_mri_shearpy.py` (the solver) and
 `demo/pcf_mhd_divfree_notes.md` (the divergence-free vector-potential scheme it
 is built on). This note documents the physical setup of the MRI case and the
