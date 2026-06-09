@@ -48,6 +48,13 @@ logs_root="${JAXFUN_VALIDATE_LOGS_DIR:-logs}"
 heavy_resolution_tier="${JAXFUN_VALIDATE_RESOLUTION_TIER:-start}"
 heavy_steps="${JAXFUN_VALIDATE_HEAVY_STEPS:-2}"
 heavy_checkpoint_every="${JAXFUN_VALIDATE_CHECKPOINT_EVERY:-}"
+pipe_skip_reason="pipe hydro is parity_pending until the axis-regular radial basis lands"
+parity_dtype="${JAXFUN_VALIDATE_PARITY_DTYPE:-float64}"
+parity_x64=0
+case "${parity_dtype}" in
+  float64|double|fp64) parity_x64=1 ;;
+esac
+report_args=()
 
 cheap_parity_ids=(
   pcf_hydro_laminar_v1
@@ -180,6 +187,9 @@ run_compare_golden() {
   local out="runs/${id}/${timestamp}"
   mkdir -p "$out"
   run_with_log "$id" \
+    env JAXFUN_PRODUCTION_DTYPE="$parity_dtype" \
+      JAXFUN_ENABLE_X64="$parity_x64" \
+      JAX_ENABLE_X64="$parity_x64" \
     timeout "${timeout_seconds}s" "$python_bin" production/run_problem.py \
       --config "$config" \
       --out "$out" \
@@ -198,7 +208,9 @@ case "$run_id" in
     for id in "${cheap_parity_ids[@]}"; do
       run_compare_golden "$id"
     done
-    echo "pipe_hagen_poiseuille_v1 and pipe_womersley_v1 are skipped: pipe hydro is parity_pending until the axis-regular radial basis lands"
+    report_args+=(--skip "pipe_hagen_poiseuille_v1=${pipe_skip_reason}")
+    report_args+=(--skip "pipe_womersley_v1=${pipe_skip_reason}")
+    echo "pipe_hagen_poiseuille_v1 and pipe_womersley_v1 are skipped: ${pipe_skip_reason}"
     ;;
   dns|parity-dns)
     for id in "${dns_parity_ids[@]}"; do
@@ -232,5 +244,5 @@ case "$run_id" in
     ;;
 esac
 
-"$python_bin" -m production.report --runs-root runs --out runs/_report
+"$python_bin" -m production.report --runs-root runs --out runs/_report "${report_args[@]}"
 echo "wrote runs/_report/results.json"

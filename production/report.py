@@ -55,11 +55,46 @@ def record_from_metadata(
     }
 
 
-def build_report(metadata_paths: list[str | Path]) -> dict[str, Any]:
+def skipped_record(
+    problem_id: str,
+    reason: str,
+    *,
+    geometry: str | None = None,
+    physics: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "problem_id": problem_id,
+        "metadata_path": None,
+        "out_dir": None,
+        "geometry": geometry,
+        "physics": physics,
+        "mode": None,
+        "backend": None,
+        "degraded": None,
+        "execution_status": "skipped",
+        "solver_execution_wired": False,
+        "outcome": "skipped",
+        "reason": reason,
+        "fallback_rungs": [],
+        "golden_resolution": {},
+        "observables_compared": [],
+        "comparisons": [],
+        "solver_wall_time_seconds": None,
+        "solver_started_at_utc": None,
+        "solver_finished_at_utc": None,
+    }
+
+
+def build_report(
+    metadata_paths: list[str | Path],
+    *,
+    skipped_records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     records = [
         record_from_metadata(load_metadata(path), metadata_path=path)
         for path in metadata_paths
     ]
+    records.extend(skipped_records or [])
     summary = {
         "passed": sum(1 for record in records if record["outcome"] == "passed"),
         "failed": sum(1 for record in records if record["outcome"] == "failed"),
@@ -76,11 +111,14 @@ def find_metadata_files(runs_root: str | Path) -> list[Path]:
 
 
 def write_report(
-    metadata_paths: list[str | Path], out_dir: str | Path
+    metadata_paths: list[str | Path],
+    out_dir: str | Path,
+    *,
+    skipped_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Path]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    report = build_report(metadata_paths)
+    report = build_report(metadata_paths, skipped_records=skipped_records)
     json_path = out / "results.json"
     md_path = out / "results.md"
     json_path.write_text(
@@ -195,18 +233,35 @@ def _markdown_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _parse_skip_arg(value: str) -> dict[str, Any]:
+    problem_id, separator, reason = value.partition("=")
+    if not separator or not problem_id.strip() or not reason.strip():
+        raise argparse.ArgumentTypeError("--skip must use the form problem_id=reason")
+    return skipped_record(problem_id.strip(), reason.strip())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs-root", default="runs")
     parser.add_argument("--out", default="runs/_report")
     parser.add_argument("--print", dest="print_path")
+    parser.add_argument(
+        "--skip",
+        action="append",
+        default=[],
+        type=_parse_skip_arg,
+        metavar="PROBLEM_ID=REASON",
+        help="Append an explicit skipped run record to the report.",
+    )
     args = parser.parse_args(argv)
 
     if args.print_path:
         print(Path(args.print_path).read_text(encoding="utf-8"), end="")
         return 0
 
-    write_report(find_metadata_files(args.runs_root), args.out)
+    write_report(
+        find_metadata_files(args.runs_root), args.out, skipped_records=args.skip
+    )
     return 0
 
 

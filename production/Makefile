@@ -26,49 +26,16 @@ TC_DNS_PARITY_IDS := \
 DNS_PARITY_IDS := $(PCF_DNS_PARITY_IDS) $(TC_DNS_PARITY_IDS)
 
 parity-cheap:
-	cd .. && stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
-	for id in $(CHEAP_PARITY_IDS); do \
-	  .venv/bin/python production/run_problem.py \
-	    --config production/examples/$$id.json \
-	    --out runs/$$id/$$stamp \
-	    --compare-golden \
-	    --device auto || exit $$?; \
-	done; \
-	.venv/bin/python -m production.report --runs-root runs --out runs/_report
-	@echo "pipe_hagen_poiseuille_v1 and pipe_womersley_v1 are skipped: pipe hydro is parity_pending until the axis-regular radial basis lands"
+	./validate_gpu.sh cheap
 
 parity-dns:
-	cd .. && stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
-	for id in $(DNS_PARITY_IDS); do \
-	  timeout 1800s .venv/bin/python production/run_problem.py \
-	    --config production/examples/$$id.json \
-	    --out runs/$$id/$$stamp \
-	    --compare-golden \
-	    --device auto || exit $$?; \
-	done; \
-	.venv/bin/python -m production.report --runs-root runs --out runs/_report
+	./validate_gpu.sh dns
 
 parity-dns-pcf:
-	cd .. && stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
-	for id in $(PCF_DNS_PARITY_IDS); do \
-	  timeout 1800s .venv/bin/python production/run_problem.py \
-	    --config production/examples/$$id.json \
-	    --out runs/$$id/$$stamp \
-	    --compare-golden \
-	    --device auto || exit $$?; \
-	done; \
-	.venv/bin/python -m production.report --runs-root runs --out runs/_report
+	./validate_gpu.sh dns-pcf
 
 parity-dns-tc:
-	cd .. && stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
-	for id in $(TC_DNS_PARITY_IDS); do \
-	  timeout 1800s .venv/bin/python production/run_problem.py \
-	    --config production/examples/$$id.json \
-	    --out runs/$$id/$$stamp \
-	    --compare-golden \
-	    --device auto || exit $$?; \
-	done; \
-	.venv/bin/python -m production.report --runs-root runs --out runs/_report
+	./validate_gpu.sh dns-tc
 
 report:
 	cd .. && .venv/bin/python -m production.report --runs-root runs --out runs/_report

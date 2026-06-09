@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from production.report import build_report, write_report
+from production.report import build_report, main, skipped_record, write_report
 from production.run_problem import run_problem
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +52,58 @@ def test_report_marks_completed_channel_oracle_as_passed(tmp_path):
     assert record["solver_wall_time_seconds"] is not None
     assert record["solver_started_at_utc"]
     assert record["solver_finished_at_utc"]
+
+
+def test_report_accepts_explicit_skipped_records():
+    reason = "pipe hydro is parity_pending until the axis-regular radial basis lands"
+
+    report = build_report(
+        [],
+        skipped_records=[
+            skipped_record(
+                "pipe_hagen_poiseuille_v1",
+                reason,
+                geometry="pipe",
+                physics="hydro",
+            )
+        ],
+    )
+
+    assert report["summary"] == {"passed": 0, "failed": 0, "skipped": 1}
+    record = report["runs"][0]
+    assert record["problem_id"] == "pipe_hagen_poiseuille_v1"
+    assert record["geometry"] == "pipe"
+    assert record["physics"] == "hydro"
+    assert record["outcome"] == "skipped"
+    assert record["reason"] == reason
+
+
+def test_report_cli_writes_explicit_pipe_skip_rows(tmp_path):
+    reason = "pipe hydro is parity_pending until the axis-regular radial basis lands"
+
+    code = main(
+        [
+            "--runs-root",
+            str(tmp_path / "runs"),
+            "--out",
+            str(tmp_path / "_report"),
+            "--skip",
+            f"pipe_hagen_poiseuille_v1={reason}",
+            "--skip",
+            f"pipe_womersley_v1={reason}",
+        ]
+    )
+
+    assert code == 0
+    data = json.loads((tmp_path / "_report" / "results.json").read_text())
+    assert data["summary"] == {"passed": 0, "failed": 0, "skipped": 2}
+    assert {record["problem_id"] for record in data["runs"]} == {
+        "pipe_hagen_poiseuille_v1",
+        "pipe_womersley_v1",
+    }
+    markdown = (tmp_path / "_report" / "results.md").read_text()
+    assert "pipe_hagen_poiseuille_v1" in markdown
+    assert reason in markdown
 
 
 def test_write_report_outputs_json_and_markdown(tmp_path):

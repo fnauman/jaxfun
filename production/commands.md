@@ -61,7 +61,10 @@ These use `production/validate_gpu.sh` to run the same wired golden comparisons
 as the parity make targets and write `runs/_report/results.json`. Each executed
 run is wrapped by `JAXFUN_VALIDATE_TIMEOUT_SECONDS`, defaulting to 1800 seconds,
 and writes `logs/<problem_id>.log` with command, exit status, and elapsed seconds
-unless `JAXFUN_VALIDATE_LOGS_DIR` overrides the log directory.
+unless `JAXFUN_VALIDATE_LOGS_DIR` overrides the log directory. Strict cheap/DNS
+parity subprocesses default to `JAXFUN_VALIDATE_PARITY_DTYPE=float64` because the
+committed shenfun goldens carry `1e-10` scalar tolerances; heavy smoke/full runs
+still default to float32.
 
 ```bash
 make -C production validate-all
