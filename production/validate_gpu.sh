@@ -6,6 +6,7 @@ shift || true
 extra_args=()
 has_steps=0
 has_resolution_tier=0
+has_checkpoint_every=0
 validate_only_requested=0
 full_run=0
 for arg in "$@"; do
@@ -21,6 +22,10 @@ for arg in "$@"; do
       ;;
     --resolution-tier|--resolution-tier=*)
       has_resolution_tier=1
+      extra_args+=("$arg")
+      ;;
+    --checkpoint-every|--checkpoint-every=*)
+      has_checkpoint_every=1
       extra_args+=("$arg")
       ;;
     --validate-only)
@@ -42,6 +47,7 @@ timeout_seconds="${JAXFUN_VALIDATE_TIMEOUT_SECONDS:-1800}"
 logs_root="${JAXFUN_VALIDATE_LOGS_DIR:-logs}"
 heavy_resolution_tier="${JAXFUN_VALIDATE_RESOLUTION_TIER:-start}"
 heavy_steps="${JAXFUN_VALIDATE_HEAVY_STEPS:-2}"
+heavy_checkpoint_every="${JAXFUN_VALIDATE_CHECKPOINT_EVERY:-}"
 
 cheap_parity_ids=(
   pcf_hydro_laminar_v1
@@ -83,6 +89,9 @@ Heavy-run options:
   --full         run the checked-in spec without smoke defaults
   --validate-only keep metadata-only validation for production/runs specs
   --smoke        accepted for compatibility; smoke is the default
+
+Heavy non-validate runs write a schema v1 golden and checkpoint by default.
+Use --checkpoint-every or JAXFUN_VALIDATE_CHECKPOINT_EVERY to set cadence.
 USAGE
 }
 
@@ -136,6 +145,20 @@ run_heavy_spec() {
     fi
     if [[ "$has_steps" -eq 0 && -n "$heavy_steps" ]]; then
       heavy_args+=(--steps "$heavy_steps")
+    fi
+  fi
+  if [[ "$validate_only_requested" -eq 0 ]]; then
+    local checkpoint_every="$heavy_checkpoint_every"
+    heavy_args+=(--write-golden)
+    if [[ "$has_checkpoint_every" -eq 0 ]]; then
+      if [[ -z "$checkpoint_every" ]]; then
+        if [[ "$full_run" -eq 0 && -n "$heavy_steps" ]]; then
+          checkpoint_every="$heavy_steps"
+        else
+          checkpoint_every=100
+        fi
+      fi
+      heavy_args+=(--checkpoint-every "$checkpoint_every")
     fi
   fi
   run_with_log "$id" \

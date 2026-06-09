@@ -69,10 +69,12 @@ make -C production validate-tc_supercritical_saturation
 ```
 
 `validate-all` and direct production run IDs now execute bounded start-tier
-smoke by default (`--resolution-tier start --steps 2`). Pass `--full` to run the
-checked-in production spec without smoke defaults, or pass `--validate-only` for
-metadata-only validation. `JAXFUN_VALIDATE_RESOLUTION_TIER` and
-`JAXFUN_VALIDATE_HEAVY_STEPS` can change the smoke defaults.
+smoke by default (`--resolution-tier start --steps 2`). Non-validate heavy runs
+also write `golden/golden.json` and `checkpoints/checkpoints.h5` by default.
+Pass `--full` to run the checked-in production spec without smoke defaults, or
+pass `--validate-only` for metadata-only validation.
+`JAXFUN_VALIDATE_RESOLUTION_TIER`, `JAXFUN_VALIDATE_HEAVY_STEPS`, and
+`JAXFUN_VALIDATE_CHECKPOINT_EVERY` can change the smoke defaults.
 
 ## Taylor-Couette MHD cheap parity
 
