@@ -3,10 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from production.problem_spec import UnsupportedSpecError
 from production.compare_goldens import validate_golden
+from production.problem_spec import UnsupportedSpecError
 from production.run_problem import SolverExecutionNotImplementedError, main, run_problem
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,7 +31,10 @@ def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):
     out = tmp_path / "pipe"
     with pytest.raises(UnsupportedSpecError):
         run_problem(
-            config_path=ROOT / "production" / "examples" / "pipe_hagen_poiseuille_v1.json",
+            config_path=ROOT
+            / "production"
+            / "examples"
+            / "pipe_hagen_poiseuille_v1.json",
             out=out,
             validate_only=True,
             capture_device=False,
@@ -41,9 +43,14 @@ def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):
 
 
 def test_non_validate_run_fails_explicitly_until_solver_is_wired(tmp_path):
-    with pytest.raises(SolverExecutionNotImplementedError, match="solver execution is not wired"):
+    with pytest.raises(
+        SolverExecutionNotImplementedError, match="solver execution is not wired"
+    ):
         run_problem(
-            config_path=ROOT / "production" / "runs" / "tc_supercritical_saturation.json",
+            config_path=ROOT
+            / "production"
+            / "runs"
+            / "tc_supercritical_saturation.json",
             out=tmp_path / "run",
             capture_device=False,
         )
@@ -52,7 +59,10 @@ def test_non_validate_run_fails_explicitly_until_solver_is_wired(tmp_path):
 def test_channel_analytic_run_writes_diagnostics_and_compares_golden(tmp_path):
     out = tmp_path / "channel"
     metadata = run_problem(
-        config_path=ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json",
+        config_path=ROOT
+        / "production"
+        / "examples"
+        / "channel_poiseuille_hydro_v1.json",
         out=out,
         compare_golden=True,
         capture_device=False,
@@ -94,11 +104,16 @@ def test_pcf_hydro_laminar_run_writes_diagnostics_and_compares_golden(tmp_path):
 @pytest.mark.parametrize(
     ("problem_id", "expected_keys"),
     [
-        ("pcf_mhd_conducting_v1", ["divergence_b_l2", "growth_rate", "magnetic_energy"]),
+        (
+            "pcf_mhd_conducting_v1",
+            ["divergence_b_l2", "growth_rate", "magnetic_energy"],
+        ),
         ("pcf_mri_shearbox_v1", ["divergence_b_l2", "growth_rate", "local_mri_growth"]),
     ],
 )
-def test_pcf_mhd_and_mri_linear_runs_compare_goldens(tmp_path, problem_id, expected_keys):
+def test_pcf_mhd_and_mri_linear_runs_compare_goldens(
+    tmp_path, problem_id, expected_keys
+):
     out = tmp_path / problem_id
     metadata = run_problem(
         config_path=ROOT / "production" / "examples" / f"{problem_id}.json",
@@ -161,10 +176,64 @@ def test_tc_hydro_linear_run_writes_diagnostics_and_compares_golden(tmp_path):
     assert line["rayleigh_stable"] is False
 
 
+@pytest.mark.parametrize(
+    ("problem_id", "expected_keys"),
+    [
+        (
+            "taylor_couette_hydro_dns_v1",
+            [
+                "divergence_linf",
+                "growth_rate",
+                "growth_rate_linear",
+                "kinetic_energy",
+            ],
+        ),
+        (
+            "taylor_couette_mhd_dns_v1",
+            [
+                "divergence_b",
+                "divergence_u",
+                "growth_rate",
+                "growth_rate_linear",
+                "kinetic_energy",
+                "magnetic_energy",
+            ],
+        ),
+    ],
+)
+def test_tc_dns_runs_compare_dns_goldens(tmp_path, problem_id, expected_keys):
+    out = tmp_path / problem_id
+    metadata = run_problem(
+        config_path=ROOT / "production" / "examples" / f"{problem_id}.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "dns-linear-window",
+    }
+    assert metadata["comparison_passed"] is True
+    assert metadata["observables_compared"] == expected_keys
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    assert rows[0]["t"] == 0.0
+    assert rows[-1]["growth_rate"] == pytest.approx(
+        rows[0]["growth_rate_linear"], abs=2.0e-7
+    )
+
+
 def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
     out = tmp_path / "channel"
     run_problem(
-        config_path=ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json",
+        config_path=ROOT
+        / "production"
+        / "examples"
+        / "channel_poiseuille_hydro_v1.json",
         out=out,
         write_golden=True,
         capture_device=False,

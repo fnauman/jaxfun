@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import math
+from typing import Any
 
 import numpy as np
 
@@ -15,9 +14,23 @@ class ProductionOracleNotImplementedError(NotImplementedError):
     """Raised when a spec has no wired jaxfun production execution path yet."""
 
 
-def run_supported_spec(spec: dict[str, Any]) -> dict[str, Any]:
+def run_supported_spec(
+    spec: dict[str, Any], *, steps: int | None = None
+) -> dict[str, Any]:
     """Run a supported production spec and return canonical diagnostics."""
 
+    if (
+        spec["geometry"] == "taylor_couette"
+        and spec["physics"] == "hydro"
+        and spec["expected_oracle"]["type"] == "circular_couette_dns_growth"
+    ):
+        return _run_taylor_couette_hydro_dns(spec, steps=steps)
+    if (
+        spec["geometry"] == "taylor_couette"
+        and spec["physics"] in {"mhd", "mri"}
+        and spec["expected_oracle"]["type"] == "tc_mri_dns_growth"
+    ):
+        return _run_taylor_couette_mhd_dns(spec, steps=steps)
     if (
         spec["geometry"] == "channel"
         and spec["physics"] == "hydro"
@@ -36,12 +49,20 @@ def run_supported_spec(spec: dict[str, Any]) -> dict[str, Any]:
         and spec["expected_oracle"]["type"] == "circular_couette_base_flow"
     ):
         return _run_taylor_couette_hydro(spec)
-    if spec["geometry"] == "pcf" and spec["physics"] in {"mhd", "mri"}:
-        if spec["expected_oracle"]["type"] in {"pcf_mhd_linear_conducting", "local_ideal_mri"}:
-            return _run_pcf_mhd_like(spec)
-    if spec["geometry"] == "taylor_couette" and spec["physics"] in {"mhd", "mri"}:
-        if spec["expected_oracle"]["type"] in {"tc_mhd_linear_conducting", "tc_mhd_linear_insulating"}:
-            return _run_taylor_couette_mhd(spec)
+    if (
+        spec["geometry"] == "pcf"
+        and spec["physics"] in {"mhd", "mri"}
+        and spec["expected_oracle"]["type"]
+        in {"pcf_mhd_linear_conducting", "local_ideal_mri"}
+    ):
+        return _run_pcf_mhd_like(spec)
+    if (
+        spec["geometry"] == "taylor_couette"
+        and spec["physics"] in {"mhd", "mri"}
+        and spec["expected_oracle"]["type"]
+        in {"tc_mhd_linear_conducting", "tc_mhd_linear_insulating"}
+    ):
+        return _run_taylor_couette_mhd(spec)
 
     raise ProductionOracleNotImplementedError(
         f"production solver execution is not wired yet for {spec['problem_id']}"
@@ -67,6 +88,7 @@ def _run_channel_poiseuille(spec: dict[str, Any]) -> dict[str, Any]:
         "divergence_l2": 0.0,
     }
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
+
 
 def _run_plane_couette_laminar(spec: dict[str, Any]) -> dict[str, Any]:
     from examples.pcf_linear_jax import PlaneCouetteLinear
@@ -104,6 +126,7 @@ def _run_plane_couette_laminar(spec: dict[str, Any]) -> dict[str, Any]:
         "divergence_l2": 0.0,
     }
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
+
 
 def _run_taylor_couette_hydro(spec: dict[str, Any]) -> dict[str, Any]:
     from examples.taylor_couette_linear_jax import (
@@ -148,6 +171,65 @@ def _run_taylor_couette_hydro(spec: dict[str, Any]) -> dict[str, Any]:
         "divergence_l2": 0.0,
     }
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
+
+
+def _run_taylor_couette_hydro_dns(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+) -> dict[str, Any]:
+    from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
+
+    resolution = spec["resolution"]
+    groups = spec["nondimensional_groups"]
+    base = CircularCouette(
+        float(groups["R1"]),
+        float(groups["R2"]),
+        float(groups["Omega1"]),
+        float(groups["Omega2"]),
+    )
+    solver = AxisymmetricTCDNSJax(
+        base,
+        nu=float(groups["nu"]),
+        Nr=int(resolution.get("Nr", resolution.get("N", 40))),
+        Nz=int(resolution.get("Nz", 8)),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "C"),
+        dealias=1.0,
+    )
+    state, eigenvalue = solver.seed_linear_eigenmode(
+        kz_mode=_kz_mode_from_spec(spec, solver.Lz),
+        amp=float(spec["initial_condition"].get("amplitude", 1.0e-6)),
+    )
+    initial = solver.diagnostics(state)
+    n_steps = _steps_from_spec(spec, steps=steps)
+    growth_rate, out = solver.growth_rate(state, n_steps)
+    final = solver.diagnostics(out)
+    elapsed = n_steps * float(spec["time"]["dt"])
+    scalars = {
+        "kinetic_energy": float(final["E"]),
+        "growth_rate": float(growth_rate),
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_linf": float(final["div_linf"]),
+        "rayleigh_stable": bool(base.rayleigh_stable()),
+    }
+    return {
+        "scalars": scalars,
+        "time_series": [
+            {
+                "t": 0.0,
+                "kinetic_energy": float(initial["E"]),
+                "growth_rate_linear": float(eigenvalue.real),
+            },
+            {
+                "t": elapsed,
+                "kinetic_energy": float(final["E"]),
+                "growth_rate": float(growth_rate),
+            },
+        ],
+    }
+
 
 def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:
     from examples.pcf_linear_jax import PlaneCouetteLinear
@@ -237,12 +319,10 @@ def _pcf_mhd_mode_scalars(operator: Any, q: np.ndarray) -> dict[str, float]:
     n = operator.nx
     blocks = operator._blocks()
     velocity = [
-        q[blocks[name] * n : (blocks[name] + 1) * n]
-        for name in ("ux", "uy", "uz")
+        q[blocks[name] * n : (blocks[name] + 1) * n] for name in ("ux", "uy", "uz")
     ]
     magnetic = [
-        q[blocks[name] * n : (blocks[name] + 1) * n]
-        for name in ("bx", "by", "bz")
+        q[blocks[name] * n : (blocks[name] + 1) * n] for name in ("bx", "by", "bz")
     ]
     kinetic = observables.kinetic_energy(velocity, weights=operator.weights)
     magnetic_energy = observables.magnetic_energy(magnetic, weights=operator.weights)
@@ -272,17 +352,18 @@ def _mri_local_growth(
     return math.sqrt(s2) if s2 > 0.0 else 0.0
 
 
-def _mri_keplerian_optimum(omega: float = 1.0, Omega: float | None = None) -> dict[str, float]:
+def _mri_keplerian_optimum(
+    omega: float = 1.0, Omega: float | None = None
+) -> dict[str, float]:
     if Omega is not None:
         omega = Omega
     q = 1.5
     kappa2 = (4.0 - 2.0 * q) * omega**2
     d_omega2_dlnr = -2.0 * q * omega**2
     omega_a = np.linspace(1.0e-3, math.sqrt(3.0) * omega * 0.999, 4000)
-    growth = np.array([
-        _mri_local_growth(w, omega, kappa2, d_omega2_dlnr)
-        for w in omega_a
-    ])
+    growth = np.array(
+        [_mri_local_growth(w, omega, kappa2, d_omega2_dlnr) for w in omega_a]
+    )
     idx = int(np.argmax(growth))
     return {
         "s_max": float(growth[idx]),
@@ -332,6 +413,75 @@ def _run_taylor_couette_mhd(spec: dict[str, Any]) -> dict[str, Any]:
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
 
 
+def _run_taylor_couette_mhd_dns(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+) -> dict[str, Any]:
+    from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
+
+    magnetic_bc = _magnetic_bc(spec)
+    if magnetic_bc != "conducting":
+        raise ProductionOracleNotImplementedError(
+            "TC MHD DNS golden parity is wired only for conducting walls, "
+            f"got {magnetic_bc!r}"
+        )
+    resolution = spec["resolution"]
+    groups = spec["nondimensional_groups"]
+    solver = AxisymmetricMRIDNSJax(
+        CircularCouette(
+            float(groups["R1"]),
+            float(groups["R2"]),
+            float(groups["Omega1"]),
+            float(groups["Omega2"]),
+        ),
+        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
+        nu=float(groups["nu"]),
+        eta_mag=float(groups["eta_mag"]),
+        Nr=int(resolution.get("Nr", resolution.get("N", 40))),
+        Nz=int(resolution.get("Nz", 8)),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "C"),
+        dealias=1.0,
+    )
+    state, eigenvalue = solver.seed_linear_eigenmode(
+        kz_mode=_kz_mode_from_spec(spec, solver.Lz),
+        amp=float(spec["initial_condition"].get("amplitude", 1.0e-7)),
+    )
+    initial = solver.diagnostics(state)
+    n_steps = _steps_from_spec(spec, steps=steps)
+    growth_rate, out = solver.growth_rate(state, n_steps)
+    final = solver.diagnostics(out)
+    elapsed = n_steps * float(spec["time"]["dt"])
+    scalars = {
+        "kinetic_energy": float(final["Ekin"]),
+        "magnetic_energy": float(final["Emag"]),
+        "growth_rate": float(growth_rate),
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_u": float(final["divu"]),
+        "divergence_b": float(final["divb"]),
+        "magnetic_bc": magnetic_bc,
+    }
+    return {
+        "scalars": scalars,
+        "time_series": [
+            {
+                "t": 0.0,
+                "kinetic_energy": float(initial["Ekin"]),
+                "magnetic_energy": float(initial["Emag"]),
+                "growth_rate_linear": float(eigenvalue.real),
+            },
+            {
+                "t": elapsed,
+                "kinetic_energy": float(final["Ekin"]),
+                "magnetic_energy": float(final["Emag"]),
+                "growth_rate": float(growth_rate),
+            },
+        ],
+    }
+
+
 def _tc_mhd_mode_scalars(
     operator: Any,
     m: int,
@@ -347,3 +497,36 @@ def _tc_mhd_mode_scalars(
         "total_energy": kinetic + magnetic_energy,
     }
 
+
+def _steps_from_spec(spec: dict[str, Any], *, steps: int | None = None) -> int:
+    if steps is not None:
+        if steps < 0:
+            raise ValueError("steps override must be non-negative")
+        return int(steps)
+    dt = float(spec["time"]["dt"])
+    final_time = float(spec["time"]["final_time"])
+    n_steps = int(round(final_time / dt))
+    if not math.isclose(n_steps * dt, final_time, rel_tol=1.0e-12, abs_tol=1.0e-12):
+        raise ValueError(
+            "final_time must be an integer multiple of dt for DNS parity runs"
+        )
+    return n_steps
+
+
+def _kz_mode_from_spec(spec: dict[str, Any], Lz: float) -> int:
+    mode = spec.get("mode", {})
+    if int(mode.get("azimuthal_wavenumber", 0)) != 0:
+        raise ProductionOracleNotImplementedError(
+            "Taylor-Couette DNS golden parity is wired only for axisymmetric m=0 specs"
+        )
+    kz = float(mode["axial_wavenumber"])
+    kz_mode = int(round(kz * float(Lz) / (2.0 * math.pi)))
+    if kz_mode < 1:
+        raise ValueError("axial_wavenumber does not map to a positive Fourier mode")
+    resolved = 2.0 * math.pi * kz_mode / float(Lz)
+    if not math.isclose(resolved, kz, rel_tol=1.0e-12, abs_tol=1.0e-12):
+        raise ValueError(
+            f"axial_wavenumber={kz!r} does not map to an integer Fourier "
+            f"mode for Lz={Lz!r}"
+        )
+    return kz_mode

@@ -12,23 +12,41 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 try:
     from .adapters import ProductionConfig, load_config
-    from .compare_goldens import compare_problem, compare_to_golden, load_golden, resolve_golden, scalar_hash
+    from .compare_goldens import (
+        compare_problem,
+        compare_to_golden,
+        load_golden,
+        resolve_golden,
+        scalar_hash,
+    )
     from .device import capture_device_record
     from .oracles import ProductionOracleNotImplementedError, run_supported_spec
     from .problem_spec import ProblemSpecError, UnsupportedSpecError
 except ImportError:  # pragma: no cover - direct script mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from production.adapters import ProductionConfig, load_config  # type: ignore
-    from production.compare_goldens import compare_problem, compare_to_golden, load_golden, resolve_golden, scalar_hash  # type: ignore
+    from production.compare_goldens import (
+        compare_problem,
+        compare_to_golden,
+        load_golden,
+        resolve_golden,
+        scalar_hash,
+    )  # type: ignore
     from production.device import capture_device_record  # type: ignore
-    from production.oracles import ProductionOracleNotImplementedError, run_supported_spec  # type: ignore
-    from production.problem_spec import ProblemSpecError, UnsupportedSpecError  # type: ignore
+    from production.oracles import (
+        ProductionOracleNotImplementedError,
+        run_supported_spec,
+    )  # type: ignore
+    from production.problem_spec import (  # type: ignore
+        ProblemSpecError,
+        UnsupportedSpecError,
+    )
 
 
 class SolverExecutionNotImplementedError(RuntimeError):
@@ -54,7 +72,9 @@ def run_problem(
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device_record = capture_device_record(device) if capture_device else {"capture_skipped": True}
+    device_record = (
+        capture_device_record(device) if capture_device else {"capture_skipped": True}
+    )
     metadata = build_metadata(
         config,
         config_path=Path(config_path),
@@ -74,10 +94,11 @@ def run_problem(
         return metadata
 
     try:
-        diagnostics = run_supported_spec(config.spec)
+        diagnostics = run_supported_spec(config.spec, steps=steps)
     except ProductionOracleNotImplementedError as exc:
         raise SolverExecutionNotImplementedError(
-            f"{exc}; contract validation metadata was written, but no DNS or golden comparison was run"
+            f"{exc}; contract validation metadata was written, but no DNS "
+            "or golden comparison was run"
         ) from exc
 
     _write_json(out_dir / "spec.json", config.spec)
@@ -85,7 +106,7 @@ def run_problem(
     metadata["execution"] = {
         "status": "completed",
         "solver_execution_wired": True,
-        "execution_kind": "analytic-oracle",
+        "execution_kind": _execution_kind(config.spec),
     }
     metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
 
@@ -93,7 +114,9 @@ def run_problem(
         result = _compare_diagnostics(
             config,
             diagnostics,
-            explicit_golden=Path(shenfun_golden) if shenfun_golden is not None else None,
+            explicit_golden=Path(shenfun_golden)
+            if shenfun_golden is not None
+            else None,
         )
         metadata["comparison_passed"] = result.passed
         metadata["comparisons"] = [item.to_dict() for item in result.comparisons]
@@ -104,7 +127,9 @@ def run_problem(
             raise RuntimeError(f"golden comparison failed for {config.problem_id}")
 
     if write_golden:
-        golden_path = _write_golden(out_dir / "golden" / "golden.json", config, diagnostics, device_record)
+        golden_path = _write_golden(
+            out_dir / "golden" / "golden.json", config, diagnostics, device_record
+        )
         metadata["written_golden"] = str(golden_path)
 
     _write_json(out_dir / "metadata.json", metadata)
@@ -128,7 +153,7 @@ def build_metadata(
     golden_resolution = _golden_resolution_metadata(config.problem_id, shenfun_golden)
     return {
         "schema_version": 1,
-        "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "generated_at_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "problem_id": config.problem_id,
         "artifact_id": config.artifact_id,
         "config_path": str(config_path),
@@ -161,7 +186,22 @@ def build_metadata(
     }
 
 
-def _golden_resolution_metadata(problem_id: str, explicit_golden: Path | None) -> dict[str, Any]:
+def _execution_kind(spec: dict[str, Any]) -> str:
+    oracle_type = spec["expected_oracle"]["type"]
+    if oracle_type in {"circular_couette_dns_growth", "tc_mri_dns_growth"}:
+        return "dns-linear-window"
+    if "linear" in oracle_type or oracle_type in {
+        "circular_couette_base_flow",
+        "local_ideal_mri",
+        "plane_couette_laminar",
+    }:
+        return "linear-oracle"
+    return "analytic-oracle"
+
+
+def _golden_resolution_metadata(
+    problem_id: str, explicit_golden: Path | None
+) -> dict[str, Any]:
     if explicit_golden is not None:
         return {
             "policy": "explicit",
@@ -188,7 +228,9 @@ def _golden_resolution_metadata(problem_id: str, explicit_golden: Path | None) -
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_json_ready(data), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(_json_ready(data), sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _write_diagnostics(path: Path, diagnostics: dict[str, Any]) -> None:
@@ -238,7 +280,7 @@ def _write_golden(
         "artifact_id": config.artifact_id,
         "problem_id": config.problem_id,
         "spec_hash": config.spec["spec_hash"],
-        "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "generated_at_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "environment": {
             "interpreter": sys.executable,
             "jax": device_record,
@@ -276,7 +318,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compare-golden", action="store_true")
     parser.add_argument("--shenfun-golden")
     parser.add_argument("--write-golden", action="store_true")
-    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "gpu"])
+    parser.add_argument(
+        "--device", default="auto", choices=["auto", "cpu", "cuda", "gpu"]
+    )
     parser.add_argument("--steps", type=int)
     parser.add_argument("--checkpoint-every", type=int)
     parser.add_argument("--validate-only", action="store_true")
