@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import math
+
 import numpy as np
 
 from . import observables
@@ -28,6 +30,12 @@ def run_supported_spec(spec: dict[str, Any]) -> dict[str, Any]:
         and spec["expected_oracle"]["type"] == "plane_couette_laminar"
     ):
         return _run_plane_couette_laminar(spec)
+    if (
+        spec["geometry"] == "taylor_couette"
+        and spec["physics"] == "hydro"
+        and spec["expected_oracle"]["type"] == "circular_couette_base_flow"
+    ):
+        return _run_taylor_couette_hydro(spec)
 
     raise ProductionOracleNotImplementedError(
         f"production solver execution is not wired yet for {spec['problem_id']}"
@@ -87,6 +95,50 @@ def _run_plane_couette_laminar(spec: dict[str, Any]) -> dict[str, Any]:
         "eigenvalue_imag": float(eigs[0].imag),
         "wall_shear_lower": u_wall,
         "wall_shear_upper": u_wall,
+        "divergence_l2": 0.0,
+    }
+    return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
+
+def _run_taylor_couette_hydro(spec: dict[str, Any]) -> dict[str, Any]:
+    from examples.taylor_couette_linear_jax import (
+        CircularCouette,
+        TaylorCouetteLinearJax,
+    )
+
+    resolution = spec["resolution"]
+    groups = spec["nondimensional_groups"]
+    mode = spec.get("mode", {})
+    base = CircularCouette(
+        float(groups["R1"]),
+        float(groups["R2"]),
+        float(groups["Omega1"]),
+        float(groups["Omega2"]),
+    )
+    n = int(resolution.get("N", resolution.get("Nr", 28)))
+    operator = TaylorCouetteLinearJax(
+        base,
+        nu=float(groups["nu"]),
+        N=n,
+        family=resolution.get("family", "C"),
+    )
+    eigs, _ = operator.eigs(
+        int(mode.get("azimuthal_wavenumber", 0)),
+        float(mode.get("axial_wavenumber", 3.14)),
+        n_return=3,
+    )
+    r0, r1 = (float(v) for v in spec["domain"]["r"])
+    r = np.linspace(r0, r1, n)
+    profile = base.V(r)
+    weights = 2.0 * math.pi * r * observables.trapezoid_weights(r)
+    scalars = {
+        "kinetic_energy": observables.kinetic_energy(
+            [np.zeros_like(profile), profile, np.zeros_like(profile)],
+            weights=weights,
+        ),
+        "growth_rate": float(eigs[0].real),
+        "eigenvalue_real": float(eigs[0].real),
+        "eigenvalue_imag": float(eigs[0].imag),
+        "rayleigh_stable": bool(base.rayleigh_stable()),
         "divergence_l2": 0.0,
     }
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}

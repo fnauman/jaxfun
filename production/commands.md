@@ -28,6 +28,15 @@ The comparator resolves `production/goldens/<problem_id>/golden/golden.json`
 first. If that vendored root is absent it uses `$SHENFUN_GOLDENS_ROOT`, then the
 sibling shenfun checkout path.
 
+## Taylor-Couette hydro cheap parity
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/examples/taylor_couette_hydro_v1.json \
+  --out runs/taylor_couette_hydro_v1/smoke \
+  --compare-golden
+```
+
 ## PCF hydro cheap parity
 
 ```bash

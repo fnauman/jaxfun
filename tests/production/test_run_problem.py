@@ -91,6 +91,26 @@ def test_pcf_hydro_laminar_run_writes_diagnostics_and_compares_golden(tmp_path):
     assert line["wall_shear_lower"] == pytest.approx(1.0)
 
 
+def test_tc_hydro_linear_run_writes_diagnostics_and_compares_golden(tmp_path):
+    out = tmp_path / "tc"
+    metadata = run_problem(
+        config_path=ROOT / "production" / "examples" / "taylor_couette_hydro_v1.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+    assert metadata["execution"]["status"] == "completed"
+    assert metadata["comparison_passed"] is True
+    assert metadata["observables_compared"] == [
+        "divergence_l2",
+        "growth_rate",
+        "kinetic_energy",
+    ]
+    line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
+    assert line["growth_rate"] == pytest.approx(0.371383777641364)
+    assert line["rayleigh_stable"] is False
+
+
 def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
     out = tmp_path / "channel"
     run_problem(
