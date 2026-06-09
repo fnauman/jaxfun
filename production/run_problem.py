@@ -22,10 +22,11 @@ try:
     from .device import capture_device_record
     from .problem_spec import ProblemSpecError, UnsupportedSpecError
 except ImportError:  # pragma: no cover - direct script mode
-    from adapters import ProductionConfig, load_config  # type: ignore
-    from compare_goldens import resolve_golden  # type: ignore
-    from device import capture_device_record  # type: ignore
-    from problem_spec import ProblemSpecError, UnsupportedSpecError  # type: ignore
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from production.adapters import ProductionConfig, load_config  # type: ignore
+    from production.compare_goldens import resolve_golden  # type: ignore
+    from production.device import capture_device_record  # type: ignore
+    from production.problem_spec import ProblemSpecError, UnsupportedSpecError  # type: ignore
 
 
 class SolverExecutionNotImplementedError(RuntimeError):
@@ -102,6 +103,8 @@ def build_metadata(
         "geometry": config.geometry,
         "physics": config.physics,
         "support_state": config.spec["support_state"],
+        "expected_oracle": config.spec["expected_oracle"],
+        "diagnostics": config.spec["diagnostics"],
         "adapter": {
             **config.metadata,
             "solver_args": config.solver_args,
