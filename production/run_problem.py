@@ -122,6 +122,12 @@ def run_problem(
         "solver_execution_wired": True,
         "execution_kind": _execution_kind(config.spec),
     }
+    metadata["validation_scope"] = _validation_scope_metadata(
+        config.spec,
+        diagnostics,
+        device_record=device_record,
+        compare_golden=compare_golden,
+    )
     metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
     checkpoint_path = out_dir / "checkpoints" / "checkpoints.h5"
     if checkpoint_path.exists():
@@ -231,6 +237,61 @@ def _execution_kind(spec: dict[str, Any]) -> str:
     }:
         return "linear-oracle"
     return "analytic-oracle"
+
+
+def _validation_scope_metadata(
+    spec: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    device_record: dict[str, Any],
+    compare_golden: bool,
+) -> dict[str, Any]:
+    expected_oracle = spec.get("expected_oracle", {})
+    fallback_rungs = expected_oracle.get("fallback_rungs", [])
+    mode = device_record.get("mode")
+    execution_kind = _execution_kind(spec)
+    scalar_keys = sorted(diagnostics.get("scalars", {}).keys())
+
+    if compare_golden:
+        return {
+            "kind": "golden_comparison",
+            "reason": "compared diagnostics against the resolved committed golden",
+            "checked_observables": scalar_keys,
+        }
+    if (
+        mode == "cpu_smoke"
+        and execution_kind == "dns-saturation"
+        and fallback_rungs == [3]
+    ):
+        return {
+            "kind": "cpu_smoke_finiteness_divergence_only",
+            "reason": (
+                "rung-3-only saturated run has no committed nonlinear-state "
+                "golden; CPU smoke checks solver completion, finite diagnostics, "
+                "and emitted divergence diagnostics, not production parity"
+            ),
+            "checked_observables": scalar_keys,
+        }
+    if mode == "cpu_smoke" and execution_kind == "dns-saturation":
+        return {
+            "kind": "cpu_smoke_fallback_oracle",
+            "reason": (
+                "CPU smoke for saturated run with analytic or linear-DNS fallback "
+                "rungs available"
+            ),
+            "checked_observables": scalar_keys,
+        }
+    if execution_kind == "dns-saturation":
+        return {
+            "kind": "generated_saturated_golden",
+            "reason": "executed saturated production run and generated diagnostics",
+            "checked_observables": scalar_keys,
+        }
+    return {
+        "kind": "oracle_execution",
+        "reason": "executed configured analytic, linear, or DNS oracle path",
+        "checked_observables": scalar_keys,
+    }
 
 
 def _golden_resolution_metadata(

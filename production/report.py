@@ -31,6 +31,15 @@ def record_from_metadata(
         reason = f"execution status {status!r}"
 
     expected_oracle = metadata.get("expected_oracle", {})
+    validation_scope = metadata.get("validation_scope", {})
+    validation_scope_kind = validation_scope.get("kind")
+    validation_scope_reason = validation_scope.get("reason", "")
+    if (
+        status == "completed"
+        and not reason
+        and validation_scope_kind == "cpu_smoke_finiteness_divergence_only"
+    ):
+        reason = validation_scope_reason
     timing = metadata.get("timing", {})
     return {
         "problem_id": metadata.get("problem_id"),
@@ -46,6 +55,9 @@ def record_from_metadata(
         "outcome": outcome,
         "reason": reason,
         "fallback_rungs": expected_oracle.get("fallback_rungs", []),
+        "validation_scope": validation_scope_kind,
+        "validation_scope_reason": validation_scope_reason,
+        "checked_observables": validation_scope.get("checked_observables", []),
         "golden_resolution": metadata.get("golden_resolution", {}),
         "observables_compared": metadata.get("observables_compared", []),
         "comparisons": metadata.get("comparisons", []),
@@ -76,6 +88,9 @@ def skipped_record(
         "outcome": "skipped",
         "reason": reason,
         "fallback_rungs": [],
+        "validation_scope": None,
+        "validation_scope_reason": "",
+        "checked_observables": [],
         "golden_resolution": {},
         "observables_compared": [],
         "comparisons": [],
@@ -141,15 +156,16 @@ def _markdown_summary(report: dict[str, Any]) -> str:
         "",
         (
             "| problem_id | outcome | mode | backend | wall_time_s | "
-            "fallback_rungs | observables | reason |"
+            "fallback_rungs | validation_scope | observables | reason |"
         ),
-        "|---|---|---|---|---:|---|---|---|",
+        "|---|---|---|---|---:|---|---|---|---|",
     ]
     for record in report["runs"]:
         lines.append(
             (
                 "| {problem_id} | {outcome} | {mode} | {backend} | "
-                "{wall_time} | {fallback_rungs} | {observables} | {reason} |"
+                "{wall_time} | {fallback_rungs} | {validation_scope} | "
+                "{observables} | {reason} |"
             ).format(
                 problem_id=_markdown_cell(record.get("problem_id")),
                 outcome=_markdown_cell(record.get("outcome")),
@@ -159,9 +175,8 @@ def _markdown_summary(report: dict[str, Any]) -> str:
                 fallback_rungs=_markdown_cell(
                     _join_values(record.get("fallback_rungs", []))
                 ),
-                observables=_markdown_cell(
-                    _join_values(record.get("observables_compared", []))
-                ),
+                validation_scope=_markdown_cell(record.get("validation_scope")),
+                observables=_markdown_cell(_join_values(_display_observables(record))),
                 reason=_markdown_cell(record.get("reason", "")),
             )
         )
@@ -197,6 +212,13 @@ def _markdown_summary(report: dict[str, Any]) -> str:
                 )
             lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _display_observables(record: dict[str, Any]) -> Any:
+    compared = record.get("observables_compared")
+    if compared:
+        return compared
+    return record.get("checked_observables", [])
 
 
 def _format_wall_time(value: Any) -> str:

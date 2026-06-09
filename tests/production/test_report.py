@@ -1,7 +1,13 @@
 import json
 from pathlib import Path
 
-from production.report import build_report, main, skipped_record, write_report
+from production.report import (
+    build_report,
+    main,
+    record_from_metadata,
+    skipped_record,
+    write_report,
+)
 from production.run_problem import run_problem
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +58,63 @@ def test_report_marks_completed_channel_oracle_as_passed(tmp_path):
     assert record["solver_wall_time_seconds"] is not None
     assert record["solver_started_at_utc"]
     assert record["solver_finished_at_utc"]
+
+
+def test_report_labels_rung3_cpu_smoke_as_finiteness_only(tmp_path):
+    reason = (
+        "rung-3-only saturated run has no committed nonlinear-state golden; "
+        "CPU smoke checks solver completion, finite diagnostics, and emitted "
+        "divergence diagnostics, not production parity"
+    )
+    metadata = {
+        "problem_id": "pcf_mhd_divfree",
+        "out_dir": "runs/pcf_mhd_divfree/stamp",
+        "geometry": "pcf",
+        "physics": "mhd",
+        "expected_oracle": {"fallback_rungs": [3]},
+        "device": {
+            "mode": "cpu_smoke",
+            "default_backend": "cpu",
+            "degraded": True,
+        },
+        "execution": {
+            "status": "completed",
+            "solver_execution_wired": True,
+            "execution_kind": "dns-saturation",
+        },
+        "validation_scope": {
+            "kind": "cpu_smoke_finiteness_divergence_only",
+            "reason": reason,
+            "checked_observables": [
+                "divergence_u_l2",
+                "divergence_b_l2",
+                "magnetic_energy",
+            ],
+        },
+        "timing": {"solver_wall_time_seconds": 1.25},
+    }
+
+    record = record_from_metadata(metadata, metadata_path="runs/x/metadata.json")
+
+    assert record["outcome"] == "passed"
+    assert record["validation_scope"] == "cpu_smoke_finiteness_divergence_only"
+    assert record["checked_observables"] == [
+        "divergence_u_l2",
+        "divergence_b_l2",
+        "magnetic_energy",
+    ]
+    assert record["reason"] == reason
+
+    metadata_path = tmp_path / "runs" / "pcf_mhd_divfree" / "stamp" / "metadata.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    paths = write_report([metadata_path], tmp_path / "_report")
+
+    markdown = paths["markdown"].read_text()
+    assert "validation_scope" in markdown
+    assert "cpu_smoke_finiteness_divergence_only" in markdown
+    assert "divergence_u_l2, divergence_b_l2, magnetic_energy" in markdown
+    assert "not production parity" in markdown
 
 
 def test_report_accepts_explicit_skipped_records():
