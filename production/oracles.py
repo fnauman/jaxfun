@@ -53,6 +53,18 @@ def run_supported_spec(
     if (
         spec["geometry"] == "taylor_couette"
         and spec["physics"] in {"mhd", "mri"}
+        and spec["expected_oracle"]["type"] == "tc_mri_saturation_ladder"
+    ):
+        return _run_taylor_couette_mhd_saturation(
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            device_record=device_record,
+        )
+    if (
+        spec["geometry"] == "taylor_couette"
+        and spec["physics"] in {"mhd", "mri"}
         and spec["expected_oracle"]["type"] == "tc_mri_dns_growth"
     ):
         return _run_taylor_couette_mhd_dns(
@@ -644,6 +656,101 @@ def _run_taylor_couette_mhd(spec: dict[str, Any]) -> dict[str, Any]:
     return {"scalars": scalars, "time_series": [{"t": 0.0, **scalars}]}
 
 
+def _run_taylor_couette_mhd_saturation(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
+
+    magnetic_bc = _magnetic_bc(spec)
+    if magnetic_bc != "conducting":
+        raise ProductionOracleNotImplementedError(
+            "TC MRI saturation runner is wired only for conducting walls, "
+            f"got {magnetic_bc!r}"
+        )
+    resolution = _selected_resolution(spec)
+    groups = spec["nondimensional_groups"]
+    solver = AxisymmetricMRIDNSJax(
+        CircularCouette(
+            float(groups["R1"]),
+            float(groups["R2"]),
+            float(groups["Omega1"]),
+            float(groups["Omega2"]),
+        ),
+        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
+        nu=float(groups["nu"]),
+        eta_mag=float(groups["eta_mag"]),
+        Nr=int(resolution.get("Nr", resolution.get("N", 40))),
+        Nz=int(resolution.get("Nz", 24)),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=spec["resolution"].get("family", resolution.get("family", "C")),
+        dealias=float(spec["resolution"].get("dealias", 1.0)),
+    )
+    state, eigenvalue = solver.seed_linear_eigenmode(
+        kz_mode=_kz_mode_from_spec(spec, solver.Lz, strict=False),
+        amp=float(spec["initial_condition"].get("amplitude", 1.0e-4)),
+    )
+    initial = solver.diagnostics(state)
+    n_steps = _steps_from_spec(spec, steps=steps)
+    out = _solve_with_optional_checkpoints(
+        solver,
+        state,
+        n_steps,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        state_kind="axisymmetric_tc_mhd_saturation",
+        device_record=device_record,
+    )
+    final = solver.diagnostics(out)
+    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
+    elapsed = n_steps * float(spec["time"]["dt"])
+    magnetic_growth = (
+        float(final["Emag"] / initial["Emag"]) if float(initial["Emag"]) > 0.0 else 0.0
+    )
+    reynolds_stress, maxwell_stress = _tc_mhd_stresses(solver, out)
+    scalars = {
+        "kinetic_energy": float(final["Ekin"]),
+        "magnetic_energy": float(final["Emag"]),
+        "growth_rate": float(growth_rate),
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_u": float(final["divu"]),
+        "divergence_b": float(final["divb"]),
+        "divergence_b_l2": float(final["divb"]),
+        "maxwell_stress_xy": float(maxwell_stress),
+        "reynolds_stress": float(reynolds_stress),
+        "magnetic_energy_growth_factor": float(magnetic_growth),
+        "saturation_check_passed": bool(magnetic_growth > 2.0),
+        "magnetic_bc": magnetic_bc,
+    }
+    return {
+        "scalars": scalars,
+        "time_series": [
+            {
+                "t": 0.0,
+                "kinetic_energy": float(initial["Ekin"]),
+                "magnetic_energy": float(initial["Emag"]),
+                "growth_rate_linear": float(eigenvalue.real),
+                "divergence_b_l2": float(initial["divb"]),
+            },
+            {
+                "t": elapsed,
+                "kinetic_energy": float(final["Ekin"]),
+                "magnetic_energy": float(final["Emag"]),
+                "growth_rate": float(growth_rate),
+                "divergence_b_l2": float(final["divb"]),
+                "maxwell_stress_xy": float(maxwell_stress),
+                "reynolds_stress": float(reynolds_stress),
+            },
+        ],
+    }
+
+
 def _run_taylor_couette_mhd_dns(
     spec: dict[str, Any],
     *,
@@ -817,6 +924,8 @@ def _growth_rate_from_energy(e0: Any, e1: Any, steps: int, dt: float) -> float:
 
 def _selected_resolution(spec: dict[str, Any]) -> dict[str, Any]:
     resolution = spec["resolution"]
+    if any(key in resolution for key in ("N", "Nr", "Nx", "Nz")):
+        return resolution
     selected = resolution.get("production", resolution)
     return {**resolution, **selected}
 
@@ -826,6 +935,19 @@ def _radial_velocity_linf(solver: Any, state: Any) -> float:
 
     velocity = solver.velocity_physical(state)
     return float(jnp.max(jnp.abs(velocity[0])))
+
+
+def _tc_mhd_stresses(solver: Any, state: Any) -> tuple[float, float]:
+    import jax.numpy as jnp
+
+    from jaxfun.galerkin.inner import integrate
+
+    fields = solver.fields_physical(state)
+    ur, ut = fields[0], fields[1]
+    br, bt = fields[3], fields[4]
+    reynolds = jnp.real(integrate(jnp.real(ur * jnp.conj(ut)) * solver.R, solver.T0))
+    maxwell = -jnp.real(integrate(jnp.real(br * jnp.conj(bt)) * solver.R, solver.T0))
+    return float(reynolds), float(maxwell)
 
 
 def _tc_inner_torque(solver: Any, state: Any) -> float:

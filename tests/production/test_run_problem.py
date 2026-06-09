@@ -27,6 +27,28 @@ def test_validate_only_writes_metadata_without_claiming_solver_execution(tmp_pat
     assert metadata["adapter"]["axis_conventions"]["axis_0"] == "r radial"
 
 
+def test_resolution_tier_validate_only_materializes_effective_spec(tmp_path):
+    out = tmp_path / "run"
+    metadata = run_problem(
+        config_path=ROOT / "production" / "runs" / "tc_mri_nonlinear_saturation.json",
+        out=out,
+        resolution_tier="start",
+        validate_only=True,
+        capture_device=False,
+    )
+
+    assert metadata["run_options"]["resolution_tier"] == "start"
+    assert metadata["adapter"]["resolution_tier"] == "start"
+    assert metadata["adapter"]["effective_resolution"] == {
+        "Nr": 40,
+        "Nz": 24,
+        "dealias": 1.5,
+        "family": "C",
+    }
+    assert metadata["adapter"]["solver_args"]["resolution"]["Nr"] == 40
+    assert metadata["base_spec_hash"] != metadata["spec_hash"]
+
+
 def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):
     out = tmp_path / "pipe"
     with pytest.raises(UnsupportedSpecError):
@@ -194,6 +216,7 @@ def test_tc_supercritical_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
         config_path=spec_path,
         out=out,
         steps=2,
+        resolution_tier="production",
         capture_device=False,
     )
 
@@ -202,6 +225,9 @@ def test_tc_supercritical_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
         "solver_execution_wired": True,
         "execution_kind": "dns-saturation",
     }
+    assert metadata["run_options"]["resolution_tier"] == "production"
+    assert metadata["adapter"]["effective_resolution"]["Nr"] == 10
+    assert metadata["base_spec_hash"] != metadata["spec_hash"]
     rows = [
         json.loads(line)
         for line in (out / "diagnostics.jsonl").read_text().splitlines()
@@ -212,6 +238,50 @@ def test_tc_supercritical_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
     assert final["radial_velocity_linf"] > 0.0
     assert final["torque"] > 0.0
     assert final["divergence_l2"] >= 0.0
+    assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
+
+
+def test_tc_mri_nonlinear_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "tc_mri_nonlinear_saturation.json").read_text()
+    )
+    spec["resolution"] = {
+        **spec["resolution"],
+        "start": {"Nr": 10, "Nz": 6},
+        "dealias": 1.0,
+    }
+    spec["time"] = {**spec["time"], "final_time": 0.004}
+    spec_path = tmp_path / "tc_mri_saturation_smoke.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "tc_mri_saturation"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=2,
+        resolution_tier="start",
+        capture_device=False,
+    )
+
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "dns-saturation",
+    }
+    assert metadata["run_options"]["resolution_tier"] == "start"
+    assert metadata["adapter"]["effective_resolution"]["Nr"] == 10
+    assert metadata["base_spec_hash"] != metadata["spec_hash"]
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    final = rows[-1]
+    assert final["kinetic_energy"] > 0.0
+    assert final["magnetic_energy"] > 0.0
+    assert final["divergence_b_l2"] >= 0.0
+    assert "maxwell_stress_xy" in final
+    assert "reynolds_stress" in final
     assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
 
 

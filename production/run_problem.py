@@ -64,12 +64,13 @@ def run_problem(
     device: str = "auto",
     steps: int | None = None,
     checkpoint_every: int | None = None,
+    resolution_tier: str | None = None,
     validate_only: bool = False,
     capture_device: bool = True,
 ) -> dict[str, Any]:
     """Validate a config, write metadata, and eventually execute its solver."""
 
-    config = load_config(config_path)
+    config = load_config(config_path, resolution_tier=resolution_tier)
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -87,6 +88,7 @@ def run_problem(
         requested_device=device,
         steps=steps,
         checkpoint_every=checkpoint_every,
+        resolution_tier=resolution_tier,
         validate_only=validate_only,
     )
     _write_json(out_dir / "metadata.json", metadata)
@@ -163,6 +165,7 @@ def build_metadata(
     requested_device: str,
     steps: int | None,
     checkpoint_every: int | None,
+    resolution_tier: str | None,
     validate_only: bool,
 ) -> dict[str, Any]:
     golden_resolution = _golden_resolution_metadata(config.problem_id, shenfun_golden)
@@ -174,6 +177,9 @@ def build_metadata(
         "config_path": str(config_path),
         "out_dir": str(out_dir),
         "spec_hash": config.spec["spec_hash"],
+        "base_spec_hash": config.metadata.get(
+            "base_spec_hash", config.spec["spec_hash"]
+        ),
         "geometry": config.geometry,
         "physics": config.physics,
         "support_state": config.spec["support_state"],
@@ -189,6 +195,7 @@ def build_metadata(
             "requested_device": requested_device,
             "steps_override": steps,
             "checkpoint_every": checkpoint_every,
+            "resolution_tier": resolution_tier,
             "compare_golden": compare_golden,
             "write_golden": write_golden,
             "validate_only": validate_only,
@@ -362,6 +369,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--steps", type=int)
     parser.add_argument("--checkpoint-every", type=int)
+    parser.add_argument(
+        "--resolution-tier",
+        choices=["start", "production"],
+        help="Materialize a nested resolution tier before execution.",
+    )
     parser.add_argument("--validate-only", action="store_true")
     return parser
 
@@ -379,6 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             steps=args.steps,
             checkpoint_every=args.checkpoint_every,
+            resolution_tier=args.resolution_tier,
             validate_only=args.validate_only,
         )
     except (ProblemSpecError, UnsupportedSpecError) as exc:

@@ -171,12 +171,21 @@ diagnostics path.
 .venv/bin/python production/run_problem.py \
   --config production/runs/tc_supercritical_saturation.json \
   --out runs/tc_supercritical_saturation/smoke \
+  --resolution-tier start \
+  --steps 2
+
+.venv/bin/python production/run_problem.py \
+  --config production/runs/tc_mri_nonlinear_saturation.json \
+  --out runs/tc_mri_nonlinear_saturation/smoke \
+  --resolution-tier start \
   --steps 2
 ```
 
-This executes the Phase J5 Taylor-Couette hydro saturation runner path. Full
-saturation uses the spec final time and production resolution and remains a long
-GPU run.
+These execute the Phase J5 Taylor-Couette hydro and MHD/MRI saturation runner
+paths at each checked-in spec's `start` resolution for local smoke coverage.
+Full saturation uses each spec final time and production resolution and remains
+a long GPU run; omit `--resolution-tier start` or pass
+`--resolution-tier production` for that path.
 
 ## Runner metadata validation
 
