@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -93,6 +94,8 @@ def run_problem(
     if validate_only:
         return metadata
 
+    solver_started_at = _utc_timestamp()
+    solver_start = time.perf_counter()
     try:
         diagnostics = run_supported_spec(
             config.spec,
@@ -101,10 +104,13 @@ def run_problem(
             checkpoint_every=checkpoint_every,
         )
     except ProductionOracleNotImplementedError as exc:
+        metadata["timing"] = _solver_timing(solver_started_at, solver_start)
+        _write_json(out_dir / "metadata.json", metadata)
         raise SolverExecutionNotImplementedError(
             f"{exc}; contract validation metadata was written, but no DNS "
             "or golden comparison was run"
         ) from exc
+    metadata["timing"] = _solver_timing(solver_started_at, solver_start)
 
     _write_json(out_dir / "spec.json", config.spec)
     _write_diagnostics(out_dir / "diagnostics.jsonl", diagnostics)
@@ -161,7 +167,7 @@ def build_metadata(
     golden_resolution = _golden_resolution_metadata(config.problem_id, shenfun_golden)
     return {
         "schema_version": 1,
-        "generated_at_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "generated_at_utc": _utc_timestamp(),
         "problem_id": config.problem_id,
         "artifact_id": config.artifact_id,
         "config_path": str(config_path),
@@ -236,6 +242,18 @@ def _golden_resolution_metadata(
         "golden_path": str(resolution.golden_path),
         "spec_path": str(resolution.spec_path),
         "exists": True,
+    }
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _solver_timing(started_at_utc: str, start: float) -> dict[str, Any]:
+    return {
+        "solver_started_at_utc": started_at_utc,
+        "solver_finished_at_utc": _utc_timestamp(),
+        "solver_wall_time_seconds": time.perf_counter() - start,
     }
 
 

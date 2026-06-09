@@ -64,6 +64,8 @@ run_with_log() {
   shift
   local log="${logs_root}/${id}.log"
   mkdir -p "$logs_root"
+  local started_epoch
+  started_epoch="$(date +%s)"
   {
     echo "timestamp=${timestamp}"
     echo "mode=${run_id}"
@@ -77,6 +79,13 @@ run_with_log() {
   "$@" >> "$log" 2>&1
   local status="$?"
   set -e
+  local finished_epoch
+  finished_epoch="$(date +%s)"
+  {
+    echo "exit_status=${status}"
+    echo "duration_seconds=$((finished_epoch - started_epoch))"
+    echo "completed_at_utc=$(date -u +%Y%m%dT%H%M%SZ)"
+  } >> "$log"
   if [[ "$status" -ne 0 ]]; then
     echo "validation failed for ${id} with exit ${status}; see ${log}" >&2
     tail -n 80 "$log" >&2 || true

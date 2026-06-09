@@ -76,6 +76,9 @@ def test_channel_analytic_run_writes_diagnostics_and_compares_golden(tmp_path):
         "kinetic_energy",
         "pressure_gradient",
     ]
+    assert metadata["timing"]["solver_wall_time_seconds"] >= 0.0
+    assert metadata["timing"]["solver_started_at_utc"]
+    assert metadata["timing"]["solver_finished_at_utc"]
     assert (out / "spec.json").exists()
     line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
     assert line["pressure_gradient"] == pytest.approx(-0.002)
