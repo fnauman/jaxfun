@@ -276,6 +276,17 @@ That run records `validation_scope=generated_saturated_golden` and passed the
 hydro saturation check. The generated 25 MB HDF5 checkpoint is intentionally not
 committed; the comparator validates `golden/golden.json` against `spec.json`.
 
+The full `tc_mri_nonlinear_saturation` run has a promoted generated saturated
+golden in `production/goldens/tc_mri_nonlinear_saturation` from:
+
+```bash
+production/validate_gpu.sh tc_mri_nonlinear_saturation --full
+```
+
+That run records `validation_scope=generated_saturated_golden` and passed the
+MRI saturation check. The generated 52 MB HDF5 checkpoint is intentionally not
+committed; the comparator validates `golden/golden.json` against `spec.json`.
+
 ## Runner metadata validation
 
 ```bash

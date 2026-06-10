@@ -32,6 +32,7 @@ def test_resolves_vendored_golden_without_shenfun_checkout():
         "pcf_mri_primitive_dns_v1",
         "exp_pcf_mri_shearbox_growth",
         "tc_supercritical_saturation",
+        "tc_mri_nonlinear_saturation",
         "taylor_couette_hydro_dns_v1",
         "pipe_womersley_v1",
     ],
@@ -58,6 +59,7 @@ def test_comparison_uses_per_observable_tolerances_and_passes_exact_golden_scala
     [
         ("exp_pcf_mri_shearbox_growth", "magnetic_energy_growth_factor"),
         ("tc_supercritical_saturation", "energy_growth_factor"),
+        ("tc_mri_nonlinear_saturation", "magnetic_energy_growth_factor"),
     ],
 )
 def test_promoted_saturation_golden_validates_against_run_spec(

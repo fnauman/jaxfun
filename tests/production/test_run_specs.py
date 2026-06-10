@@ -51,6 +51,7 @@ def test_promoted_saturation_goldens_track_run_spec_hashes():
     for problem_id in [
         "exp_pcf_mri_shearbox_growth",
         "tc_supercritical_saturation",
+        "tc_mri_nonlinear_saturation",
     ]:
         spec = load_spec(RUNS / f"{problem_id}.json")
         golden = json.loads(
