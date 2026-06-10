@@ -47,14 +47,18 @@ def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
     assert raw["resolution"]["start"] == {"Nx": 16, "Ny": 32, "Nz": 16}
 
 
-def test_promoted_pcf_mri_saturation_golden_tracks_run_spec_hash():
-    spec = load_spec(RUNS / "exp_pcf_mri_shearbox_growth.json")
-    golden = json.loads(
-        (GOLDENS / "exp_pcf_mri_shearbox_growth" / "golden" / "golden.json").read_text()
-    )
+def test_promoted_saturation_goldens_track_run_spec_hashes():
+    for problem_id in [
+        "exp_pcf_mri_shearbox_growth",
+        "tc_supercritical_saturation",
+    ]:
+        spec = load_spec(RUNS / f"{problem_id}.json")
+        golden = json.loads(
+            (GOLDENS / problem_id / "golden" / "golden.json").read_text()
+        )
 
-    assert golden["problem_id"] == spec["problem_id"]
-    assert golden["spec_hash"] == spec["spec_hash"]
+        assert golden["problem_id"] == spec["problem_id"]
+        assert golden["spec_hash"] == spec["spec_hash"]
 
 
 def test_run_specs_smoke_resolution_is_smaller_than_start():

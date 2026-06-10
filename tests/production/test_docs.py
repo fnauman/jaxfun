@@ -25,5 +25,7 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "N=(32,64,32)" in readme
     assert "N=(32,64,32)" in commands
     assert "exp_pcf_mri_shearbox_growth" in readme
+    assert "tc_supercritical_saturation" in readme
     assert "promoted generated saturated golden" in readme
     assert "385 MB HDF5 checkpoint is intentionally not" in commands
+    assert "25 MB HDF5 checkpoint is intentionally not" in commands

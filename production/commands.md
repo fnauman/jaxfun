@@ -265,6 +265,17 @@ spec final time and production resolution and remains a long GPU run; omit
 Full non-bounded saturation runs fail if their emitted `saturation_check_passed`
 diagnostic is false.
 
+The full `tc_supercritical_saturation` run has a promoted generated saturated
+golden in `production/goldens/tc_supercritical_saturation` from:
+
+```bash
+production/validate_gpu.sh tc_supercritical_saturation --full
+```
+
+That run records `validation_scope=generated_saturated_golden` and passed the
+hydro saturation check. The generated 25 MB HDF5 checkpoint is intentionally not
+committed; the comparator validates `golden/golden.json` against `spec.json`.
+
 ## Runner metadata validation
 
 ```bash
