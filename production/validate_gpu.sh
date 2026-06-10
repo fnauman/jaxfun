@@ -58,6 +58,7 @@ case "${parity_dtype}" in
   float64|double|fp64) parity_x64=1 ;;
 esac
 report_args=()
+failures=0
 
 cheap_parity_ids=(
   pcf_hydro_laminar_v1
@@ -139,6 +140,12 @@ run_with_log() {
   fi
 }
 
+run_and_record() {
+  if ! "$@"; then
+    failures=1
+  fi
+}
+
 run_heavy_spec() {
   local id="$1"
   local config="production/runs/${id}.json"
@@ -210,12 +217,12 @@ case "$run_id" in
   all|heavy)
     mapfile -t run_ids < <(find production/runs -maxdepth 1 -name '*.json' -printf '%f\n' | sed 's/\.json$//' | sort)
     for id in "${run_ids[@]}"; do
-      run_heavy_spec "$id"
+      run_and_record run_heavy_spec "$id"
     done
     ;;
   cheap|parity-cheap)
     for id in "${cheap_parity_ids[@]}"; do
-      run_compare_golden "$id"
+      run_and_record run_compare_golden "$id"
     done
     report_args+=(--skip "pipe_hagen_poiseuille_v1=${pipe_skip_reason}")
     report_args+=(--skip "pipe_womersley_v1=${pipe_skip_reason}")
@@ -223,17 +230,17 @@ case "$run_id" in
     ;;
   dns|parity-dns)
     for id in "${dns_parity_ids[@]}"; do
-      run_compare_golden "$id"
+      run_and_record run_compare_golden "$id"
     done
     ;;
   dns-pcf|pcf-dns|parity-dns-pcf)
     for id in "${pcf_dns_parity_ids[@]}"; do
-      run_compare_golden "$id"
+      run_and_record run_compare_golden "$id"
     done
     ;;
   dns-tc|tc-dns|parity-dns-tc)
     for id in "${tc_dns_parity_ids[@]}"; do
-      run_compare_golden "$id"
+      run_and_record run_compare_golden "$id"
     done
     ;;
   -h|--help|help)
@@ -242,9 +249,9 @@ case "$run_id" in
     ;;
   *)
     if [[ -f "production/runs/${run_id}.json" ]]; then
-      run_heavy_spec "$run_id"
+      run_and_record run_heavy_spec "$run_id"
     elif [[ -f "production/examples/${run_id}.json" ]]; then
-      run_compare_golden "$run_id"
+      run_and_record run_compare_golden "$run_id"
     else
       echo "unknown validation mode or problem_id: $run_id" >&2
       usage
@@ -255,3 +262,4 @@ esac
 
 "$python_bin" -m production.report --runs-root runs --out runs/_report "${report_args[@]}"
 echo "wrote runs/_report/results.json"
+exit "$failures"

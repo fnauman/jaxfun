@@ -44,7 +44,7 @@ Current implemented entry points:
 - `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths through `production/checkpoint.py`, including spec hash, dtype/shape metadata, device metadata, and diagnostics pointer attrs.
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses and compares final numeric diagnostics for CPU/GPU agreement checks.
-- `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, and fallback rung fields.
+- `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, fallback rung fields, and failed comparison details. `production/validate_gpu.sh` writes this report before exiting nonzero when an executed run fails.
 
 ## Validation scopes
 

@@ -13,3 +13,6 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "generated_saturated_golden" in readme
     assert "not full production saturation goldens" in commands
     assert "validation_scope=bounded_saturation_smoke" in commands
+    assert "failed row" in commands
+    assert "comparison details before exiting nonzero" in commands
+    assert "failed comparison details" in readme

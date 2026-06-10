@@ -167,6 +167,68 @@ def test_report_labels_bounded_gpu_smoke_as_not_full_saturation(tmp_path):
     assert "divergence_b_l2, magnetic_energy" in markdown
 
 
+def test_report_marks_failed_golden_comparison_as_failed(tmp_path):
+    metadata = {
+        "problem_id": "channel_poiseuille_hydro_v1",
+        "out_dir": "runs/channel/stamp",
+        "geometry": "channel",
+        "physics": "hydro",
+        "expected_oracle": {},
+        "device": {
+            "mode": "cpu_smoke",
+            "default_backend": "cpu",
+            "degraded": True,
+        },
+        "execution": {
+            "status": "completed",
+            "solver_execution_wired": True,
+            "execution_kind": "analytic-oracle",
+        },
+        "comparison_passed": False,
+        "observables_compared": ["flow_rate"],
+        "comparisons": [
+            {
+                "key": "flow_rate",
+                "expected": 1.0,
+                "actual": 1.25,
+                "tolerance": 1.0e-10,
+                "passed": False,
+                "message": "abs diff 0.25 exceeds tolerance 1e-10",
+            }
+        ],
+        "validation_scope": {
+            "kind": "golden_comparison",
+            "reason": "compared diagnostics against the resolved committed golden",
+            "checked_observables": ["flow_rate"],
+        },
+        "timing": {"solver_wall_time_seconds": 0.1},
+    }
+
+    metadata_path = tmp_path / "runs" / "channel" / "stamp" / "metadata.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    report = build_report([metadata_path])
+
+    assert report["summary"] == {"passed": 0, "failed": 1, "skipped": 0}
+    record = report["runs"][0]
+    assert record["outcome"] == "failed"
+    assert record["reason"] == "golden comparison failed"
+    assert record["comparisons"][0]["expected"] == 1.0
+    assert record["comparisons"][0]["actual"] == 1.25
+    assert record["comparisons"][0]["tolerance"] == 1.0e-10
+
+    paths = write_report([metadata_path], tmp_path / "_report")
+    markdown = paths["markdown"].read_text()
+    assert "Failed: 1" in markdown
+    assert "golden comparison failed" in markdown
+    expected_row = (
+        "| flow_rate | False | 1 | 1.25 | 1e-10 | "
+        "abs diff 0.25 exceeds tolerance 1e-10 |"
+    )
+    assert expected_row in markdown
+
+
 def test_report_accepts_explicit_skipped_records():
     reason = "pipe hydro is parity_pending until the axis-regular radial basis lands"
 

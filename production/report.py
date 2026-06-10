@@ -20,9 +20,13 @@ def record_from_metadata(
     device = metadata.get("device", {})
     status = execution.get("status", "unknown")
     solver_wired = bool(execution.get("solver_execution_wired", False))
+    comparison_passed = metadata.get("comparison_passed")
     if not solver_wired and status in {"validated", "not_started"}:
         outcome = "skipped"
         reason = "metadata validation only; solver execution was not requested"
+    elif status == "completed" and comparison_passed is False:
+        outcome = "failed"
+        reason = "golden comparison failed"
     elif status == "completed":
         outcome = "passed"
         reason = ""
