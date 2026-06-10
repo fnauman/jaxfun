@@ -162,6 +162,33 @@ def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):
     assert not out.exists()
 
 
+def test_solver_exception_marks_metadata_failed(tmp_path, monkeypatch):
+    def fail_solver(*args, **kwargs):
+        raise RuntimeError("synthetic solver crash")
+
+    monkeypatch.setattr("production.run_problem.run_supported_spec", fail_solver)
+    out = tmp_path / "run"
+
+    with pytest.raises(RuntimeError, match="synthetic solver crash"):
+        run_problem(
+            config_path=ROOT
+            / "production"
+            / "examples"
+            / "channel_poiseuille_hydro_v1.json",
+            out=out,
+            capture_device=False,
+        )
+
+    written = json.loads((out / "metadata.json").read_text())
+    assert written["execution"] == {
+        "status": "failed",
+        "solver_execution_wired": True,
+        "execution_kind": "analytic-oracle",
+        "failure_reason": "RuntimeError: synthetic solver crash",
+    }
+    assert written["timing"]["solver_wall_time_seconds"] >= 0.0
+
+
 def test_non_validate_run_fails_explicitly_for_unwired_oracle(tmp_path):
     spec = json.loads(
         (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()

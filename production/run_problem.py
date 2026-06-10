@@ -113,6 +113,16 @@ def run_problem(
             f"{exc}; contract validation metadata was written, but no DNS "
             "or golden comparison was run"
         ) from exc
+    except Exception as exc:
+        metadata["timing"] = _solver_timing(solver_started_at, solver_start)
+        metadata["execution"] = {
+            "status": "failed",
+            "solver_execution_wired": True,
+            "execution_kind": _execution_kind(config.spec),
+            "failure_reason": _exception_message(exc),
+        }
+        _write_json(out_dir / "metadata.json", metadata)
+        raise
     metadata["timing"] = _solver_timing(solver_started_at, solver_start)
 
     _write_json(out_dir / "spec.json", config.spec)
@@ -357,6 +367,13 @@ def _assert_required_saturation_checks(metadata: dict[str, Any]) -> None:
     }
     _write_json(Path(metadata["out_dir"]) / "metadata.json", metadata)
     raise RuntimeError(message)
+
+
+def _exception_message(exc: Exception) -> str:
+    message = str(exc)
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return type(exc).__name__
 
 
 def _golden_resolution_metadata(
