@@ -21,6 +21,7 @@ SOLVER_SOURCE_FILES: dict[tuple[str, str], list[str]] = {
         "examples/pcf_linear_jax.py",
     ],
     ("channel", "hydro"): ["examples/channelflow_kmm.py"],
+    ("pipe", "hydro"): ["examples/pipe_flow_dns_jax.py"],
     ("pcf", "mhd"): [
         "examples/pcf_mhd_jax.py",
         "examples/pcf_mri_primitive_jax.py",

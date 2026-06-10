@@ -16,7 +16,7 @@ GOLDENS = ROOT / "production" / "goldens"
 PROMOTIONS = ROOT / "production" / "promotions"
 
 
-NON_PIPE_ACCEPTED = [
+ACCEPTED = [
     "pcf_hydro_laminar_v1",
     "channel_poiseuille_hydro_v1",
     "pcf_mhd_conducting_v1",
@@ -28,42 +28,25 @@ NON_PIPE_ACCEPTED = [
     "taylor_couette_mhd_conducting_v1",
     "taylor_couette_mhd_insulating_v1",
     "taylor_couette_mhd_dns_v1",
+    "pipe_hagen_poiseuille_v1",
+    "pipe_womersley_v1",
 ]
 
 
-@pytest.mark.parametrize("problem_id", NON_PIPE_ACCEPTED)
-def test_non_pipe_specs_validate_and_match_vendored_golden_hash(problem_id):
+@pytest.mark.parametrize("problem_id", ACCEPTED)
+def test_specs_validate_and_match_vendored_golden_hash(problem_id):
     spec = load_spec(EXAMPLES / f"{problem_id}.json")
     assert spec["problem_id"] == problem_id
     golden = json.loads((GOLDENS / problem_id / "golden" / "golden.json").read_text())
     assert spec["spec_hash"] == golden["spec_hash"]
 
 
-def test_pipe_hydro_rejected_until_axis_regular_basis_lands():
-    with pytest.raises(
-        UnsupportedSpecError,
-        match=(
-            "pipe hydro is parity_pending.*axis-regularity.*"
-            "pipe_hagen_poiseuille_v1.*pipe_womersley_v1"
-        ),
-    ):
-        load_spec(EXAMPLES / "pipe_hagen_poiseuille_v1.json")
-
+def test_pipe_hydro_promotion_record_names_parity_and_remaining_dns_scope():
     record = (PROMOTIONS / "pipe_hydro_axis_regular_basis.md").read_text()
-    assert "axis-regular radial basis" in record
-    assert "singular weighted-Galerkin penalties" in record
+    assert "axisymmetric pipe hydro parity" in record
     assert "pipe_hagen_poiseuille_v1" in record
     assert "pipe_womersley_v1" in record
-
-
-def test_pipe_hash_can_still_be_computed_for_vendored_golden_validation():
-    spec = load_spec(
-        EXAMPLES / "pipe_hagen_poiseuille_v1.json", allow_unimplemented=True
-    )
-    golden = json.loads(
-        (GOLDENS / "pipe_hagen_poiseuille_v1" / "golden" / "golden.json").read_text()
-    )
-    assert spec["spec_hash"] == golden["spec_hash"]
+    assert "full 3D non-axisymmetric pipe DNS" in record
 
 
 def test_pipe_mhd_rejection_matches_shenfun_contract():

@@ -51,7 +51,6 @@ heavy_resolution_tier="${JAXFUN_VALIDATE_RESOLUTION_TIER:-start}"
 smoke_resolution_tier="${JAXFUN_VALIDATE_SMOKE_RESOLUTION_TIER:-smoke}"
 heavy_steps="${JAXFUN_VALIDATE_HEAVY_STEPS:-2}"
 heavy_checkpoint_every="${JAXFUN_VALIDATE_CHECKPOINT_EVERY:-}"
-pipe_skip_reason="pipe hydro is parity_pending until the axis-regular radial basis lands"
 parity_dtype="${JAXFUN_VALIDATE_PARITY_DTYPE:-float64}"
 parity_x64=0
 case "${parity_dtype}" in
@@ -68,6 +67,8 @@ cheap_parity_ids=(
   taylor_couette_hydro_v1
   taylor_couette_mhd_conducting_v1
   taylor_couette_mhd_insulating_v1
+  pipe_hagen_poiseuille_v1
+  pipe_womersley_v1
 )
 
 pcf_dns_parity_ids=(
@@ -89,7 +90,7 @@ usage: production/validate_gpu.sh [all|heavy|cheap|dns|dns-pcf|dns-tc|problem_id
 Modes:
   all, heavy   execute production/runs/*.json as bounded smoke by default
                (default resolution tier start, default 2 steps; --smoke uses tier smoke)
-  cheap        run the seven non-pipe cheap golden comparisons
+  cheap        run the nine cheap golden comparisons
   dns          run the four committed linear-window DNS golden comparisons
   dns-pcf      run the PCF primitive linear-window DNS golden comparisons
   dns-tc       run the Taylor-Couette linear-window DNS golden comparisons
@@ -224,9 +225,6 @@ case "$run_id" in
     for id in "${cheap_parity_ids[@]}"; do
       run_and_record run_compare_golden "$id"
     done
-    report_args+=(--skip "pipe_hagen_poiseuille_v1=${pipe_skip_reason}")
-    report_args+=(--skip "pipe_womersley_v1=${pipe_skip_reason}")
-    echo "pipe_hagen_poiseuille_v1 and pipe_womersley_v1 are skipped: ${pipe_skip_reason}"
     ;;
   dns|parity-dns)
     for id in "${dns_parity_ids[@]}"; do

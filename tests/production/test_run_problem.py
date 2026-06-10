@@ -7,7 +7,6 @@ import pytest
 
 from production.compare_goldens import validate_golden
 from production.oracles import _channel_poiseuille_kmm_state
-from production.problem_spec import UnsupportedSpecError
 from production.run_problem import (
     SolverExecutionNotImplementedError,
     _assert_required_saturation_checks,
@@ -147,19 +146,29 @@ def test_bounded_smoke_saturation_check_is_not_required():
     }
 
 
-def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):
-    out = tmp_path / "pipe"
-    with pytest.raises(UnsupportedSpecError):
-        run_problem(
-            config_path=ROOT
-            / "production"
-            / "examples"
-            / "pipe_hagen_poiseuille_v1.json",
-            out=out,
-            validate_only=True,
-            capture_device=False,
-        )
-    assert not out.exists()
+@pytest.mark.parametrize(
+    "problem_id",
+    ["pipe_hagen_poiseuille_v1", "pipe_womersley_v1"],
+)
+def test_pipe_hydro_golden_comparisons_run_without_shenfun(tmp_path, problem_id):
+    out = tmp_path / problem_id
+    metadata = run_problem(
+        config_path=ROOT / "production" / "examples" / f"{problem_id}.json",
+        out=out,
+        compare_golden=True,
+        capture_device=False,
+    )
+
+    assert metadata["comparison_passed"] is True
+    assert metadata["execution"] == {
+        "status": "completed",
+        "solver_execution_wired": True,
+        "execution_kind": "analytic-oracle",
+    }
+    assert metadata["adapter"]["solver_source_files"] == [
+        "examples/pipe_flow_dns_jax.py"
+    ]
+    assert (out / "diagnostics.jsonl").exists()
 
 
 def test_solver_exception_marks_metadata_failed(tmp_path, monkeypatch):

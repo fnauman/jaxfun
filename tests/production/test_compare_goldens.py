@@ -36,6 +36,7 @@ def test_resolves_vendored_golden_without_shenfun_checkout():
         "tc_supercritical_saturation",
         "tc_mri_nonlinear_saturation",
         "taylor_couette_hydro_dns_v1",
+        "pipe_hagen_poiseuille_v1",
         "pipe_womersley_v1",
     ],
 )

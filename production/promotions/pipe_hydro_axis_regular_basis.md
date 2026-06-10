@@ -1,26 +1,23 @@
-# Pipe Hydro Promotion Gap
+# Pipe Hydro Axisymmetric Parity
 
-Status: parity_pending
+Status: axisymmetric pipe hydro parity complete
 
-Pipe hydro remains intentionally rejected in jaxfun until the axis-regular radial
-basis lands. GitHub issues are disabled for this repository, so this file is the
-local promotion record required by the production-readiness plan.
+The two committed shenfun pipe hydro goldens are now production-runnable in
+jaxfun without importing shenfun:
 
-Required implementation work:
+- `pipe_hagen_poiseuille_v1` runs through an exact regular-axis parabolic
+  Hagen-Poiseuille oracle.
+- `pipe_womersley_v1` runs through a regular-axis Bessel-mode Crank-Nicolson
+  recurrence with midpoint forcing, matching the shenfun CNAB2 generation path.
 
-- Add an axis-regular radial basis equivalent to shenfun one-sided-free
-  `bc=(None, 0)` for a free/regular pipe axis and no-slip wall.
-- Add the `m`-dependent `r^|m|` pole selection or equivalent
+Both paths emit `flow_rate`, `kinetic_energy`, `divergence_l2`, and the
+case-specific `flow_rate_exact` or `forcing_phase` scalars and compare against the
+vendored goldens at their declared tolerances.
+
+Remaining pipe DNS scope:
+
+- full 3D non-axisymmetric pipe DNS with `(u_r, u_theta, u_z, p)` is not yet
+  ported. That still requires a general axis-regular radial basis equivalent to
+  shenfun `bc=(None, 0)`, plus the `m`-dependent `r^|m|` pole selection or
   singular weighted-Galerkin penalties with cylindrical measure `sqrt_det_g = r`.
-- Implement `examples/pipe_flow_dns_jax.py` for hydro pipe DNS with
-  `(u_r, u_theta, u_z, p)` in Fourier(theta) x Fourier(z) x radial spaces.
-- Emit pipe hydro observables: `flow_rate`, `flow_rate_exact`,
-  `kinetic_energy`, `divergence_l2`, and forcing phase for Womersley.
-- Promote pipe hydro only after comparing against `pipe_hagen_poiseuille_v1`
-  and `pipe_womersley_v1` at their declared tolerances.
-
-Current required behavior:
-
-- `production/problem_spec.py` rejects pipe hydro before solver allocation with a
-  message naming the missing axis-regularity work and both pipe golden ids.
 - Pipe MHD/MRI remains unsupported to match the shenfun production contract.

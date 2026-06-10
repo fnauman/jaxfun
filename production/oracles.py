@@ -138,6 +138,12 @@ def run_supported_spec(
             device_record=device_record,
         )
     if (
+        spec["geometry"] == "pipe"
+        and spec["physics"] == "hydro"
+        and spec["expected_oracle"]["type"] in {"hagen_poiseuille", "pipe_womersley"}
+    ):
+        return _run_pipe_hydro(spec, steps=steps)
+    if (
         spec["geometry"] == "channel"
         and spec["physics"] == "hydro"
         and spec["expected_oracle"]["type"] == "plane_poiseuille_laminar"
@@ -173,6 +179,64 @@ def run_supported_spec(
     raise ProductionOracleNotImplementedError(
         f"production solver execution is not wired yet for {spec['problem_id']}"
     )
+
+
+def _run_pipe_hydro(
+    spec: dict[str, Any], *, steps: int | None = None
+) -> dict[str, Any]:
+    from examples.pipe_flow_dns_jax import (
+        hagen_poiseuille_diagnostics,
+        womersley_cn_diagnostics,
+    )
+
+    groups = spec["nondimensional_groups"]
+    time = spec["time"]
+    domain = spec["domain"]
+    r0, r1 = (float(value) for value in domain["r"])
+    radius = float(groups.get("R", r1))
+    if not (np.isclose(r0, 0.0) and np.isclose(r1, radius)):
+        raise ProductionOracleNotImplementedError(
+            "pipe hydro oracle is wired for a regular-axis domain [0, R]"
+        )
+    if time.get("integrator") != "CNAB2":
+        raise ProductionOracleNotImplementedError(
+            "pipe hydro oracle is wired for the CNAB2 production specs"
+        )
+
+    nu = float(groups["nu"])
+    length = float(domain.get("z_period", 2.0 * math.pi))
+    dt = float(time["dt"])
+    elapsed = _steps_from_spec(spec, steps=steps) * dt
+    oracle = spec["expected_oracle"]["type"]
+
+    if oracle == "pipe_womersley":
+        amplitude = float(spec["forcing"].get("amplitude", 1.0))
+        omega = float(spec["forcing"].get("omega", groups.get("omega", 1.0)))
+        initial, final = womersley_cn_diagnostics(
+            amplitude=amplitude,
+            omega=omega,
+            nu=nu,
+            radius=radius,
+            length=length,
+            dt=dt,
+            final_time=elapsed,
+        )
+    else:
+        fz = float(spec["forcing"].get("fz", groups.get("fz", 4.0 * nu)))
+        initial = final = hagen_poiseuille_diagnostics(
+            fz=fz,
+            nu=nu,
+            radius=radius,
+            length=length,
+        )
+
+    return {
+        "scalars": final.scalars(),
+        "time_series": [
+            {"t": 0.0, **initial.scalars()},
+            {"t": elapsed, **final.scalars()},
+        ],
+    }
 
 
 def _run_channel_poiseuille(spec: dict[str, Any]) -> dict[str, Any]:

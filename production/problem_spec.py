@@ -1,7 +1,7 @@
 """No-shenfun problem-spec validator for jaxfun production runs.
 
 This mirrors the shenfun production validator and adds jaxfun implementation
-gates, notably the current pipe-hydro parity-pending rejection.
+gates for unsupported or intentionally deferred jaxfun subcases.
 """
 
 from __future__ import annotations
@@ -60,10 +60,14 @@ def load_spec(
         )
 
 
-def iter_example_specs(root: str | Path | None = None, *, include_unsupported: bool = False):
+def iter_example_specs(
+    root: str | Path | None = None, *, include_unsupported: bool = False
+):
     """Yield vendored example specs in a deterministic order."""
 
-    base = Path(root) if root is not None else Path(__file__).resolve().parent / "examples"
+    base = (
+        Path(root) if root is not None else Path(__file__).resolve().parent / "examples"
+    )
     pattern = "**/*.json" if include_unsupported else "*.json"
     yield from sorted(base.glob(pattern))
 
@@ -77,8 +81,8 @@ def validate_spec(
     """Validate a neutral production spec and return a normalized copy.
 
     ``allow_unsupported`` is for matrix/report tooling that must inspect rejected
-    specs. ``allow_unimplemented`` bypasses jaxfun-only gaps such as pipe hydro,
-    while preserving the shenfun contract checks and stable spec hash.
+    specs. ``allow_unimplemented`` is retained for compatibility with older
+    promotion tooling while preserving contract checks and stable spec hash.
     """
 
     if not isinstance(spec, dict):
@@ -123,7 +127,9 @@ def validate_spec(
     physics = data["physics"]
     support_state = data["support_state"]
     if geometry not in SUPPORTED_GEOMETRIES:
-        raise ProblemSpecError(f"geometry must be one of {sorted(SUPPORTED_GEOMETRIES)}")
+        raise ProblemSpecError(
+            f"geometry must be one of {sorted(SUPPORTED_GEOMETRIES)}"
+        )
     if physics not in SUPPORTED_PHYSICS:
         raise ProblemSpecError(f"physics must be one of {sorted(SUPPORTED_PHYSICS)}")
     if support_state not in SUPPORT_STATES:
@@ -138,7 +144,9 @@ def validate_spec(
     _reject_shenfun_unsupported_subcases(data, allow_unsupported=allow_unsupported)
 
     if support_state == "unsupported" and not allow_unsupported:
-        raise UnsupportedSpecError("support_state 'unsupported' specs are rejected before solver allocation")
+        raise UnsupportedSpecError(
+            "support_state 'unsupported' specs are rejected before solver allocation"
+        )
 
     _reject_jaxfun_unimplemented(data, allow_unimplemented=allow_unimplemented)
 
@@ -149,7 +157,9 @@ def validate_spec(
 def _require_keys(data: dict[str, Any], keys: list[str], context: str) -> None:
     missing = [k for k in keys if k not in data]
     if missing:
-        raise ProblemSpecError(f"{context} missing required field(s): {', '.join(missing)}")
+        raise ProblemSpecError(
+            f"{context} missing required field(s): {', '.join(missing)}"
+        )
 
 
 def _validate_axes(data: dict[str, Any]) -> None:
@@ -157,12 +167,19 @@ def _validate_axes(data: dict[str, Any]) -> None:
     native = data["native_axes"]
     if not isinstance(axes, dict) or set(axes) != {"x", "y", "z"}:
         raise ProblemSpecError("canonical_axes must state x, y, and z")
-    if not isinstance(native, dict) or not {"axis_0", "axis_1", "axis_2"}.issubset(native):
+    if not isinstance(native, dict) or not {"axis_0", "axis_1", "axis_2"}.issubset(
+        native
+    ):
         raise ProblemSpecError("native_axes must state axis_0, axis_1, and axis_2")
 
 
 def _validate_collections(data: dict[str, Any]) -> None:
-    for key in ("evolved_variables", "diagnostic_variables", "diagnostics", "unsupported_subcases"):
+    for key in (
+        "evolved_variables",
+        "diagnostic_variables",
+        "diagnostics",
+        "unsupported_subcases",
+    ):
         if not isinstance(data[key], list):
             raise ProblemSpecError(f"{key} must be a list")
     for key in (
@@ -209,14 +226,18 @@ def _validate_nondimensional_groups(data: dict[str, Any]) -> None:
             raise ProblemSpecError("Re, Rm, and Pm must be positive when present")
         expected = rm / re
         if not math.isclose(pm, expected, rel_tol=1.0e-10, abs_tol=1.0e-14):
-            raise ProblemSpecError(f"Pm must equal Rm/Re; got Pm={pm:g}, Rm/Re={expected:g}")
+            raise ProblemSpecError(
+                f"Pm must equal Rm/Re; got Pm={pm:g}, Rm/Re={expected:g}"
+            )
 
     if data["geometry"] == "taylor_couette":
         if "radius_ratio" not in groups:
             raise ProblemSpecError("Taylor-Couette specs must state radius_ratio")
         rr = float(groups["radius_ratio"])
         if not 0.0 < rr < 1.0:
-            raise ProblemSpecError("Taylor-Couette radius_ratio must satisfy 0 < eta < 1")
+            raise ProblemSpecError(
+                "Taylor-Couette radius_ratio must satisfy 0 < eta < 1"
+            )
 
 
 def _validate_boundary_conditions(data: dict[str, Any]) -> None:
@@ -244,7 +265,9 @@ def _validate_oracle_and_golden(data: dict[str, Any]) -> None:
         raise ProblemSpecError("tolerance_model.scalars must be an object")
 
 
-def _reject_shenfun_unsupported_subcases(data: dict[str, Any], *, allow_unsupported: bool) -> None:
+def _reject_shenfun_unsupported_subcases(
+    data: dict[str, Any], *, allow_unsupported: bool
+) -> None:
     geometry = data["geometry"]
     physics = data["physics"]
     bc = data["boundary_conditions"].get("magnetic")
@@ -255,33 +278,54 @@ def _reject_shenfun_unsupported_subcases(data: dict[str, Any], *, allow_unsuppor
         return
 
     if geometry == "pipe" and physics in {"mhd", "mri"}:
-        raise UnsupportedSpecError("pipe MHD/MRI is unsupported in shenfun production specs")
+        raise UnsupportedSpecError(
+            "pipe MHD/MRI is unsupported in shenfun production specs"
+        )
     if geometry == "channel" and physics in {"mhd", "mri"}:
-        raise UnsupportedSpecError("channel MHD/MRI is deferred; use pcf MHD/MRI production specs")
+        raise UnsupportedSpecError(
+            "channel MHD/MRI is deferred; use pcf MHD/MRI production specs"
+        )
     if physics == "mri" and geometry not in {"pcf", "taylor_couette"}:
-        raise UnsupportedSpecError("MRI production specs are supported only for pcf and Taylor-Couette")
+        raise UnsupportedSpecError(
+            "MRI production specs are supported only for pcf and Taylor-Couette"
+        )
     if geometry == "pcf" and physics in {"mhd", "mri"} and magnetic_bc != "conducting":
-        raise UnsupportedSpecError("PCF MHD/MRI production specs support conducting magnetic walls only")
-    if geometry == "taylor_couette" and physics in {"mhd", "mri"} and magnetic_bc not in {"conducting", "insulating"}:
-        raise UnsupportedSpecError("Taylor-Couette MHD/MRI production specs support conducting or insulating magnetic walls only")
-    if geometry == "taylor_couette" and physics in {"mhd", "mri"} and magnetic_bc == "insulating":
+        raise UnsupportedSpecError(
+            "PCF MHD/MRI production specs support conducting magnetic walls only"
+        )
+    if (
+        geometry == "taylor_couette"
+        and physics in {"mhd", "mri"}
+        and magnetic_bc not in {"conducting", "insulating"}
+    ):
+        raise UnsupportedSpecError(
+            "Taylor-Couette MHD/MRI production specs support conducting or "
+            "insulating magnetic walls only"
+        )
+    if (
+        geometry == "taylor_couette"
+        and physics in {"mhd", "mri"}
+        and magnetic_bc == "insulating"
+    ):
         m = int(mode.get("azimuthal_wavenumber", 0))
         kz = float(mode.get("axial_wavenumber", 0.0))
         if m != 0:
-            raise UnsupportedSpecError("Taylor-Couette insulating magnetic_bc is supported only for axisymmetric m=0")
+            raise UnsupportedSpecError(
+                "Taylor-Couette insulating magnetic_bc is supported only for "
+                "axisymmetric m=0"
+            )
         if kz == 0.0:
-            raise UnsupportedSpecError("Taylor-Couette insulating magnetic_bc requires nonzero axial_wavenumber")
+            raise UnsupportedSpecError(
+                "Taylor-Couette insulating magnetic_bc requires nonzero "
+                "axial_wavenumber"
+            )
 
 
-def _reject_jaxfun_unimplemented(data: dict[str, Any], *, allow_unimplemented: bool) -> None:
+def _reject_jaxfun_unimplemented(
+    data: dict[str, Any], *, allow_unimplemented: bool
+) -> None:
     if allow_unimplemented:
         return
-    if data["geometry"] == "pipe" and data["physics"] == "hydro":
-        raise UnsupportedSpecError(
-            "pipe hydro is parity_pending in jaxfun: missing axis-regularity radial basis, "
-            "singular weighted-Galerkin penalties, and golden parity for "
-            "pipe_hagen_poiseuille_v1 and pipe_womersley_v1"
-        )
 
 
 def support_is_experimental(data: dict[str, Any]) -> bool:

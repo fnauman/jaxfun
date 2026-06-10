@@ -35,3 +35,14 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "25 MB HDF5 checkpoint is intentionally not" in commands
     assert "52 MB HDF5 checkpoint is intentionally not" in commands
     assert "807 MB HDF5 payload" in commands
+
+
+def test_pipe_hydro_docs_describe_wired_cheap_parity():
+    readme = (ROOT / "production" / "README.md").read_text()
+    commands = (ROOT / "production" / "commands.md").read_text()
+
+    assert "pipe_hagen_poiseuille_v1" in readme
+    assert "pipe_womersley_v1" in readme
+    assert "golden comparisons wired for both pipe hydro goldens" in readme
+    assert "Nine-run cheap parity batch" in commands
+    assert "including `pipe_hagen_poiseuille_v1`" in commands

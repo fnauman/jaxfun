@@ -13,7 +13,9 @@ CHEAP_PARITY_IDS := \
 	pcf_mri_shearbox_v1 \
 	taylor_couette_hydro_v1 \
 	taylor_couette_mhd_conducting_v1 \
-	taylor_couette_mhd_insulating_v1
+	taylor_couette_mhd_insulating_v1 \
+	pipe_hagen_poiseuille_v1 \
+	pipe_womersley_v1
 
 PCF_DNS_PARITY_IDS := \
 	pcf_hydro_primitive_dns_v1 \

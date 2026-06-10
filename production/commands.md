@@ -29,14 +29,14 @@ The comparator resolves `production/goldens/<problem_id>/golden/golden.json`
 first. If that vendored root is absent it uses `$SHENFUN_GOLDENS_ROOT`, then the
 sibling shenfun checkout path.
 
-## Seven-run cheap parity batch
+## Nine-run cheap parity batch
 
 ```bash
 make -C production parity-cheap
 ```
 
-This runs the seven non-pipe cheap goldens and writes `runs/_report/results.json`.
-Pipe hydro remains skipped until the axis-regular radial basis lands.
+This runs the nine cheap goldens, including `pipe_hagen_poiseuille_v1` and
+`pipe_womersley_v1`, and writes `runs/_report/results.json`.
 
 ## Linear-window DNS parity
 
