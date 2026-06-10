@@ -11,7 +11,6 @@ from production.compare_goldens import (
     validate_golden,
 )
 
-
 ROOT = Path(__file__).resolve().parents[2]
 GOLDENS = ROOT / "production" / "goldens"
 
@@ -19,7 +18,10 @@ GOLDENS = ROOT / "production" / "goldens"
 def test_resolves_vendored_golden_without_shenfun_checkout():
     resolution = resolve_golden("pcf_hydro_laminar_v1")
     assert resolution.policy == "vendored"
-    assert resolution.golden_path == GOLDENS / "pcf_hydro_laminar_v1" / "golden" / "golden.json"
+    assert (
+        resolution.golden_path
+        == GOLDENS / "pcf_hydro_laminar_v1" / "golden" / "golden.json"
+    )
 
 
 @pytest.mark.parametrize(
@@ -28,6 +30,7 @@ def test_resolves_vendored_golden_without_shenfun_checkout():
         "pcf_hydro_laminar_v1",
         "pcf_mhd_conducting_v1",
         "pcf_mri_primitive_dns_v1",
+        "exp_pcf_mri_shearbox_growth",
         "taylor_couette_hydro_dns_v1",
         "pipe_womersley_v1",
     ],
@@ -35,7 +38,10 @@ def test_resolves_vendored_golden_without_shenfun_checkout():
 def test_vendored_golden_hash_validates(problem_id):
     path = GOLDENS / problem_id / "golden" / "golden.json"
     golden = validate_golden(path)
-    assert scalar_hash(golden["diagnostics"]["scalars"]) == golden["comparison_fields"]["scalars_sha256"]
+    assert (
+        scalar_hash(golden["diagnostics"]["scalars"])
+        == golden["comparison_fields"]["scalars_sha256"]
+    )
 
 
 def test_comparison_uses_per_observable_tolerances_and_passes_exact_golden_scalars():
@@ -46,8 +52,29 @@ def test_comparison_uses_per_observable_tolerances_and_passes_exact_golden_scala
     assert compared == {"divergence_b_l2", "growth_rate", "magnetic_energy"}
 
 
+def test_promoted_pcf_mri_shearbox_saturation_golden_validates_against_run_spec():
+    problem_id = "exp_pcf_mri_shearbox_growth"
+    root = GOLDENS / problem_id
+    spec = json.loads((root / "spec.json").read_text())
+    golden = validate_golden(root / "golden" / "golden.json", spec=spec)
+    scalars = golden["diagnostics"]["scalars"]
+
+    assert scalars["saturation_check_passed"] is True
+    assert scalars["magnetic_energy_growth_factor"] > 2.0
+    assert golden["environment"]["jax"]["default_backend"] == "gpu"
+
+    result = compare_problem(
+        problem_id,
+        scalars,
+        require_all_golden_scalars=True,
+    )
+    assert result.passed
+
+
 def test_failed_comparison_reports_expected_actual_and_tolerance():
-    golden = load_golden(GOLDENS / "channel_poiseuille_hydro_v1" / "golden" / "golden.json")
+    golden = load_golden(
+        GOLDENS / "channel_poiseuille_hydro_v1" / "golden" / "golden.json"
+    )
     actual = dict(golden["diagnostics"]["scalars"])
     actual["flow_rate"] += 1.0
     result = compare_problem("channel_poiseuille_hydro_v1", actual)

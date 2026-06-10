@@ -5,6 +5,7 @@ from production.problem_spec import load_spec
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "production" / "runs"
+GOLDENS = ROOT / "production" / "goldens"
 
 EXECUTABLE_RUNS = {
     "pcf_fluct_re400": [3],
@@ -44,6 +45,16 @@ def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
 
     assert raw["resolution"]["production"] == {"Nx": 32, "Ny": 64, "Nz": 32}
     assert raw["resolution"]["start"] == {"Nx": 16, "Ny": 32, "Nz": 16}
+
+
+def test_promoted_pcf_mri_saturation_golden_tracks_run_spec_hash():
+    spec = load_spec(RUNS / "exp_pcf_mri_shearbox_growth.json")
+    golden = json.loads(
+        (GOLDENS / "exp_pcf_mri_shearbox_growth" / "golden" / "golden.json").read_text()
+    )
+
+    assert golden["problem_id"] == spec["problem_id"]
+    assert golden["spec_hash"] == spec["spec_hash"]
 
 
 def test_run_specs_smoke_resolution_is_smaller_than_start():
