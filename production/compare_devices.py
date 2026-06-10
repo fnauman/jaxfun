@@ -42,6 +42,7 @@ def run_device_comparison(
     device_a: str = "cpu",
     device_b: str = "auto",
     steps: int | None = None,
+    resolution_tier: str | None = None,
     atol: float = 1.0e-8,
     rtol: float = 1.0e-6,
     timeout_seconds: float = 1800.0,
@@ -58,6 +59,7 @@ def run_device_comparison(
         out=left_dir,
         device=device_a,
         steps=steps,
+        resolution_tier=resolution_tier,
         timeout_seconds=timeout_seconds,
         python=python,
     )
@@ -66,6 +68,7 @@ def run_device_comparison(
         out=right_dir,
         device=device_b,
         steps=steps,
+        resolution_tier=resolution_tier,
         timeout_seconds=timeout_seconds,
         python=python,
     )
@@ -78,6 +81,7 @@ def run_device_comparison(
         "schema_version": 1,
         "config": str(config),
         "devices": {"left": device_a, "right": device_b},
+        "run_options": {"steps": steps, "resolution_tier": resolution_tier},
         "runs": {"left": left, "right": right},
         "summary": _summary(
             comparisons,
@@ -140,6 +144,7 @@ def _run_problem_subprocess(
     out: Path,
     device: str,
     steps: int | None,
+    resolution_tier: str | None,
     timeout_seconds: float,
     python: str | Path,
 ) -> dict[str, Any]:
@@ -155,6 +160,8 @@ def _run_problem_subprocess(
     ]
     if steps is not None:
         cmd.extend(["--steps", str(int(steps))])
+    if resolution_tier is not None:
+        cmd.extend(["--resolution-tier", resolution_tier])
     env = os.environ.copy()
     env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     env.setdefault("JAXFUN_PRODUCTION_DTYPE", "float32")
@@ -242,6 +249,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--device-b", default="auto", choices=["auto", "cpu", "cuda", "gpu"]
     )
     parser.add_argument("--steps", type=int)
+    parser.add_argument(
+        "--resolution-tier",
+        choices=["smoke", "start", "production"],
+        help="Materialize a nested production resolution tier for both runs.",
+    )
     parser.add_argument("--atol", type=float, default=1.0e-8)
     parser.add_argument("--rtol", type=float, default=1.0e-6)
     parser.add_argument("--timeout-seconds", type=float, default=1800.0)
@@ -257,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         device_a=args.device_a,
         device_b=args.device_b,
         steps=args.steps,
+        resolution_tier=args.resolution_tier,
         atol=args.atol,
         rtol=args.rtol,
         timeout_seconds=args.timeout_seconds,

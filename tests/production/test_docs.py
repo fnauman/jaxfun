@@ -16,3 +16,6 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "failed row" in commands
     assert "comparison details before exiting nonzero" in commands
     assert "failed comparison details" in readme
+    assert "--resolution-tier smoke" in commands
+    assert "bounded CPU/GPU agreement evidence" in commands
+    assert "--resolution-tier smoke|start|production" in readme

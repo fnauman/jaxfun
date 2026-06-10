@@ -55,3 +55,53 @@ def test_compare_devices_cli_runs_cpu_cpu_channel_smoke(tmp_path):
         "kinetic_energy",
         "pressure_gradient",
     }
+
+
+def test_compare_devices_cli_accepts_production_resolution_tier(tmp_path):
+    out = tmp_path / "compare"
+    rc = main(
+        [
+            "--config",
+            str(ROOT / "production" / "runs" / "pcf_mhd_divfree.json"),
+            "--out",
+            str(out),
+            "--device-a",
+            "cpu",
+            "--device-b",
+            "cpu",
+            "--resolution-tier",
+            "smoke",
+            "--steps",
+            "2",
+            "--timeout-seconds",
+            "1800",
+            "--atol",
+            "1e-6",
+            "--rtol",
+            "1e-5",
+        ]
+    )
+
+    assert rc == 0
+    report = json.loads((out / "device_comparison.json").read_text(encoding="utf-8"))
+    assert report["run_options"] == {"steps": 2, "resolution_tier": "smoke"}
+    for side in ("left", "right"):
+        run_dir = Path(report["runs"][side]["out_dir"])
+        metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+        assert metadata["run_options"]["resolution_tier"] == "smoke"
+        assert (
+            metadata["validation_scope"]["kind"]
+            == "cpu_smoke_finiteness_divergence_only"
+        )
+        assert metadata["adapter"]["effective_resolution"] == {
+            "Nx": 8,
+            "Ny": 4,
+            "Nz": 4,
+            "dealias": [1.0, 1.0, 1.0],
+            "family": "C",
+        }
+    assert {item["key"] for item in report["comparisons"]} >= {
+        "divergence_u_l2",
+        "divergence_b_l2",
+        "magnetic_energy",
+    }

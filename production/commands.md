@@ -149,11 +149,24 @@ artifacts are smoke diagnostics, not full production saturation goldens. Pass
   --device-a cpu \
   --device-b auto \
   --timeout-seconds 1800
+
+.venv/bin/python -m production.compare_devices \
+  --config production/runs/pcf_mhd_divfree.json \
+  --out runs/device_compare_pcf_mhd_smoke \
+  --device-a cpu \
+  --device-b auto \
+  --resolution-tier smoke \
+  --steps 2 \
+  --timeout-seconds 1800
 ```
 
 This launches separate runner subprocesses for each device so JAX backend
 selection is process-local, then compares the final numeric diagnostics and writes
-`device_comparison.json`. Use `--device-b gpu` to require CUDA explicitly.
+`device_comparison.json`. Use `--device-b gpu` to require CUDA explicitly. For
+Phase J5 production-run specs, pass `--resolution-tier smoke` or
+`--resolution-tier start` with `--steps` to get bounded CPU/GPU agreement evidence
+without running the full saturation case. The report records the selected
+`run_options`.
 
 ## Autograd objective smoke
 
