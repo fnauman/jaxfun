@@ -42,8 +42,8 @@
   },
   "resolution": {
     "smoke": {"Nx": 8, "Ny": 4, "Nz": 4, "dealias": [1.0, 1.0, 1.0], "family": "C"},
-    "start": {"Nx": 32, "Ny": 64, "Nz": 32},
-    "production": {"Nx": 64, "Ny": 128, "Nz": 64},
+    "start": {"Nx": 16, "Ny": 32, "Nz": 16},
+    "production": {"Nx": 32, "Ny": 64, "Nz": 32},
     "dealias": [1.0, 1.5, 1.5],
     "family": "L"
   },

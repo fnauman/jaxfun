@@ -39,6 +39,13 @@ def test_run_specs_carry_smoke_start_and_production_resolution():
         assert raw["time"]["final_time"] > 0.0
 
 
+def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
+    raw = json.loads((RUNS / "pcf_mhd_divfree.json").read_text())
+
+    assert raw["resolution"]["production"] == {"Nx": 32, "Ny": 64, "Nz": 32}
+    assert raw["resolution"]["start"] == {"Nx": 16, "Ny": 32, "Nz": 16}
+
+
 def test_run_specs_smoke_resolution_is_smaller_than_start():
     for path in RUNS.glob("*.json"):
         raw = json.loads(path.read_text())

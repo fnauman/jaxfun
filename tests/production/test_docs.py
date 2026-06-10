@@ -22,3 +22,5 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "saturation_check_passed=false" in readme
     assert "saturation_check_passed`" in commands
     assert "diagnostic is false" in commands
+    assert "N=(32,64,32)" in readme
+    assert "N=(32,64,32)" in commands

@@ -226,7 +226,9 @@ final time and production resolution and remains a long GPU run.
 These execute the Phase J5 primitive-`b` PCF MHD/MRI runner paths at each
 checked-in spec `start` resolution for local smoke coverage and record
 `validation_scope=bounded_saturation_smoke`. Full saturation uses each spec final
-time and production resolution and remains a long GPU run.
+time and production resolution and remains a long GPU run; `pcf_mhd_divfree`
+uses the Phase J5 pinned `N=(32,64,32)` production grid, with its `start` tier
+kept lower for bounded smoke.
 
 ## Taylor-Couette saturation smoke
 
