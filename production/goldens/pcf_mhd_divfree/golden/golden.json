@@ -1,0 +1,90 @@
+{
+  "artifact_id": "pcf_mhd_divfree",
+  "comparison_fields": {
+    "scalars_sha256": "2773e212cf49e778bea16d2435e5840e7fde005d0183cfee00572cb515ff8f39"
+  },
+  "diagnostics": {
+    "scalars": {
+      "butterfly_by_mean": -4.8970605348586105e-11,
+      "divergence_b_l2": 2.4736214072618168e-06,
+      "divergence_u_l2": 1.878639466212917e-09,
+      "growth_rate": -0.06410731913040107,
+      "growth_rate_linear": -0.05267717457659918,
+      "kinetic_energy": 0.00015689349675085396,
+      "magnetic_bc": "conducting",
+      "magnetic_energy": 0.0005188182694837451,
+      "magnetic_energy_growth_factor": 0.35251543110025796,
+      "maxwell_stress_xy": 3.811193114572342e-12,
+      "reynolds_stress": -2.422543936286825e-12,
+      "saturation_check_passed": true,
+      "total_energy": 0.0006757117807865143,
+      "transport_alpha": 5.554596782531007e-10
+    },
+    "time_series": [
+      {
+        "butterfly_by_mean": 0.0,
+        "divergence_b_l2": 4.446979073691182e-05,
+        "divergence_u_l2": 3.439488136791624e-05,
+        "growth_rate_linear": -0.05267717457659918,
+        "kinetic_energy": 0.0009637534385547042,
+        "magnetic_energy": 0.0014717604499310255,
+        "maxwell_stress_xy": 4.545781072925394e-20,
+        "reynolds_stress": -2.2310910967823463e-21,
+        "t": 0.0,
+        "total_energy": 0.002435513772070408,
+        "transport_alpha": 1.7290688693093946e-17
+      },
+      {
+        "butterfly_by_mean": -4.8970605348586105e-11,
+        "divergence_b_l2": 2.4736214072618168e-06,
+        "divergence_u_l2": 1.878639466212917e-09,
+        "growth_rate": -0.06410731913040107,
+        "kinetic_energy": 0.00015689349675085396,
+        "magnetic_energy": 0.0005188182694837451,
+        "maxwell_stress_xy": 3.811193114572342e-12,
+        "reynolds_stress": -2.422543936286825e-12,
+        "t": 10.0,
+        "total_energy": 0.0006757117807865143,
+        "transport_alpha": 5.554596782531007e-10
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax": {
+      "captured_at_utc": "2026-06-10T02:35:49+00:00",
+      "cuda_visible_devices": null,
+      "default_backend": "gpu",
+      "degraded": false,
+      "devices": [
+        "cuda:0"
+      ],
+      "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+      "jax_default_scalar_dtype": "float32",
+      "jax_enable_x64": false,
+      "jax_enable_x64_env": "0",
+      "jax_platforms": null,
+      "jax_version": "0.10.1",
+      "jaxfun_enable_x64": "0",
+      "jaxlib_version": "0.10.1",
+      "mode": "gpu",
+      "production_run_dtype": "float32",
+      "xla_python_client_preallocate": "false"
+    }
+  },
+  "generated_at_utc": "2026-06-10T02:36:33+00:00",
+  "git": {},
+  "problem_id": "pcf_mhd_divfree",
+  "schema_version": 1,
+  "source_anchors": [],
+  "spec_hash": "f2b220edf77840891bcb930cb2e70f3f0e93345e23605d5c35954808b4a8a089",
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 1e-10,
+      "divergence_u_l2": 1e-10,
+      "growth_rate": 0.002,
+      "magnetic_energy": 1e-06
+    }
+  }
+}

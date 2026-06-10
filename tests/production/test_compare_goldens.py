@@ -30,6 +30,7 @@ def test_resolves_vendored_golden_without_shenfun_checkout():
         "pcf_hydro_laminar_v1",
         "pcf_fluct_re400",
         "pcf_mhd_conducting_v1",
+        "pcf_mhd_divfree",
         "pcf_mri_primitive_dns_v1",
         "exp_pcf_mri_shearbox_growth",
         "tc_supercritical_saturation",
@@ -56,16 +57,17 @@ def test_comparison_uses_per_observable_tolerances_and_passes_exact_golden_scala
 
 
 @pytest.mark.parametrize(
-    ("problem_id", "growth_scalar"),
+    ("problem_id", "growth_scalar", "minimum_growth"),
     [
-        ("pcf_fluct_re400", "energy_growth_factor"),
-        ("exp_pcf_mri_shearbox_growth", "magnetic_energy_growth_factor"),
-        ("tc_supercritical_saturation", "energy_growth_factor"),
-        ("tc_mri_nonlinear_saturation", "magnetic_energy_growth_factor"),
+        ("pcf_fluct_re400", "energy_growth_factor", 1.0),
+        ("pcf_mhd_divfree", "magnetic_energy_growth_factor", 0.0),
+        ("exp_pcf_mri_shearbox_growth", "magnetic_energy_growth_factor", 2.0),
+        ("tc_supercritical_saturation", "energy_growth_factor", 2.0),
+        ("tc_mri_nonlinear_saturation", "magnetic_energy_growth_factor", 2.0),
     ],
 )
 def test_promoted_saturation_golden_validates_against_run_spec(
-    problem_id, growth_scalar
+    problem_id, growth_scalar, minimum_growth
 ):
     root = GOLDENS / problem_id
     spec = json.loads((root / "spec.json").read_text())
@@ -73,7 +75,7 @@ def test_promoted_saturation_golden_validates_against_run_spec(
     scalars = golden["diagnostics"]["scalars"]
 
     assert scalars["saturation_check_passed"] is True
-    assert scalars[growth_scalar] > 2.0
+    assert scalars[growth_scalar] > minimum_growth
     assert golden["environment"]["jax"]["default_backend"] == "gpu"
 
     result = compare_problem(

@@ -292,6 +292,7 @@ def test_pcf_mhd_divfree_smoke_runs_from_phase_j5_spec(tmp_path):
     assert metadata["validation_scope"]["bounded_smoke"] is True
     assert metadata["validation_scope"]["steps_override"] == 2
     assert metadata["validation_scope"]["resolution_tier"] == "start"
+    assert isinstance(metadata["saturation_checks"]["passed"], bool)
     assert (
         "not a full production saturation golden"
         in metadata["validation_scope"]["reason"]

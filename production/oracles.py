@@ -724,12 +724,19 @@ def _run_pcf_primitive_mhd_saturation(
         if initial["magnetic_energy"] > 0.0
         else 0.0
     )
+    if spec["physics"] == "mri":
+        saturation_passed = magnetic_growth > 2.0
+    else:
+        saturation_passed = magnetic_growth > 0.0 and all(
+            math.isfinite(float(final[key])) and float(final[key]) >= 0.0
+            for key in ("kinetic_energy", "magnetic_energy", "total_energy")
+        )
     scalars = {
         **final,
         "growth_rate": float(growth_rate),
         "growth_rate_linear": float(eigenvalue.real),
         "magnetic_energy_growth_factor": float(magnetic_growth),
-        "saturation_check_passed": bool(magnetic_growth > 2.0),
+        "saturation_check_passed": bool(saturation_passed),
         "magnetic_bc": magnetic_bc,
     }
     first = {

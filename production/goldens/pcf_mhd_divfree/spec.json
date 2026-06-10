@@ -1,0 +1,136 @@
+{
+  "boundary_conditions": {
+    "magnetic": {
+      "details": "primitive-b target: b_x=0, d_x b_y=d_x b_z=0",
+      "type": "conducting"
+    },
+    "velocity": {
+      "type": "no_slip_moving_walls"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal direction",
+    "y": "streamwise direction",
+    "z": "spanwise direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "magnetic_energy",
+    "divergence_u",
+    "divergence_b"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "magnetic_energy",
+    "total_energy",
+    "maxwell_stress_xy",
+    "divergence_u_l2",
+    "divergence_b_l2",
+    "growth_rate"
+  ],
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 12.566370614359172,
+    "z_period": 6.283185307179586
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p",
+    "b_x",
+    "b_y",
+    "b_z"
+  ],
+  "expected_oracle": {
+    "fallback_rungs": [
+      3
+    ],
+    "notes": "Ohmic/Alfven checks are linear sanity floors only; pcf_mhd_conducting_v1 does not bound the nonlinear state",
+    "source": "PLAN_jaxfun_production_ready.md Phase J5 inventory; no committed PCF plain-MHD DNS golden exists",
+    "type": "gpu_generated_saturated_dns"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "B0": 0.05,
+    "type": "moving_wall_shear_plus_imposed_field"
+  },
+  "formulation": {
+    "internal": "primitive-b PCF MHD DNS target; supersedes the old vector-potential DNS path",
+    "pressure": "primitive velocity pressure with direct magnetic components"
+  },
+  "geometry": "pcf",
+  "golden": {
+    "artifact_id": "pcf_mhd_divfree",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/pcf_mhd_divfree.json --out runs/pcf_mhd_divfree/<timestamp> --device auto --write-golden"
+  },
+  "initial_condition": {
+    "magnetic_amplitude": 0.05,
+    "type": "finite_amplitude_velocity_and_magnetic_perturbation",
+    "velocity_amplitude": 0.1
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "B0": 0.05,
+    "Pm": 1.0,
+    "Re": 400.0,
+    "Rm": 400.0,
+    "eta_mag": 0.0025,
+    "nu": 0.0025
+  },
+  "physics": "mhd",
+  "problem_id": "pcf_mhd_divfree",
+  "resolution": {
+    "dealias": [
+      1.0,
+      1.5,
+      1.5
+    ],
+    "family": "L",
+    "production": {
+      "Nx": 32,
+      "Ny": 64,
+      "Nz": 32
+    },
+    "smoke": {
+      "Nx": 8,
+      "Ny": 4,
+      "Nz": 4,
+      "dealias": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "family": "C"
+    },
+    "start": {
+      "Nx": 16,
+      "Ny": 32,
+      "Nz": 16
+    }
+  },
+  "spec_hash": "f2b220edf77840891bcb930cb2e70f3f0e93345e23605d5c35954808b4a8a089",
+  "support_state": "experimental",
+  "time": {
+    "dt": 0.01,
+    "final_time": 10.0,
+    "integrator": "IMEXRK222"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 1e-10,
+      "divergence_u_l2": 1e-10,
+      "growth_rate": 0.002,
+      "magnetic_energy": 1e-06
+    }
+  },
+  "unsupported_subcases": []
+}

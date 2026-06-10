@@ -50,6 +50,7 @@ def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
 def test_promoted_saturation_goldens_track_run_spec_hashes():
     for problem_id in [
         "pcf_fluct_re400",
+        "pcf_mhd_divfree",
         "exp_pcf_mri_shearbox_growth",
         "tc_supercritical_saturation",
         "tc_mri_nonlinear_saturation",

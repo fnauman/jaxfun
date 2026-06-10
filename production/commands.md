@@ -242,6 +242,18 @@ time and production resolution and remains a long GPU run; `pcf_mhd_divfree`
 uses the Phase J5 pinned `N=(32,64,32)` production grid, with its `start` tier
 kept lower for bounded smoke.
 
+The full `pcf_mhd_divfree` run has a promoted generated saturated golden in
+`production/goldens/pcf_mhd_divfree` from:
+
+```bash
+production/validate_gpu.sh pcf_mhd_divfree --full
+```
+
+That run records `validation_scope=generated_saturated_golden` and passed the
+plain-MHD finite positive-energy check. The generated 64 MB HDF5 checkpoint is
+intentionally not committed; the comparator validates `golden/golden.json`
+against `spec.json`.
+
 The full `exp_pcf_mri_shearbox_growth` run has a promoted generated saturated
 golden in `production/goldens/exp_pcf_mri_shearbox_growth` from:
 
