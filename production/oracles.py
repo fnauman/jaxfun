@@ -639,6 +639,7 @@ def _run_pcf_fluctuation_saturation(
         **final,
         "growth_rate": float(growth_rate),
         "energy_growth_factor": float(energy_growth),
+        "saturation_check_passed": bool(energy_growth > 1.0),
     }
     first = {
         "t": 0.0,

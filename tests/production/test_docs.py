@@ -24,6 +24,7 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "diagnostic is false" in commands
     assert "N=(32,64,32)" in readme
     assert "N=(32,64,32)" in commands
+    assert "pcf_fluct_re400" in readme
     assert "exp_pcf_mri_shearbox_growth" in readme
     assert "tc_supercritical_saturation" in readme
     assert "tc_mri_nonlinear_saturation" in readme
@@ -31,3 +32,4 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "385 MB HDF5 checkpoint is intentionally not" in commands
     assert "25 MB HDF5 checkpoint is intentionally not" in commands
     assert "52 MB HDF5 checkpoint is intentionally not" in commands
+    assert "807 MB HDF5 payload" in commands

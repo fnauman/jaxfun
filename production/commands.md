@@ -207,6 +207,18 @@ checked-in spec's `start` resolution for local smoke coverage and records
 `validation_scope=bounded_saturation_smoke`. Full KMM production uses the spec
 final time and production resolution and remains a long GPU run.
 
+The full `pcf_fluct_re400` run has a promoted generated saturated golden in
+`production/goldens/pcf_fluct_re400` from:
+
+```bash
+production/validate_gpu.sh pcf_fluct_re400 --full
+```
+
+That run records `validation_scope=generated_saturated_golden` and passed the
+finite-amplitude energy-growth check. The generated 807 MB HDF5 payload is
+omitted from git; the comparator validates `golden/golden.json` against
+`spec.json`.
+
 ## PCF MHD/MRI saturation smoke
 
 ```bash

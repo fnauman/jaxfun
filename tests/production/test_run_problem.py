@@ -241,6 +241,7 @@ def test_pcf_fluct_re400_smoke_runs_from_phase_j5_spec(tmp_path):
     }
     assert metadata["run_options"]["resolution_tier"] == "start"
     assert metadata["adapter"]["effective_resolution"]["Nx"] == 9
+    assert isinstance(metadata["saturation_checks"]["passed"], bool)
     rows = [
         json.loads(line)
         for line in (out / "diagnostics.jsonl").read_text().splitlines()

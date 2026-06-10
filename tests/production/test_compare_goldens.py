@@ -28,6 +28,7 @@ def test_resolves_vendored_golden_without_shenfun_checkout():
     "problem_id",
     [
         "pcf_hydro_laminar_v1",
+        "pcf_fluct_re400",
         "pcf_mhd_conducting_v1",
         "pcf_mri_primitive_dns_v1",
         "exp_pcf_mri_shearbox_growth",
@@ -57,6 +58,7 @@ def test_comparison_uses_per_observable_tolerances_and_passes_exact_golden_scala
 @pytest.mark.parametrize(
     ("problem_id", "growth_scalar"),
     [
+        ("pcf_fluct_re400", "energy_growth_factor"),
         ("exp_pcf_mri_shearbox_growth", "magnetic_energy_growth_factor"),
         ("tc_supercritical_saturation", "energy_growth_factor"),
         ("tc_mri_nonlinear_saturation", "magnetic_energy_growth_factor"),

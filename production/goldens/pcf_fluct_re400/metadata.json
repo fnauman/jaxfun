@@ -1,0 +1,30 @@
+{
+  "artifact_id": "pcf_fluct_re400",
+  "geometry": "pcf",
+  "physics": "hydro",
+  "problem_id": "pcf_fluct_re400",
+  "runner": "production.validate_gpu",
+  "spec_hash": "aa629412cbb8b8ffb02d23396a83b46bb91fea0356b33812e91585d06c0d2d16",
+  "support_state": "experimental",
+  "validation_scope": "generated_saturated_golden",
+  "source_run": {
+    "command": "production/validate_gpu.sh pcf_fluct_re400 --full",
+    "completed_at_utc": "2026-06-10T02:23:21+00:00",
+    "duration_seconds": 676,
+    "timestamp": "20260610T021205Z"
+  },
+  "device": {
+    "backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "jax_default_scalar_dtype": "float32",
+    "production_run_dtype": "float32"
+  },
+  "saturation_checks": {
+    "energy_growth_factor": 36.18966868220214,
+    "passed": true,
+    "required": true
+  },
+  "checkpoint_policy": "The full run wrote checkpoints/checkpoints.h5 for restart provenance, but the 807 MB HDF5 payload is omitted from git because golden comparison only requires golden/golden.json and spec.json."
+}
