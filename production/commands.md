@@ -249,6 +249,8 @@ paths at each checked-in spec's `start` resolution for local smoke coverage and
 record `validation_scope=bounded_saturation_smoke`. Full saturation uses each
 spec final time and production resolution and remains a long GPU run; omit
 `--resolution-tier start` or pass `--resolution-tier production` for that path.
+Full non-bounded saturation runs fail if their emitted `saturation_check_passed`
+diagnostic is false.
 
 ## Runner metadata validation
 

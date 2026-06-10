@@ -32,7 +32,7 @@ def record_from_metadata(
         reason = ""
     else:
         outcome = "failed"
-        reason = f"execution status {status!r}"
+        reason = execution.get("failure_reason") or f"execution status {status!r}"
 
     expected_oracle = metadata.get("expected_oracle", {})
     validation_scope = metadata.get("validation_scope", {})

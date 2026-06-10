@@ -130,7 +130,12 @@ def run_problem(
         steps=steps,
         resolution_tier=resolution_tier,
     )
+    metadata["saturation_checks"] = _saturation_check_metadata(
+        diagnostics, validation_scope=metadata["validation_scope"]
+    )
     metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
+    _write_json(out_dir / "metadata.json", metadata)
+    _assert_required_saturation_checks(metadata)
     checkpoint_path = out_dir / "checkpoints" / "checkpoints.h5"
     if checkpoint_path.exists():
         metadata["checkpoint_path"] = str(checkpoint_path)
@@ -317,6 +322,41 @@ def _validation_scope_metadata(
 
 def _is_bounded_smoke_run(*, steps: int | None, resolution_tier: str | None) -> bool:
     return steps is not None or resolution_tier in {"smoke", "start"}
+
+
+def _saturation_check_metadata(
+    diagnostics: dict[str, Any], *, validation_scope: dict[str, Any]
+) -> dict[str, Any]:
+    scalars = diagnostics.get("scalars", {})
+    raw_passed = scalars.get("saturation_check_passed")
+    required = validation_scope.get("kind") == "generated_saturated_golden"
+    return {
+        "required": required,
+        "passed": None if raw_passed is None else bool(raw_passed),
+        "energy_growth_factor": scalars.get("energy_growth_factor"),
+        "magnetic_energy_growth_factor": scalars.get("magnetic_energy_growth_factor"),
+    }
+
+
+def _assert_required_saturation_checks(metadata: dict[str, Any]) -> None:
+    checks = metadata.get("saturation_checks", {})
+    if not checks.get("required") or checks.get("passed") is not False:
+        return
+    details = []
+    for key in ("energy_growth_factor", "magnetic_energy_growth_factor"):
+        value = checks.get(key)
+        if value is not None:
+            details.append(f"{key}={value}")
+    message = "full saturation check failed: saturation_check_passed is false"
+    if details:
+        message = f"{message} ({', '.join(details)})"
+    metadata["execution"] = {
+        **metadata.get("execution", {}),
+        "status": "failed",
+        "failure_reason": message,
+    }
+    _write_json(Path(metadata["out_dir"]) / "metadata.json", metadata)
+    raise RuntimeError(message)
 
 
 def _golden_resolution_metadata(

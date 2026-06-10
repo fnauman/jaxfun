@@ -54,7 +54,7 @@ Current implemented entry points:
 - `cpu_smoke_fallback_oracle`: CPU smoke for a saturation run with rung-1 or rung-2 fallback checks available.
 - `cpu_smoke_finiteness_divergence_only`: CPU smoke for rung-3-only saturation specs such as `pcf_fluct_re400` and `pcf_mhd_divfree`; this proves solver completion, finite diagnostics, and emitted divergence diagnostics, not production parity.
 - `bounded_saturation_smoke`: GPU or CPU saturation execution with `--steps`, `--resolution-tier start`, or `--resolution-tier smoke`; generated golden/checkpoint files are smoke artifacts, not full production saturation goldens.
-- `generated_saturated_golden`: full saturation execution without bounded smoke overrides.
+- `generated_saturated_golden`: full saturation execution without bounded smoke overrides; if the diagnostics include `saturation_check_passed=false`, the runner marks metadata failed and exits nonzero instead of writing a passing full-saturation artifact.
 - `oracle_execution`: analytic, linear, or DNS oracle execution without a committed-golden comparison.
 
 Long-run Phase J5/J6 entry point:

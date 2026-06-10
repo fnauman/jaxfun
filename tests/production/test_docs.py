@@ -19,3 +19,6 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "--resolution-tier smoke" in commands
     assert "bounded CPU/GPU agreement evidence" in commands
     assert "--resolution-tier smoke|start|production" in readme
+    assert "saturation_check_passed=false" in readme
+    assert "saturation_check_passed`" in commands
+    assert "diagnostic is false" in commands

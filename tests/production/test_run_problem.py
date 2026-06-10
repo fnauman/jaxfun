@@ -8,7 +8,13 @@ import pytest
 from production.compare_goldens import validate_golden
 from production.oracles import _channel_poiseuille_kmm_state
 from production.problem_spec import UnsupportedSpecError
-from production.run_problem import SolverExecutionNotImplementedError, main, run_problem
+from production.run_problem import (
+    SolverExecutionNotImplementedError,
+    _assert_required_saturation_checks,
+    _saturation_check_metadata,
+    main,
+    run_problem,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -98,6 +104,47 @@ def test_cli_accepts_smoke_resolution_tier_for_validate_only(tmp_path):
     metadata = json.loads((out / "metadata.json").read_text())
     assert metadata["run_options"]["resolution_tier"] == "smoke"
     assert metadata["adapter"]["effective_resolution"]["Nx"] == 8
+
+
+def test_full_saturation_check_failure_marks_metadata_failed(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    metadata = {
+        "out_dir": str(out),
+        "execution": {
+            "status": "completed",
+            "solver_execution_wired": True,
+            "execution_kind": "dns-saturation",
+        },
+        "saturation_checks": {
+            "required": True,
+            "passed": False,
+            "magnetic_energy_growth_factor": 1.25,
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="full saturation check failed"):
+        _assert_required_saturation_checks(metadata)
+
+    written = json.loads((out / "metadata.json").read_text())
+    assert written["execution"]["status"] == "failed"
+    assert (
+        "magnetic_energy_growth_factor=1.25" in written["execution"]["failure_reason"]
+    )
+
+
+def test_bounded_smoke_saturation_check_is_not_required():
+    metadata = _saturation_check_metadata(
+        {"scalars": {"saturation_check_passed": False}},
+        validation_scope={"kind": "bounded_saturation_smoke"},
+    )
+
+    assert metadata == {
+        "required": False,
+        "passed": False,
+        "energy_growth_factor": None,
+        "magnetic_energy_growth_factor": None,
+    }
 
 
 def test_pipe_spec_rejected_before_output_directory_is_created(tmp_path):

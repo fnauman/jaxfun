@@ -167,6 +167,35 @@ def test_report_labels_bounded_gpu_smoke_as_not_full_saturation(tmp_path):
     assert "divergence_b_l2, magnetic_energy" in markdown
 
 
+def test_report_uses_runner_failure_reason_for_failed_execution():
+    metadata = {
+        "problem_id": "tc_mri_nonlinear_saturation",
+        "geometry": "taylor_couette",
+        "physics": "mri",
+        "expected_oracle": {"fallback_rungs": [1, 2, 3]},
+        "execution": {
+            "status": "failed",
+            "solver_execution_wired": True,
+            "execution_kind": "dns-saturation",
+            "failure_reason": (
+                "full saturation check failed: saturation_check_passed is false"
+            ),
+        },
+        "device": {"mode": "gpu", "default_backend": "gpu", "degraded": False},
+    }
+
+    report = build_report([])
+    report["runs"] = [record_from_metadata(metadata)]
+    report["summary"] = {"passed": 0, "failed": 1, "skipped": 0}
+
+    record = report["runs"][0]
+    assert record["outcome"] == "failed"
+    assert (
+        record["reason"]
+        == "full saturation check failed: saturation_check_passed is false"
+    )
+
+
 def test_report_marks_failed_golden_comparison_as_failed(tmp_path):
     metadata = {
         "problem_id": "channel_poiseuille_hydro_v1",
