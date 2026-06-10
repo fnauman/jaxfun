@@ -42,6 +42,7 @@ from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.integrators.cnab2 import cnab2_rhs, scan_steps
 from jaxfun.io import Cadence, run_with_cadence
+from jaxfun.la import TPMatrices, TPMatrix
 
 type MHDFields = tuple[Array, Array, Array, Array, Array, Array]
 
@@ -680,21 +681,111 @@ class PCFMRIDNSJax:
             self.T0p = None
             self.padded_counts = None
 
-        self.Limp, self.Lexp = self._build_operators()
-        self.Limp_modes = AxisymmetricPCFMRIDNSJax._extract_mode_matrices(
-            self.Limp, self.VQ_mode_indices
-        )
-        self.Lexp_modes = AxisymmetricPCFMRIDNSJax._extract_mode_matrices(
-            self.Lexp, self.VE_mode_indices
-        )
+        self.Limp = jnp.zeros((0, 0), dtype=self._operator_dtype())
+        self.Lexp = jnp.zeros((0, 0), dtype=self.Limp.dtype)
+        self.Limp_modes, self.Lexp_modes = self._build_operator_modes()
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
 
+    @staticmethod
+    def _operator_dtype() -> jnp.dtype:
+        return jnp.result_type(jnp.asarray(1.0), jnp.asarray(1.0j))
+
+    @staticmethod
+    def _mode_block_slices(space: CoupledSpace) -> tuple[slice, ...]:
+        starts = [0]
+        sizes = [int(component.num_dofs[-1]) for component in space]
+        for size in sizes[:-1]:
+            starts.append(starts[-1] + size)
+        return tuple(
+            slice(start, start + size)
+            for start, size in zip(starts, sizes, strict=True)
+        )
+
+    @staticmethod
+    def _mode_size(space: CoupledSpace) -> int:
+        return sum(int(component.num_dofs[-1]) for component in space)
+
+    @staticmethod
+    def _mode_shape(space: CoupledSpace) -> tuple[int, ...]:
+        return tuple(int(n) for n in space[0].num_dofs[:-1])
+
+    @staticmethod
+    def _tp_terms(matrix: Any) -> list[TPMatrix]:
+        if isinstance(matrix, TPMatrix):
+            return [matrix]
+        if isinstance(matrix, TPMatrices):
+            return list(matrix.tpmats)
+        raise TypeError(f"expected tensor-product matrix, got {type(matrix).__name__}")
+
+    @staticmethod
+    def _dense_factor(matrix: Any) -> np.ndarray:
+        return np.asarray(matrix.todense())
+
+    @classmethod
+    def _mode_blocks_from_expr(
+        cls, expr: sp.Expr, mode_shape: tuple[int, ...]
+    ) -> Array:
+        assembled = inner(expr, sparse=True, kind=InnerKind.BILINEAR)
+        terms = cls._tp_terms(assembled)
+        if not terms:
+            raise ValueError("empty tensor-product operator")
+        if len(mode_shape) != 2:
+            raise ValueError(f"expected 2 Fourier mode axes, got {mode_shape}")
+
+        first_radial = cls._dense_factor(terms[0].mats[-1])
+        n_modes = int(np.prod(mode_shape))
+        out = np.zeros(
+            (n_modes, first_radial.shape[0], first_radial.shape[1]),
+            dtype=np.result_type(first_radial, np.complex64),
+        )
+        for term in terms:
+            if len(term.mats) != 3:
+                raise ValueError(f"expected 3 tensor factors, got {len(term.mats)}")
+            y_factor = cls._dense_factor(term.mats[0])
+            z_factor = cls._dense_factor(term.mats[1])
+            radial = cls._dense_factor(term.mats[2])
+            for flat_mode, (iy, iz) in enumerate(np.ndindex(mode_shape)):
+                coeff = (
+                    np.asarray(term.coefficient) * y_factor[iy, iy] * z_factor[iz, iz]
+                )
+                if coeff != 0:
+                    out[flat_mode] += coeff * radial
+        return jnp.asarray(out)
+
+    def _zero_mode_operator(self, space: CoupledSpace) -> Array:
+        mode_shape = self._mode_shape(space)
+        return jnp.zeros(
+            (
+                int(np.prod(mode_shape)),
+                self._mode_size(space),
+                self._mode_size(space),
+            ),
+            dtype=self.Limp.dtype,
+        )
+
+    def _put_mode_block(
+        self,
+        A: Array,
+        test_space: CoupledSpace,
+        trial_space: CoupledSpace,
+        i: int,
+        j: int,
+        expr: sp.Expr,
+    ) -> Array:
+        test_mode_shape = self._mode_shape(test_space)
+        if test_mode_shape != self._mode_shape(trial_space):
+            raise ValueError("test and trial mode shapes must match")
+        rows = self._mode_block_slices(test_space)[i]
+        cols = self._mode_block_slices(trial_space)[j]
+        block = self._mode_blocks_from_expr(expr, test_mode_shape)
+        return A.at[:, rows, cols].add(block)
+
     def _lap(self, u: sp.Expr) -> sp.Expr:
         return Dx(u, 2, 2) + Dx(u, 0, 2) + Dx(u, 1, 2)
 
-    def _linear_terms(
+    def _linear_mode_terms(
         self,
         A: Array,
         test_space: CoupledSpace,
@@ -737,17 +828,18 @@ class PCFMRIDNSJax:
         add("by", "uy", tests["by"], B0, dz(fields["uy"]))
         add("bz", "uz", tests["bz"], B0, dz(fields["uz"]))
         for row, col, expr in terms:
-            A = AxisymmetricPCFMRIDNSJax._put_block(
+            A = self._put_mode_block(
                 A,
-                test_space.block_slices[idx[row]],
-                trial_space.block_slices[idx[col]],
-                AxisymmetricPCFMRIDNSJax._dense(expr),
+                test_space,
+                trial_space,
+                idx[row],
+                idx[col],
+                expr,
             )
         return A
 
-    def _build_operators(self) -> tuple[Array, Array]:
+    def _build_operator_modes(self) -> tuple[Array, Array]:
         dt = self.dt
-        dtype = jnp.result_type(jnp.asarray(1.0), jnp.asarray(1.0j))
         ux = TrialFunction(self.TD, name="ux3")
         uy = TrialFunction(self.TD, name="uy3")
         uz = TrialFunction(self.TD, name="uz3")
@@ -766,55 +858,25 @@ class PCFMRIDNSJax:
         fields_q = {"ux": ux, "uy": uy, "uz": uz, "bx": bx, "by": by, "bz": bz}
         tests_q = {"ux": vx, "uy": vy, "uz": vz, "bx": cx, "by": cy, "bz": cz}
 
-        Limp = jnp.zeros((self.VQ.dim, self.VQ.dim), dtype=dtype)
+        Limp = self._zero_mode_operator(self.VQ)
         for name in ("ux", "uy", "uz", "bx", "by", "bz"):
-            Limp = AxisymmetricPCFMRIDNSJax._put_block(
+            Limp = self._put_mode_block(
                 Limp,
-                self.VQ.block_slices[idx_q[name]],
-                self.VQ.block_slices[idx_q[name]],
-                AxisymmetricPCFMRIDNSJax._dense(
-                    tests_q[name] * fields_q[name] * (1.0 / dt)
-                ),
+                self.VQ,
+                self.VQ,
+                idx_q[name],
+                idx_q[name],
+                tests_q[name] * fields_q[name] * (1.0 / dt),
             )
-        Limp = self._linear_terms(
+        Limp = self._linear_mode_terms(
             Limp, self.VQ, self.VQ, idx_q, fields_q, tests_q, sign=-0.5
         )
-        Limp = AxisymmetricPCFMRIDNSJax._put_block(
-            Limp,
-            self.VQ.block_slices[0],
-            self.VQ.block_slices[3],
-            AxisymmetricPCFMRIDNSJax._dense(vx * Dx(p, 2, 1)),
-        )
-        Limp = AxisymmetricPCFMRIDNSJax._put_block(
-            Limp,
-            self.VQ.block_slices[1],
-            self.VQ.block_slices[3],
-            AxisymmetricPCFMRIDNSJax._dense(vy * Dx(p, 0, 1)),
-        )
-        Limp = AxisymmetricPCFMRIDNSJax._put_block(
-            Limp,
-            self.VQ.block_slices[2],
-            self.VQ.block_slices[3],
-            AxisymmetricPCFMRIDNSJax._dense(vz * Dx(p, 1, 1)),
-        )
-        Limp = AxisymmetricPCFMRIDNSJax._put_block(
-            Limp,
-            self.VQ.block_slices[3],
-            self.VQ.block_slices[0],
-            AxisymmetricPCFMRIDNSJax._dense(q * Dx(ux, 2, 1)),
-        )
-        Limp = AxisymmetricPCFMRIDNSJax._put_block(
-            Limp,
-            self.VQ.block_slices[3],
-            self.VQ.block_slices[1],
-            AxisymmetricPCFMRIDNSJax._dense(q * Dx(uy, 0, 1)),
-        )
-        Limp = AxisymmetricPCFMRIDNSJax._put_block(
-            Limp,
-            self.VQ.block_slices[3],
-            self.VQ.block_slices[2],
-            AxisymmetricPCFMRIDNSJax._dense(q * Dx(uz, 1, 1)),
-        )
+        Limp = self._put_mode_block(Limp, self.VQ, self.VQ, 0, 3, vx * Dx(p, 2, 1))
+        Limp = self._put_mode_block(Limp, self.VQ, self.VQ, 1, 3, vy * Dx(p, 0, 1))
+        Limp = self._put_mode_block(Limp, self.VQ, self.VQ, 2, 3, vz * Dx(p, 1, 1))
+        Limp = self._put_mode_block(Limp, self.VQ, self.VQ, 3, 0, q * Dx(ux, 2, 1))
+        Limp = self._put_mode_block(Limp, self.VQ, self.VQ, 3, 1, q * Dx(uy, 0, 1))
+        Limp = self._put_mode_block(Limp, self.VQ, self.VQ, 3, 2, q * Dx(uz, 1, 1))
 
         eux = TrialFunction(self.TD, name="eux3")
         euy = TrialFunction(self.TD, name="euy3")
@@ -831,17 +893,17 @@ class PCFMRIDNSJax:
         idx_e = {"ux": 0, "uy": 1, "uz": 2, "bx": 3, "by": 4, "bz": 5}
         fields_e = {"ux": eux, "uy": euy, "uz": euz, "bx": ebx, "by": eby, "bz": ebz}
         tests_e = {"ux": tx, "uy": ty, "uz": tz, "bx": dx, "by": dy, "bz": dz}
-        Lexp = jnp.zeros((self.VE.dim, self.VE.dim), dtype=dtype)
+        Lexp = self._zero_mode_operator(self.VE)
         for name in ("ux", "uy", "uz", "bx", "by", "bz"):
-            Lexp = AxisymmetricPCFMRIDNSJax._put_block(
+            Lexp = self._put_mode_block(
                 Lexp,
-                self.VE.block_slices[idx_e[name]],
-                self.VE.block_slices[idx_e[name]],
-                AxisymmetricPCFMRIDNSJax._dense(
-                    tests_e[name] * fields_e[name] * (1.0 / dt)
-                ),
+                self.VE,
+                self.VE,
+                idx_e[name],
+                idx_e[name],
+                tests_e[name] * fields_e[name] * (1.0 / dt),
             )
-        Lexp = self._linear_terms(
+        Lexp = self._linear_mode_terms(
             Lexp, self.VE, self.VE, idx_e, fields_e, tests_e, sign=0.5
         )
         return Limp, Lexp

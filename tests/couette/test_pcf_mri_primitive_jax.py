@@ -3,6 +3,8 @@ import jax.numpy as jnp
 import pytest
 
 from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax, PCFMRIDNSJax
+from jaxfun import Dx
+from jaxfun.galerkin import InnerKind, TestFunction, TrialFunction, inner
 
 
 def test_pcf_primitive_dns_zero_state_stays_zero() -> None:
@@ -15,6 +17,34 @@ def test_pcf_primitive_dns_zero_state_stays_zero() -> None:
     assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
     assert float(diag["divu"]) < 1.0e-12
     assert float(diag["divb"]) < 1.0e-12
+
+
+def test_pcf_primitive_3d_mode_blocks_match_dense_extraction() -> None:
+    solver = PCFMRIDNSJax(Nx=8, Ny=4, Nz=4, dt=1.0e-3, dealias=1.0)
+    u = TrialFunction(solver.TD, name="u_mode_check")
+    v = TestFunction(solver.TD, name="v_mode_check")
+    mode_shape = solver._mode_shape(solver.VE)
+    radial_size = int(solver.TD.num_dofs[-1])
+    scalar_mode_indices = jnp.stack(
+        [
+            jnp.arange(flat * radial_size, (flat + 1) * radial_size)
+            for flat in range(int(jnp.prod(jnp.asarray(mode_shape))))
+        ]
+    )
+
+    expressions = (
+        v * u,
+        v * Dx(u, 0, 1),
+        v * solver.xcoord * Dx(u, 0, 1),
+        v * Dx(u, 2, 2),
+    )
+    for expr in expressions:
+        dense = jnp.asarray(inner(expr, kind=InnerKind.BILINEAR).todense())
+        expected = dense[
+            scalar_mode_indices[:, :, None], scalar_mode_indices[:, None, :]
+        ]
+        actual = solver._mode_blocks_from_expr(expr, mode_shape)
+        assert jnp.allclose(actual, expected, rtol=1.0e-5, atol=1.0e-6)
 
 
 def test_pcf_primitive_3d_zero_state_stays_zero() -> None:
