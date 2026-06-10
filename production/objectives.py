@@ -68,10 +68,11 @@ def reynolds_stress_objective(
     velocity = velocity_fields(solver, out)
     left = velocity[components[0]]
     right = velocity[components[1]]
+    weights = _domain_weights(solver, left)
     if subtract_mean:
-        left = left - jnp.mean(left)
-        right = right - jnp.mean(right)
-    return jnp.real(jnp.mean(left * jnp.conj(right)))
+        left = left - _weighted_mean(left, weights)
+        right = right - _weighted_mean(right, weights)
+    return jnp.real(_weighted_mean(left * jnp.conj(right), weights))
 
 
 def maxwell_stress_objective(
@@ -88,10 +89,11 @@ def maxwell_stress_objective(
     magnetic = magnetic_fields(solver, out)
     left = magnetic[components[0]]
     right = magnetic[components[1]]
+    weights = _domain_weights(solver, left)
     if subtract_mean:
-        left = left - jnp.mean(left)
-        right = right - jnp.mean(right)
-    return -jnp.real(jnp.mean(left * jnp.conj(right)))
+        left = left - _weighted_mean(left, weights)
+        right = right - _weighted_mean(right, weights)
+    return -jnp.real(_weighted_mean(left * jnp.conj(right), weights))
 
 
 def transport_alpha_objective(
@@ -167,6 +169,43 @@ def magnetic_fields(solver: Any, state: Any) -> tuple[Array, ...]:
         if len(fields) >= 6:
             return fields[3:6]
     raise AttributeError("solver does not expose physical magnetic fields")
+
+
+def _domain_weights(solver: Any, field: Array) -> Array:
+    if not hasattr(solver, "X"):
+        return jnp.ones_like(jnp.real(field))
+    coords = tuple(solver.X)
+    weights = jnp.ones_like(jnp.real(field))
+    for axis, coord in enumerate(coords[: field.ndim]):
+        axis_coord = _axis_coordinate(coord, axis)
+        axis_weights = _trapezoid_axis_weights(axis_coord)
+        shape = [1] * field.ndim
+        shape[axis] = axis_weights.shape[0]
+        weights = weights * axis_weights.reshape(shape)
+    return weights
+
+
+def _axis_coordinate(coord: Any, axis: int) -> Array:
+    arr = jnp.asarray(coord)
+    if arr.ndim == 1:
+        return arr
+    index = [0] * arr.ndim
+    index[axis] = slice(None)
+    return arr[tuple(index)]
+
+
+def _trapezoid_axis_weights(coord: Array) -> Array:
+    x = jnp.asarray(coord)
+    if x.ndim != 1 or x.shape[0] < 2:
+        return jnp.ones_like(x)
+    dx = jnp.diff(x)
+    interior = 0.5 * (dx[:-1] + dx[1:])
+    return jnp.concatenate((0.5 * dx[:1], interior, 0.5 * dx[-1:]))
+
+
+def _weighted_mean(values: Array, weights: Array) -> Array:
+    real_weights = jnp.asarray(weights, dtype=jnp.real(values).dtype)
+    return jnp.sum(values * real_weights) / jnp.sum(real_weights)
 
 
 def _advance_state(solver: Any, state: Any, steps: int) -> Any:

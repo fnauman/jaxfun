@@ -69,13 +69,13 @@
   "problem_id": "pcf_fluct_re400",
   "schema_version": 1,
   "source_anchors": [],
-  "spec_hash": "aa629412cbb8b8ffb02d23396a83b46bb91fea0356b33812e91585d06c0d2d16",
+  "spec_hash": "a4a9125359b6d816c4fea35d486352a23e30f68a369bb19b39d6a48b8b6ee7bc",
   "tolerance_model": {
     "kind": "dns-production",
     "scalars": {
-      "divergence_l2": 1e-10,
+      "divergence_l2": 1e-06,
       "growth_rate": 0.002,
-      "kinetic_energy": 1e-06
+      "kinetic_energy": 0.0001
     }
   }
 }

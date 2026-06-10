@@ -54,14 +54,24 @@ def test_comparison_uses_per_observable_tolerances_and_passes_exact_golden_scala
     result = compare_problem("pcf_mhd_conducting_v1", golden["diagnostics"]["scalars"])
     assert result.passed
     compared = {item.key for item in result.comparisons}
-    assert compared == {"divergence_b_l2", "growth_rate", "magnetic_energy"}
+    assert compared == {
+        "divergence_b_l2",
+        "divergence_u_l2",
+        "eigenvalue_imag",
+        "eigenvalue_real",
+        "growth_rate",
+        "kinetic_energy",
+        "magnetic_bc",
+        "magnetic_energy",
+        "maxwell_stress_xy",
+        "total_energy",
+    }
 
 
 @pytest.mark.parametrize(
     ("problem_id", "growth_scalar", "minimum_growth"),
     [
-        ("pcf_fluct_re400", "energy_growth_factor", 1.0),
-        ("pcf_mhd_divfree", "magnetic_energy_growth_factor", 0.0),
+        ("pcf_fluct_re400", "energy_growth_factor", 2.0),
         ("exp_pcf_mri_shearbox_growth", "magnetic_energy_growth_factor", 2.0),
         ("tc_supercritical_saturation", "energy_growth_factor", 2.0),
         ("tc_mri_nonlinear_saturation", "magnetic_energy_growth_factor", 2.0),
@@ -85,6 +95,32 @@ def test_promoted_saturation_golden_validates_against_run_spec(
         require_all_golden_scalars=True,
     )
     assert result.passed
+
+
+def test_decaying_pcf_mhd_divfree_candidate_is_not_promoted():
+    root = GOLDENS / "pcf_mhd_divfree"
+    spec = json.loads((root / "spec.json").read_text())
+    golden = validate_golden(root / "golden" / "golden.json", spec=spec)
+    scalars = golden["diagnostics"]["scalars"]
+    metadata = json.loads((root / "metadata.json").read_text())
+
+    assert scalars["magnetic_energy_growth_factor"] < 1.0
+    assert scalars["saturation_check_passed"] is False
+    assert metadata["saturation_checks"]["passed"] is False
+    assert metadata["validation_scope"] == "failed_generated_saturated_candidate"
+
+    actual = dict(scalars)
+    actual["saturation_check_passed"] = True
+    result = compare_problem(
+        "pcf_mhd_divfree",
+        actual,
+        require_all_golden_scalars=True,
+    )
+    assert not result.passed
+    failure = next(
+        item for item in result.comparisons if item.key == "saturation_check_passed"
+    )
+    assert failure.message == "non-numeric scalar mismatch"
 
 
 def test_failed_comparison_reports_expected_actual_and_tolerance():

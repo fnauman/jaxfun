@@ -21,30 +21,51 @@ def record_from_metadata(
     status = execution.get("status", "unknown")
     solver_wired = bool(execution.get("solver_execution_wired", False))
     comparison_passed = metadata.get("comparison_passed")
-    if not solver_wired and status in {"validated", "not_started"}:
-        outcome = "skipped"
-        reason = "metadata validation only; solver execution was not requested"
-    elif status == "completed" and comparison_passed is False:
-        outcome = "failed"
-        reason = "golden comparison failed"
-    elif status == "completed":
-        outcome = "passed"
-        reason = ""
-    else:
-        outcome = "failed"
-        reason = execution.get("failure_reason") or f"execution status {status!r}"
-
     expected_oracle = metadata.get("expected_oracle", {})
     validation_scope = metadata.get("validation_scope", {})
     validation_scope_kind = validation_scope.get("kind")
     validation_scope_reason = validation_scope.get("reason", "")
-    if (
-        status == "completed"
-        and not reason
-        and validation_scope_kind
-        in {"cpu_smoke_finiteness_divergence_only", "bounded_saturation_smoke"}
+    saturation_checks = metadata.get("saturation_checks", {})
+
+    if not solver_wired and status in {"validated", "not_started"}:
+        outcome = "skipped"
+        reason = "metadata validation only; solver execution was not requested"
+    elif status == "completed" and comparison_passed is True:
+        outcome = "passed"
+        reason = ""
+    elif status == "completed" and comparison_passed is False:
+        outcome = "failed"
+        reason = "golden comparison failed"
+    elif (
+        status == "completed" and validation_scope_kind == "generated_saturated_golden"
     ):
+        if saturation_checks.get("present") and saturation_checks.get("passed") is True:
+            outcome = "passed"
+            reason = "generated saturation checks passed"
+        else:
+            outcome = "failed"
+            state = (
+                "missing"
+                if not saturation_checks.get("present")
+                else str(saturation_checks.get("passed")).lower()
+            )
+            reason = (
+                "generated saturation check did not pass: "
+                f"saturation_check_passed is {state}"
+            )
+    elif status == "completed" and validation_scope_kind in {
+        "bounded_saturation_smoke",
+        "cpu_smoke_fallback_oracle",
+        "cpu_smoke_finiteness_divergence_only",
+    }:
+        outcome = "skipped"
         reason = validation_scope_reason
+    elif status == "completed":
+        outcome = "failed"
+        reason = "completed without golden comparison or generated-saturation gate"
+    else:
+        outcome = "failed"
+        reason = execution.get("failure_reason") or f"execution status {status!r}"
     timing = metadata.get("timing", {})
     return {
         "problem_id": metadata.get("problem_id"),
@@ -66,6 +87,7 @@ def record_from_metadata(
         "golden_resolution": metadata.get("golden_resolution", {}),
         "observables_compared": metadata.get("observables_compared", []),
         "comparisons": metadata.get("comparisons", []),
+        "saturation_checks": saturation_checks,
         "solver_wall_time_seconds": timing.get("solver_wall_time_seconds"),
         "solver_started_at_utc": timing.get("solver_started_at_utc"),
         "solver_finished_at_utc": timing.get("solver_finished_at_utc"),

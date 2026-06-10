@@ -1,7 +1,7 @@
 {
   "artifact_id": "pcf_mhd_divfree",
   "comparison_fields": {
-    "scalars_sha256": "2773e212cf49e778bea16d2435e5840e7fde005d0183cfee00572cb515ff8f39"
+    "scalars_sha256": "5b186df739841d59bda8252755deecb474acca2d935eab5f0948745fbd02cf76"
   },
   "diagnostics": {
     "scalars": {
@@ -16,7 +16,7 @@
       "magnetic_energy_growth_factor": 0.35251543110025796,
       "maxwell_stress_xy": 3.811193114572342e-12,
       "reynolds_stress": -2.422543936286825e-12,
-      "saturation_check_passed": true,
+      "saturation_check_passed": false,
       "total_energy": 0.0006757117807865143,
       "transport_alpha": 5.554596782531007e-10
     },

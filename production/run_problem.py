@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from dataclasses import asdict
@@ -338,10 +339,12 @@ def _saturation_check_metadata(
     diagnostics: dict[str, Any], *, validation_scope: dict[str, Any]
 ) -> dict[str, Any]:
     scalars = diagnostics.get("scalars", {})
+    has_passed_key = "saturation_check_passed" in scalars
     raw_passed = scalars.get("saturation_check_passed")
     required = validation_scope.get("kind") == "generated_saturated_golden"
     return {
         "required": required,
+        "present": has_passed_key,
         "passed": None if raw_passed is None else bool(raw_passed),
         "energy_growth_factor": scalars.get("energy_growth_factor"),
         "magnetic_energy_growth_factor": scalars.get("magnetic_energy_growth_factor"),
@@ -350,14 +353,20 @@ def _saturation_check_metadata(
 
 def _assert_required_saturation_checks(metadata: dict[str, Any]) -> None:
     checks = metadata.get("saturation_checks", {})
-    if not checks.get("required") or checks.get("passed") is not False:
+    if not checks.get("required"):
         return
+    if checks.get("present") and checks.get("passed") is True:
+        return
+
     details = []
     for key in ("energy_growth_factor", "magnetic_energy_growth_factor"):
         value = checks.get(key)
         if value is not None:
             details.append(f"{key}={value}")
-    message = "full saturation check failed: saturation_check_passed is false"
+    state = (
+        "missing" if not checks.get("present") else str(checks.get("passed")).lower()
+    )
+    message = f"full saturation check failed: saturation_check_passed is {state}"
     if details:
         message = f"{message} ({', '.join(details)})"
     metadata["execution"] = {
@@ -448,11 +457,13 @@ def _compare_diagnostics(
             diagnostics["scalars"],
             golden,
             golden_path=explicit_golden,
+            require_all_golden_scalars=True,
             convention_metadata=convention_metadata,
         )
     return compare_problem(
         config.problem_id,
         diagnostics["scalars"],
+        require_all_golden_scalars=True,
         convention_metadata=convention_metadata,
     )
 
@@ -487,6 +498,8 @@ def _write_golden(
 
 
 def _json_ready(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, tuple):

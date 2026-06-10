@@ -259,5 +259,15 @@ case "$run_id" in
 esac
 
 "$python_bin" -m production.report --runs-root runs --out runs/_report "${report_args[@]}"
+report_failures="$($python_bin - <<'PYREPORT'
+import json
+from pathlib import Path
+report = json.loads(Path('runs/_report/results.json').read_text())
+print(int(report.get('summary', {}).get('failed', 0)))
+PYREPORT
+)"
+if [[ "$report_failures" -gt 0 ]]; then
+  failures=1
+fi
 echo "wrote runs/_report/results.json"
 exit "$failures"

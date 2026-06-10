@@ -64,11 +64,18 @@ def production_checkpoint_attrs(
 ) -> dict[str, Any]:
     """Return flat HDF5-safe attrs for a production checkpoint."""
 
+    production_dtype = str(
+        _device_value(device_record, "production_run_dtype")
+        or os.environ.get("JAXFUN_PRODUCTION_DTYPE", "float32")
+    )
+    jax_enable_x64 = _device_value(device_record, "jax_enable_x64")
+    if jax_enable_x64 is None:
+        jax_enable_x64 = production_dtype == "float64"
     dtype_metadata = {
         "field_dtypes": _tree_dtypes(fields),
         "field_shapes": _tree_shapes(fields),
-        "production_run_dtype": os.environ.get("JAXFUN_PRODUCTION_DTYPE", "float32"),
-        "jax_enable_x64": _device_value(device_record, "jax_enable_x64"),
+        "production_run_dtype": production_dtype,
+        "jax_enable_x64": bool(jax_enable_x64),
     }
     return {
         "schema_version": 1,

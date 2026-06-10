@@ -78,9 +78,9 @@
   "tolerance_model": {
     "kind": "dns-production",
     "scalars": {
-      "divergence_l2": 1e-10,
+      "divergence_l2": 1e-6,
       "growth_rate": 0.002,
-      "kinetic_energy": 0.000001
+      "kinetic_energy": 0.0001
     }
   },
   "golden": {

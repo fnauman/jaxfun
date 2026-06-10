@@ -162,7 +162,7 @@ artifacts are smoke diagnostics, not full production saturation goldens. Pass
 
 This launches separate runner subprocesses for each device so JAX backend
 selection is process-local, then compares the final numeric diagnostics and writes
-`device_comparison.json`. Use `--device-b gpu` to require CUDA explicitly. For
+`device_comparison.json` with per-side wall times and a left/right speedup ratio. Use `--device-b gpu` to require CUDA explicitly. For
 Phase J5 production-run specs, pass `--resolution-tier smoke` or
 `--resolution-tier start` with `--steps` to get bounded CPU/GPU agreement evidence
 without running the full saturation case. The report records the selected
@@ -242,15 +242,17 @@ time and production resolution and remains a long GPU run; `pcf_mhd_divfree`
 uses the Phase J5 pinned `N=(32,64,32)` production grid, with its `start` tier
 kept lower for bounded smoke.
 
-The full `pcf_mhd_divfree` run has a promoted generated saturated golden in
-`production/goldens/pcf_mhd_divfree` from:
+The full `pcf_mhd_divfree` run currently has a retained failed generated-saturation
+candidate in `production/goldens/pcf_mhd_divfree`; it is not promoted because the
+recorded magnetic energy decays below the required 2x threshold. Re-run with:
 
 ```bash
 production/validate_gpu.sh pcf_mhd_divfree --full
 ```
 
-That run records `validation_scope=generated_saturated_golden` and passed the
-plain-MHD finite positive-energy check. The generated 64 MB HDF5 checkpoint is
+A passing full run must record `validation_scope=generated_saturated_golden`
+and `magnetic_energy_growth_factor > 2.0`; the retained candidate records
+`saturation_check_passed=false`. The generated 64 MB HDF5 checkpoint is
 intentionally not committed; the comparator validates `golden/golden.json`
 against `spec.json`.
 
@@ -287,7 +289,8 @@ record `validation_scope=bounded_saturation_smoke`. Full saturation uses each
 spec final time and production resolution and remains a long GPU run; omit
 `--resolution-tier start` or pass `--resolution-tier production` for that path.
 Full non-bounded saturation runs fail if their emitted `saturation_check_passed`
-diagnostic is false.
+diagnostic is missing or false. Bounded smoke rows are reported as smoke/skipped
+validation evidence rather than full production passes.
 
 The full `tc_supercritical_saturation` run has a promoted generated saturated
 golden in `production/goldens/tc_supercritical_saturation` from:

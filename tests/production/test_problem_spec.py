@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from production.problem_spec import (
+    ProblemSpecError,
     UnsupportedSpecError,
     load_spec,
     spec_hash,
@@ -61,6 +62,16 @@ def test_tc_insulating_m1_rejection_names_axisymmetric_requirement():
             / "unsupported"
             / "taylor_couette_mhd_insulating_m1_unsupported_v1.json"
         )
+
+
+def test_domain_required_keys_are_rejected_before_solver_setup():
+    spec = json.loads((EXAMPLES / "channel_poiseuille_hydro_v1.json").read_text())
+    spec["domain"].pop("z_period")
+
+    with pytest.raises(
+        ProblemSpecError, match="domain missing required field.*z_period"
+    ):
+        validate_spec(spec)
 
 
 def test_pm_equals_rm_over_re_invariant_is_enforced():

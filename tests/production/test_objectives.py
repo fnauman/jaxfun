@@ -36,6 +36,7 @@ def _central_difference(fun, x0: float, eps: float):
 
 @pytest.fixture
 def pcf_solver():
+    jax.config.update("jax_enable_x64", True)
     return PlaneCouetteFluctuationJax(
         N=(7, 4, 4),
         Re=200.0,
@@ -48,6 +49,25 @@ pytestmark = pytest.mark.skipif(
     not bool(jax.config.read("jax_enable_x64")),
     reason="production objective finite differences use x64",
 )
+
+
+def test_reynolds_stress_objective_uses_nonuniform_grid_weights():
+    class FakeSolver:
+        def __init__(self):
+            x = jnp.asarray([0.0, 0.2, 1.0])
+            y = jnp.asarray([0.0, 1.0])
+            z = jnp.asarray([0.0, 1.0])
+            self.X = jnp.meshgrid(x, y, z, indexing="ij")
+
+        def velocity_physical(self, state):
+            x = self.X[0]
+            ones = jnp.ones_like(x)
+            return (x, ones, jnp.zeros_like(x))
+
+    value = reynolds_stress_objective(FakeSolver(), object(), steps=0)
+
+    assert jnp.allclose(value, 0.5, rtol=1.0e-6, atol=1.0e-7)
+    assert not jnp.allclose(value, 0.4, rtol=1.0e-6, atol=1.0e-7)
 
 
 def test_final_energy_objective_gradient_matches_finite_difference(pcf_solver):

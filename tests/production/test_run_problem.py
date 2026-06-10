@@ -132,6 +132,31 @@ def test_full_saturation_check_failure_marks_metadata_failed(tmp_path):
     )
 
 
+def test_required_saturation_check_missing_key_fails(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    metadata = {
+        "out_dir": str(out),
+        "execution": {
+            "status": "completed",
+            "solver_execution_wired": True,
+            "execution_kind": "dns-saturation",
+        },
+        "saturation_checks": {
+            "required": True,
+            "present": False,
+            "passed": None,
+            "energy_growth_factor": 3.0,
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="saturation_check_passed is missing"):
+        _assert_required_saturation_checks(metadata)
+
+    written = json.loads((out / "metadata.json").read_text())
+    assert written["execution"]["status"] == "failed"
+
+
 def test_bounded_smoke_saturation_check_is_not_required():
     metadata = _saturation_check_metadata(
         {"scalars": {"saturation_check_passed": False}},
@@ -140,6 +165,7 @@ def test_bounded_smoke_saturation_check_is_not_required():
 
     assert metadata == {
         "required": False,
+        "present": True,
         "passed": False,
         "energy_growth_factor": None,
         "magnetic_energy_growth_factor": None,
@@ -250,7 +276,7 @@ def test_pcf_fluct_re400_smoke_runs_from_phase_j5_spec(tmp_path):
     }
     assert metadata["run_options"]["resolution_tier"] == "start"
     assert metadata["adapter"]["effective_resolution"]["Nx"] == 9
-    assert isinstance(metadata["saturation_checks"]["passed"], bool)
+    assert metadata["saturation_checks"]["present"] is True
     rows = [
         json.loads(line)
         for line in (out / "diagnostics.jsonl").read_text().splitlines()
@@ -260,6 +286,9 @@ def test_pcf_fluct_re400_smoke_runs_from_phase_j5_spec(tmp_path):
     assert final["kinetic_energy"] > 0.0
     assert final["total_kinetic_energy"] > final["kinetic_energy"]
     assert final["divergence_l2"] < 1.0e-4
+    assert metadata["saturation_checks"]["passed"] == (
+        final["energy_growth_factor"] > 2.0
+    )
     assert "wall_shear_lower" in final
     assert "wall_shear_upper" in final
     assert "streak_rms" in final
@@ -301,7 +330,7 @@ def test_pcf_mhd_divfree_smoke_runs_from_phase_j5_spec(tmp_path):
     assert metadata["validation_scope"]["bounded_smoke"] is True
     assert metadata["validation_scope"]["steps_override"] == 2
     assert metadata["validation_scope"]["resolution_tier"] == "start"
-    assert isinstance(metadata["saturation_checks"]["passed"], bool)
+    assert metadata["saturation_checks"]["present"] is True
     assert (
         "not a full production saturation golden"
         in metadata["validation_scope"]["reason"]
@@ -317,6 +346,9 @@ def test_pcf_mhd_divfree_smoke_runs_from_phase_j5_spec(tmp_path):
     assert final["total_energy"] > final["magnetic_energy"]
     assert final["divergence_u_l2"] < 1.0e-4
     assert final["divergence_b_l2"] < 1.0e-4
+    assert metadata["saturation_checks"]["passed"] == (
+        final["magnetic_energy_growth_factor"] > 2.0
+    )
     assert "maxwell_stress_xy" in final
     assert "reynolds_stress" in final
     assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
@@ -426,8 +458,12 @@ def test_pcf_hydro_laminar_run_writes_diagnostics_and_compares_golden(tmp_path):
     assert metadata["comparison_passed"] is True
     assert metadata["observables_compared"] == [
         "divergence_l2",
+        "eigenvalue_imag",
+        "eigenvalue_real",
         "growth_rate",
         "kinetic_energy",
+        "wall_shear_lower",
+        "wall_shear_upper",
     ]
     line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
     assert line["growth_rate"] == pytest.approx(-0.0034674010999505545)
@@ -439,9 +475,37 @@ def test_pcf_hydro_laminar_run_writes_diagnostics_and_compares_golden(tmp_path):
     [
         (
             "pcf_mhd_conducting_v1",
-            ["divergence_b_l2", "growth_rate", "magnetic_energy"],
+            [
+                "divergence_b_l2",
+                "divergence_u_l2",
+                "eigenvalue_imag",
+                "eigenvalue_real",
+                "growth_rate",
+                "kinetic_energy",
+                "magnetic_bc",
+                "magnetic_energy",
+                "maxwell_stress_xy",
+                "total_energy",
+            ],
         ),
-        ("pcf_mri_shearbox_v1", ["divergence_b_l2", "growth_rate", "local_mri_growth"]),
+        (
+            "pcf_mri_shearbox_v1",
+            [
+                "divergence_b_l2",
+                "divergence_u_l2",
+                "eigenvalue_imag",
+                "eigenvalue_real",
+                "growth_rate",
+                "kinetic_energy",
+                "local_mri_growth",
+                "local_mri_smax_over_omega",
+                "magnetic_bc",
+                "magnetic_energy",
+                "maxwell_stress_xy",
+                "q_shear",
+                "total_energy",
+            ],
+        ),
     ],
 )
 def test_pcf_mhd_and_mri_linear_runs_compare_goldens(
@@ -481,8 +545,13 @@ def test_tc_mhd_linear_runs_compare_goldens(tmp_path, problem_id):
     assert metadata["comparison_passed"] is True
     assert metadata["observables_compared"] == [
         "divergence_b_l2",
+        "eigenvalue_imag",
+        "eigenvalue_real",
         "growth_rate",
+        "kinetic_energy",
+        "magnetic_bc",
         "magnetic_energy",
+        "total_energy",
     ]
     line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
     assert line["magnetic_bc"] in {"conducting", "insulating"}
@@ -501,8 +570,11 @@ def test_tc_hydro_linear_run_writes_diagnostics_and_compares_golden(tmp_path):
     assert metadata["comparison_passed"] is True
     assert metadata["observables_compared"] == [
         "divergence_l2",
+        "eigenvalue_imag",
+        "eigenvalue_real",
         "growth_rate",
         "kinetic_energy",
+        "rayleigh_stable",
     ]
     line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
     assert line["growth_rate"] == pytest.approx(0.371383777641364)
@@ -548,7 +620,7 @@ def test_tc_supercritical_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
     assert final["kinetic_energy"] > 0.0
     assert final["radial_velocity_linf"] > 0.0
     assert final["torque"] > 0.0
-    assert final["divergence_l2"] >= 0.0
+    assert final["divergence_l2"] < 1.0e-4
     assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
 
 
@@ -590,7 +662,7 @@ def test_tc_mri_nonlinear_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
     final = rows[-1]
     assert final["kinetic_energy"] > 0.0
     assert final["magnetic_energy"] > 0.0
-    assert final["divergence_b_l2"] >= 0.0
+    assert final["divergence_b_l2"] < 1.0e-3
     assert "maxwell_stress_xy" in final
     assert "reynolds_stress" in final
     assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
@@ -606,6 +678,7 @@ def test_tc_mri_nonlinear_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
                 "growth_rate",
                 "growth_rate_linear",
                 "kinetic_energy",
+                "magnetic_energy",
             ],
         ),
         (
@@ -616,6 +689,7 @@ def test_tc_mri_nonlinear_saturation_smoke_runs_from_phase_j5_spec(tmp_path):
                 "growth_rate",
                 "growth_rate_linear",
                 "kinetic_energy",
+                "magnetic_bc",
                 "magnetic_energy",
             ],
         ),
@@ -658,6 +732,7 @@ def test_pcf_primitive_dns_runs_compare_dns_goldens(
                 "growth_rate",
                 "growth_rate_linear",
                 "kinetic_energy",
+                "rayleigh_stable",
             ],
         ),
         (
@@ -668,6 +743,7 @@ def test_pcf_primitive_dns_runs_compare_dns_goldens(
                 "growth_rate",
                 "growth_rate_linear",
                 "kinetic_energy",
+                "magnetic_bc",
                 "magnetic_energy",
             ],
         ),

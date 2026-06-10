@@ -703,7 +703,7 @@ def _run_pcf_fluctuation_saturation(
         **final,
         "growth_rate": float(growth_rate),
         "energy_growth_factor": float(energy_growth),
-        "saturation_check_passed": bool(energy_growth > 1.0),
+        "saturation_check_passed": bool(energy_growth > 2.0),
     }
     first = {
         "t": 0.0,
@@ -719,6 +719,8 @@ def _run_pcf_fluctuation_saturation(
         "divergence_l2": final["divergence_l2"],
         "mean_shear": final["mean_shear"],
         "growth_rate": float(growth_rate),
+        "energy_growth_factor": float(energy_growth),
+        "saturation_check_passed": bool(energy_growth > 2.0),
         "wall_shear_lower": final["wall_shear_lower"],
         "wall_shear_upper": final["wall_shear_upper"],
         "streak_rms": final["streak_rms"],
@@ -791,7 +793,7 @@ def _run_pcf_primitive_mhd_saturation(
     if spec["physics"] == "mri":
         saturation_passed = magnetic_growth > 2.0
     else:
-        saturation_passed = magnetic_growth > 0.0 and all(
+        saturation_passed = magnetic_growth > 2.0 and all(
             math.isfinite(float(final[key])) and float(final[key]) >= 0.0
             for key in ("kinetic_energy", "magnetic_energy", "total_energy")
         )
@@ -822,6 +824,8 @@ def _run_pcf_primitive_mhd_saturation(
         "magnetic_energy": final["magnetic_energy"],
         "total_energy": final["total_energy"],
         "growth_rate": float(growth_rate),
+        "magnetic_energy_growth_factor": float(magnetic_growth),
+        "saturation_check_passed": bool(saturation_passed),
         "divergence_u_l2": final["divergence_u_l2"],
         "divergence_b_l2": final["divergence_b_l2"],
         "maxwell_stress_xy": final["maxwell_stress_xy"],
@@ -1279,7 +1283,13 @@ def _growth_rate_from_energy(e0: Any, e1: Any, steps: int, dt: float) -> float:
     elapsed = int(steps) * float(dt)
     if elapsed <= 0.0:
         raise ValueError("growth-rate diagnostics require at least one DNS step")
-    return 0.5 * math.log(float(e1) / float(e0)) / elapsed
+    e0f = float(e0)
+    e1f = float(e1)
+    if not (math.isfinite(e0f) and math.isfinite(e1f)) or e0f <= 0.0 or e1f <= 0.0:
+        if math.isfinite(e0f) and e0f > 0.0 and e1f == 0.0:
+            return -math.inf
+        return math.nan
+    return 0.5 * math.log(e1f / e0f) / elapsed
 
 
 def _selected_resolution(spec: dict[str, Any]) -> dict[str, Any]:

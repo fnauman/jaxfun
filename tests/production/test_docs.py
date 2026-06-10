@@ -19,9 +19,9 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "--resolution-tier smoke" in commands
     assert "bounded CPU/GPU agreement evidence" in commands
     assert "--resolution-tier smoke|start|production" in readme
-    assert "saturation_check_passed=false" in readme
+    assert "missing or false" in readme
     assert "saturation_check_passed`" in commands
-    assert "diagnostic is false" in commands
+    assert "diagnostic is missing or false" in commands
     assert "N=(32,64,32)" in readme
     assert "N=(32,64,32)" in commands
     assert "pcf_fluct_re400" in readme
@@ -30,6 +30,9 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "tc_supercritical_saturation" in readme
     assert "tc_mri_nonlinear_saturation" in readme
     assert "promoted generated saturated golden" in readme
+    assert "failed generated-saturation candidate" in readme
+    assert "retained failed generated-saturation" in commands
+    assert "per-side wall times" in commands
     assert "64 MB HDF5 checkpoint" in commands
     assert "385 MB HDF5 checkpoint is intentionally not" in commands
     assert "25 MB HDF5 checkpoint is intentionally not" in commands

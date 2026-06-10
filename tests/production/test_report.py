@@ -96,7 +96,7 @@ def test_report_labels_rung3_cpu_smoke_as_finiteness_only(tmp_path):
 
     record = record_from_metadata(metadata, metadata_path="runs/x/metadata.json")
 
-    assert record["outcome"] == "passed"
+    assert record["outcome"] == "skipped"
     assert record["validation_scope"] == "cpu_smoke_finiteness_divergence_only"
     assert record["checked_observables"] == [
         "divergence_u_l2",
@@ -152,7 +152,7 @@ def test_report_labels_bounded_gpu_smoke_as_not_full_saturation(tmp_path):
 
     record = record_from_metadata(metadata, metadata_path="runs/x/metadata.json")
 
-    assert record["outcome"] == "passed"
+    assert record["outcome"] == "skipped"
     assert record["validation_scope"] == "bounded_saturation_smoke"
     assert record["reason"] == reason
 
@@ -194,6 +194,51 @@ def test_report_uses_runner_failure_reason_for_failed_execution():
         record["reason"]
         == "full saturation check failed: saturation_check_passed is false"
     )
+
+
+def test_report_marks_completed_run_without_comparison_or_gate_as_failed():
+    metadata = {
+        "problem_id": "pcf_mhd_divfree",
+        "geometry": "pcf",
+        "physics": "mhd",
+        "expected_oracle": {"fallback_rungs": [3]},
+        "execution": {
+            "status": "completed",
+            "solver_execution_wired": True,
+            "execution_kind": "dns-saturation",
+        },
+        "device": {"mode": "gpu", "default_backend": "gpu", "degraded": False},
+        "validation_scope": {"kind": "oracle_execution", "reason": "synthetic"},
+    }
+
+    record = record_from_metadata(metadata)
+
+    assert record["outcome"] == "failed"
+    assert record["reason"] == (
+        "completed without golden comparison or generated-saturation gate"
+    )
+
+
+def test_report_marks_generated_saturation_gate_as_passed_without_comparison():
+    metadata = {
+        "problem_id": "tc_supercritical_saturation",
+        "geometry": "taylor_couette",
+        "physics": "hydro",
+        "expected_oracle": {"fallback_rungs": [2, 3]},
+        "execution": {
+            "status": "completed",
+            "solver_execution_wired": True,
+            "execution_kind": "dns-saturation",
+        },
+        "device": {"mode": "gpu", "default_backend": "gpu", "degraded": False},
+        "validation_scope": {"kind": "generated_saturated_golden", "reason": "full"},
+        "saturation_checks": {"required": True, "present": True, "passed": True},
+    }
+
+    record = record_from_metadata(metadata)
+
+    assert record["outcome"] == "passed"
+    assert record["reason"] == "generated saturation checks passed"
 
 
 def test_report_marks_failed_golden_comparison_as_failed(tmp_path):

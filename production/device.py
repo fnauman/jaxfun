@@ -30,8 +30,8 @@ def configure_production_dtype(dtype: str | None = None) -> str:
     canonical = aliases[requested]
     os.environ["JAXFUN_PRODUCTION_DTYPE"] = canonical
     x64_enabled = "1" if canonical == "float64" else "0"
-    os.environ.setdefault("JAXFUN_ENABLE_X64", x64_enabled)
-    os.environ.setdefault("JAX_ENABLE_X64", x64_enabled)
+    os.environ["JAXFUN_ENABLE_X64"] = x64_enabled
+    os.environ["JAX_ENABLE_X64"] = x64_enabled
     return canonical
 
 

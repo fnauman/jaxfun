@@ -13,6 +13,7 @@ from typing import Any
 
 from .problem_spec import validate_spec
 
+DEFAULT_UNTOLERANCED_NUMERIC_ABSTOL = 1.0e-8
 
 REQUIRED_GOLDEN_FIELDS = [
     "schema_version",
@@ -93,7 +94,9 @@ def fallback_shenfun_golden_root() -> Path:
     return repo_root.parents[1] / "fn_shenfun" / "demo" / "production" / "goldens"
 
 
-def resolve_golden(problem_id: str, golden_root: str | Path | None = None) -> GoldenResolution:
+def resolve_golden(
+    problem_id: str, golden_root: str | Path | None = None
+) -> GoldenResolution:
     if golden_root is not None:
         root = Path(golden_root)
         policy = "explicit"
@@ -103,8 +106,12 @@ def resolve_golden(problem_id: str, golden_root: str | Path | None = None) -> Go
             root = vendored
             policy = "vendored"
         else:
-            root = Path(os.environ.get("SHENFUN_GOLDENS_ROOT", fallback_shenfun_golden_root()))
-            policy = "env-var" if "SHENFUN_GOLDENS_ROOT" in os.environ else "sibling-default"
+            root = Path(
+                os.environ.get("SHENFUN_GOLDENS_ROOT", fallback_shenfun_golden_root())
+            )
+            policy = (
+                "env-var" if "SHENFUN_GOLDENS_ROOT" in os.environ else "sibling-default"
+            )
 
     golden_path = root / problem_id / "golden" / "golden.json"
     spec_path = root / problem_id / "spec.json"
@@ -124,21 +131,29 @@ def load_golden(path: str | Path) -> dict[str, Any]:
         return json.load(fh)
 
 
-def validate_golden(path: str | Path, spec: dict[str, Any] | None = None) -> dict[str, Any]:
+def validate_golden(
+    path: str | Path, spec: dict[str, Any] | None = None
+) -> dict[str, Any]:
     data = load_golden(path)
     missing = [key for key in REQUIRED_GOLDEN_FIELDS if key not in data]
     if missing:
         raise ValueError(f"golden missing required field(s): {', '.join(missing)}")
     if data["schema_version"] != 1:
-        raise ValueError(f"unsupported golden schema_version {data['schema_version']!r}")
+        raise ValueError(
+            f"unsupported golden schema_version {data['schema_version']!r}"
+        )
     if "scalars" not in data["diagnostics"]:
         raise ValueError("golden diagnostics must contain scalars")
+    if not data["diagnostics"]["scalars"]:
+        raise ValueError("golden diagnostics.scalars must not be empty")
     expected_hash = scalar_hash(data["diagnostics"]["scalars"])
     stored_hash = data["comparison_fields"].get("scalars_sha256")
     if stored_hash != expected_hash:
         raise ValueError("golden scalar hash does not match diagnostics.scalars")
     if spec is not None:
-        validated = validate_spec(spec, allow_unsupported=True, allow_unimplemented=True)
+        validated = validate_spec(
+            spec, allow_unsupported=True, allow_unimplemented=True
+        )
         if data["spec_hash"] != validated["spec_hash"]:
             raise ValueError("golden spec_hash does not match spec")
     return data
@@ -159,7 +174,7 @@ def compare_to_golden(
     golden: dict[str, Any],
     *,
     golden_path: str | Path | None = None,
-    require_all_golden_scalars: bool = False,
+    require_all_golden_scalars: bool = True,
     convention_metadata: dict[str, Any] | None = None,
 ) -> ComparisonResult:
     validate_scalar_hash(golden)
@@ -190,7 +205,7 @@ def compare_problem(
     actual_scalars: dict[str, Any],
     *,
     golden_root: str | Path | None = None,
-    require_all_golden_scalars: bool = False,
+    require_all_golden_scalars: bool = True,
     convention_metadata: dict[str, Any] | None = None,
 ) -> ComparisonResult:
     resolution = resolve_golden(problem_id, golden_root=golden_root)
@@ -231,11 +246,25 @@ def _compare_one(
     key_in_golden: bool,
 ) -> ScalarComparison:
     if not key_in_golden:
-        return ScalarComparison(key, expected, actual, _as_optional_float(tolerance), False, "key not present in golden scalars")
+        return ScalarComparison(
+            key,
+            expected,
+            actual,
+            _as_optional_float(tolerance),
+            False,
+            "key not present in golden scalars",
+        )
     if actual is _MISSING:
-        return ScalarComparison(key, expected, None, _as_optional_float(tolerance), False, "actual scalar missing")
+        return ScalarComparison(
+            key,
+            expected,
+            None,
+            _as_optional_float(tolerance),
+            False,
+            "actual scalar missing",
+        )
 
-    tol = 0.0 if tolerance is None else float(tolerance)
+    tol = DEFAULT_UNTOLERANCED_NUMERIC_ABSTOL if tolerance is None else float(tolerance)
     if _is_number(expected) and _is_number(actual):
         diff = abs(float(actual) - float(expected))
         passed = math.isfinite(diff) and diff <= tol
@@ -244,7 +273,9 @@ def _compare_one(
 
     passed = actual == expected
     msg = "" if passed else "non-numeric scalar mismatch"
-    return ScalarComparison(key, expected, actual, None if tolerance is None else tol, passed, msg)
+    return ScalarComparison(
+        key, expected, actual, None if tolerance is None else tol, passed, msg
+    )
 
 
 def _as_optional_float(value: Any) -> float | None:
@@ -265,7 +296,13 @@ _MISSING = _Missing()
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--problem-id", required=True)
-    parser.add_argument("--actual", required=True, help="JSON file containing scalars, diagnostics.scalars, or a golden-like object")
+    parser.add_argument(
+        "--actual",
+        required=True,
+        help=(
+            "JSON file containing scalars, diagnostics.scalars, or a golden-like object"
+        ),
+    )
     parser.add_argument("--golden-root")
     parser.add_argument("--require-all-golden-scalars", action="store_true")
     args = parser.parse_args(argv)

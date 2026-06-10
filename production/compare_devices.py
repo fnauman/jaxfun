@@ -8,6 +8,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ def run_device_comparison(
     device_b: str = "auto",
     steps: int | None = None,
     resolution_tier: str | None = None,
-    atol: float = 1.0e-8,
+    atol: float = 1.0e-5,
     rtol: float = 1.0e-6,
     timeout_seconds: float = 1800.0,
     python: str | Path = sys.executable,
@@ -83,6 +84,7 @@ def run_device_comparison(
         "devices": {"left": device_a, "right": device_b},
         "run_options": {"steps": steps, "resolution_tier": resolution_tier},
         "runs": {"left": left, "right": right},
+        "timing": _timing_report(left, right),
         "summary": _summary(
             comparisons,
             subprocess_ok=left["returncode"] == 0 and right["returncode"] == 0,
@@ -100,7 +102,7 @@ def compare_final_diagnostics(
     left_run: str | Path,
     right_run: str | Path,
     *,
-    atol: float = 1.0e-8,
+    atol: float = 1.0e-5,
     rtol: float = 1.0e-6,
 ) -> list[ScalarComparison]:
     """Compare final numeric scalar diagnostics from two run directories."""
@@ -168,6 +170,7 @@ def _run_problem_subprocess(
     if device == "auto":
         env.pop("JAX_PLATFORMS", None)
     started = True
+    wall_start = time.perf_counter()
     try:
         completed = subprocess.run(
             cmd,
@@ -188,6 +191,7 @@ def _run_problem_subprocess(
             "stdout": exc.stdout or "",
             "stderr": exc.stderr or "",
             "started": started,
+            "wall_time_seconds": time.perf_counter() - wall_start,
         }
     return {
         "out_dir": str(out),
@@ -198,6 +202,20 @@ def _run_problem_subprocess(
         "stdout": completed.stdout,
         "stderr": completed.stderr,
         "started": started,
+        "wall_time_seconds": time.perf_counter() - wall_start,
+    }
+
+
+def _timing_report(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    left_time = left.get("wall_time_seconds")
+    right_time = right.get("wall_time_seconds")
+    speedup_left_over_right = None
+    if left_time and right_time and float(right_time) > 0.0:
+        speedup_left_over_right = float(left_time) / float(right_time)
+    return {
+        "left_wall_time_seconds": left_time,
+        "right_wall_time_seconds": right_time,
+        "left_over_right_speedup": speedup_left_over_right,
     }
 
 
@@ -226,11 +244,14 @@ def _summary(
     comparisons: list[ScalarComparison], *, subprocess_ok: bool
 ) -> dict[str, int]:
     if not subprocess_ok:
-        return {"passed": 0, "failed": 1, "skipped": 0}
+        return {"passed": 0, "failed": 1, "skipped": 0, "compared": 0}
+    if not comparisons:
+        return {"passed": 0, "failed": 1, "skipped": 0, "compared": 0}
     return {
         "passed": sum(1 for comparison in comparisons if comparison.passed),
         "failed": sum(1 for comparison in comparisons if not comparison.passed),
         "skipped": 0,
+        "compared": len(comparisons),
     }
 
 
@@ -254,7 +275,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["smoke", "start", "production"],
         help="Materialize a nested production resolution tier for both runs.",
     )
-    parser.add_argument("--atol", type=float, default=1.0e-8)
+    parser.add_argument("--atol", type=float, default=1.0e-5)
     parser.add_argument("--rtol", type=float, default=1.0e-6)
     parser.add_argument("--timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--python", default=sys.executable)

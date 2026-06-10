@@ -138,6 +138,7 @@ def validate_spec(
     _validate_axes(data)
     _validate_collections(data)
     _validate_time(data)
+    _validate_domain(data)
     _validate_nondimensional_groups(data)
     _validate_boundary_conditions(data)
     _validate_oracle_and_golden(data)
@@ -207,6 +208,46 @@ def _validate_time(data: dict[str, Any]) -> None:
         raise ProblemSpecError("time.dt and time.final_time must be non-negative")
     if time["integrator"] != "analytic" and float(time["dt"]) <= 0.0:
         raise ProblemSpecError("time.dt must be positive for non-analytic integrators")
+
+
+def _validate_domain(data: dict[str, Any]) -> None:
+    domain = data["domain"]
+    geometry = data["geometry"]
+    if geometry in {"pcf", "channel"}:
+        _require_keys(domain, ["x", "y_period", "z_period"], "domain")
+        _validate_interval(domain["x"], "domain.x")
+        _validate_positive_period(domain["y_period"], "domain.y_period")
+        _validate_positive_period(domain["z_period"], "domain.z_period")
+    elif geometry in {"taylor_couette", "pipe"}:
+        _require_keys(domain, ["r", "theta_period", "z_period"], "domain")
+        _validate_interval(domain["r"], "domain.r")
+        _validate_positive_period(domain["theta_period"], "domain.theta_period")
+        _validate_positive_period(domain["z_period"], "domain.z_period")
+
+
+def _validate_interval(value: Any, label: str) -> None:
+    if not isinstance(value, list | tuple) or len(value) != 2:
+        raise ProblemSpecError(f"{label} must be a two-entry interval")
+    lo = _finite_number(value[0], f"{label}[0]")
+    hi = _finite_number(value[1], f"{label}[1]")
+    if not lo < hi:
+        raise ProblemSpecError(f"{label} must be strictly increasing")
+
+
+def _validate_positive_period(value: Any, label: str) -> None:
+    period = _finite_number(value, label)
+    if period <= 0.0:
+        raise ProblemSpecError(f"{label} must be positive")
+
+
+def _finite_number(value: Any, label: str) -> float:
+    try:
+        x = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ProblemSpecError(f"{label} must be numeric") from exc
+    if not math.isfinite(x):
+        raise ProblemSpecError(f"{label} must be finite")
+    return x
 
 
 def _validate_nondimensional_groups(data: dict[str, Any]) -> None:
