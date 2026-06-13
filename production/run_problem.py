@@ -144,8 +144,12 @@ def run_problem(
     metadata["saturation_checks"] = _saturation_check_metadata(
         diagnostics, validation_scope=metadata["validation_scope"]
     )
+    metadata["validation_floor"] = _validation_floor_metadata(
+        diagnostics, validation_scope=metadata["validation_scope"]
+    )
     metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
     _write_json(out_dir / "metadata.json", metadata)
+    _assert_validation_floor_checks(metadata)
     _assert_required_saturation_checks(metadata)
     checkpoint_path = out_dir / "checkpoints" / "checkpoints.h5"
     if checkpoint_path.exists():
@@ -289,6 +293,7 @@ def _validation_scope_metadata(
         mode == "cpu_smoke"
         and execution_kind == "dns-saturation"
         and fallback_rungs == [3]
+        and bounded_smoke
     ):
         return {
             **common,
@@ -299,7 +304,7 @@ def _validation_scope_metadata(
                 "and emitted divergence diagnostics, not production parity"
             ),
         }
-    if mode == "cpu_smoke" and execution_kind == "dns-saturation":
+    if mode == "cpu_smoke" and execution_kind == "dns-saturation" and bounded_smoke:
         return {
             **common,
             "kind": "cpu_smoke_fallback_oracle",
@@ -349,6 +354,120 @@ def _saturation_check_metadata(
         "energy_growth_factor": scalars.get("energy_growth_factor"),
         "magnetic_energy_growth_factor": scalars.get("magnetic_energy_growth_factor"),
     }
+
+
+_VALIDATION_FLOOR_SCOPES = {
+    "bounded_saturation_smoke",
+    "cpu_smoke_finiteness_divergence_only",
+    "cpu_smoke_fallback_oracle",
+}
+_SMOKE_DIVERGENCE_LIMIT = 1.0e-2
+
+
+def _validation_floor_metadata(
+    diagnostics: dict[str, Any], *, validation_scope: dict[str, Any]
+) -> dict[str, Any]:
+    kind = validation_scope.get("kind")
+    required = kind in _VALIDATION_FLOOR_SCOPES
+    numeric_values = list(_iter_numeric_diagnostics(diagnostics))
+    nonfinite = [key for key, value in numeric_values if not math.isfinite(value)]
+    divergence_values = [
+        (key, abs(value))
+        for key, value in _iter_final_numeric_diagnostics(diagnostics)
+        if _is_divergence_diagnostic(key)
+    ]
+    divergence_present = bool(divergence_values)
+    max_divergence = max((value for _, value in divergence_values), default=None)
+    divergence_failed = (
+        not divergence_present
+        or max_divergence is None
+        or not math.isfinite(max_divergence)
+        or max_divergence > _SMOKE_DIVERGENCE_LIMIT
+    )
+    passed = not required or (not nonfinite and not divergence_failed)
+    return {
+        "required": required,
+        "passed": passed,
+        "nonfinite_diagnostics": nonfinite,
+        "divergence_diagnostics": [key for key, _ in divergence_values],
+        "divergence_present": divergence_present,
+        "max_divergence": max_divergence,
+        "divergence_limit": _SMOKE_DIVERGENCE_LIMIT,
+    }
+
+
+def _iter_numeric_diagnostics(diagnostics: dict[str, Any]):
+    for section, values in (
+        ("scalars", diagnostics.get("scalars", {})),
+        ("time_series", diagnostics.get("time_series", [])),
+    ):
+        if isinstance(values, dict):
+            iterable = [("", values)]
+        else:
+            iterable = [(str(index), row) for index, row in enumerate(values)]
+        for prefix, row in iterable:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                if isinstance(value, bool):
+                    continue
+                if isinstance(value, int | float):
+                    label = (
+                        f"{section}.{prefix}.{key}" if prefix else f"{section}.{key}"
+                    )
+                    yield label, float(value)
+
+
+def _iter_final_numeric_diagnostics(diagnostics: dict[str, Any]):
+    rows = [("scalars", diagnostics.get("scalars", {}))]
+    series = diagnostics.get("time_series") or []
+    if series:
+        rows.append(("time_series.final", series[-1]))
+    for prefix, row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int | float):
+                yield f"{prefix}.{key}", float(value)
+
+
+def _is_divergence_diagnostic(key: str) -> bool:
+    name = key.rsplit(".", 1)[-1]
+    return (
+        name.startswith("divergence")
+        or name.startswith("divu")
+        or name.startswith("divb")
+        or name.startswith("continuity")
+    )
+
+
+def _assert_validation_floor_checks(metadata: dict[str, Any]) -> None:
+    checks = metadata.get("validation_floor", {})
+    if not checks.get("required") or checks.get("passed") is True:
+        return
+    details = []
+    nonfinite = checks.get("nonfinite_diagnostics") or []
+    if nonfinite:
+        details.append("nonfinite=" + ",".join(nonfinite))
+    if not checks.get("divergence_present"):
+        details.append("divergence=missing")
+    else:
+        details.append(
+            f"max_divergence={checks.get('max_divergence')} "
+            f"> {checks.get('divergence_limit')}"
+        )
+    message = "validation floor failed"
+    if details:
+        message = f"{message}: {'; '.join(details)}"
+    metadata["execution"] = {
+        **metadata.get("execution", {}),
+        "status": "failed",
+        "failure_reason": message,
+    }
+    _write_json(Path(metadata["out_dir"]) / "metadata.json", metadata)
+    raise RuntimeError(message)
 
 
 def _assert_required_saturation_checks(metadata: dict[str, Any]) -> None:
@@ -433,9 +552,15 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 def _write_diagnostics(path: Path, diagnostics: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    series = diagnostics.get("time_series") or [{"t": 0.0, **diagnostics["scalars"]}]
+    scalars = diagnostics["scalars"]
+    series = diagnostics.get("time_series")
+    if series:
+        rows = [dict(row) for row in series]
+        rows[-1] = {**scalars, **rows[-1]}
+    else:
+        rows = [{"t": 0.0, **scalars}]
     with path.open("w", encoding="utf-8") as fh:
-        for row in series:
+        for row in rows:
             fh.write(json.dumps(_json_ready(row), sort_keys=True) + "\n")
 
 
@@ -474,7 +599,8 @@ def _write_golden(
     diagnostics: dict[str, Any],
     device_record: dict[str, Any],
 ) -> Path:
-    scalars = diagnostics["scalars"]
+    diagnostics_ready = _json_ready(diagnostics)
+    scalars = diagnostics_ready["scalars"]
     data = {
         "schema_version": 1,
         "artifact_id": config.artifact_id,
@@ -488,7 +614,7 @@ def _write_golden(
         "git": {},
         "source_anchors": config.spec["expected_oracle"].get("source_anchors", []),
         "tolerance_model": config.spec["tolerance_model"],
-        "diagnostics": diagnostics,
+        "diagnostics": diagnostics_ready,
         "comparison_fields": {
             "scalars_sha256": scalar_hash(scalars),
         },

@@ -172,17 +172,23 @@ def magnetic_fields(solver: Any, state: Any) -> tuple[Array, ...]:
 
 
 def _domain_weights(solver: Any, field: Array) -> Array:
-    if not hasattr(solver, "X"):
-        return jnp.ones_like(jnp.real(field))
-    coords = tuple(solver.X)
-    weights = jnp.ones_like(jnp.real(field))
-    for axis, coord in enumerate(coords[: field.ndim]):
-        axis_coord = _axis_coordinate(coord, axis)
-        axis_weights = _trapezoid_axis_weights(axis_coord)
-        shape = [1] * field.ndim
-        shape[axis] = axis_weights.shape[0]
-        weights = weights * axis_weights.reshape(shape)
-    return weights
+    if hasattr(solver, "X"):
+        coords = tuple(solver.X)
+        weights = jnp.ones_like(jnp.real(field))
+        for axis, coord in enumerate(coords[: field.ndim]):
+            axis_coord = _axis_coordinate(coord, axis)
+            axis_weights = (
+                _periodic_axis_weights(solver, axis_coord, axis)
+                if _axis_is_periodic(solver, axis)
+                else _trapezoid_axis_weights(axis_coord)
+            )
+            shape = [1] * field.ndim
+            shape[axis] = axis_weights.shape[0]
+            weights = weights * axis_weights.reshape(shape)
+        return weights
+    if hasattr(solver, "R") and hasattr(solver, "Z"):
+        return _taylor_couette_domain_weights(solver, field)
+    return jnp.ones_like(jnp.real(field))
 
 
 def _axis_coordinate(coord: Any, axis: int) -> Array:
@@ -192,6 +198,61 @@ def _axis_coordinate(coord: Any, axis: int) -> Array:
     index = [0] * arr.ndim
     index[axis] = slice(None)
     return arr[tuple(index)]
+
+
+def _axis_is_periodic(solver: Any, axis: int) -> bool:
+    domain = getattr(solver, "domain", None)
+    if isinstance(domain, tuple | list) and axis < len(domain):
+        return axis > 0 and _period_from_domain_entry(domain[axis]) is not None
+    return False
+
+
+def _period_from_domain_entry(entry: Any) -> float | None:
+    if not isinstance(entry, tuple | list) or len(entry) != 2:
+        return None
+    try:
+        lo = float(entry[0])
+        hi = float(entry[1])
+    except (TypeError, ValueError):
+        return None
+    period = hi - lo
+    return period if math.isfinite(period) and period > 0.0 else None
+
+
+def _periodic_axis_weights(solver: Any, coord: Array, axis: int) -> Array:
+    x = jnp.asarray(coord)
+    domain = getattr(solver, "domain", None)
+    period = None
+    if isinstance(domain, tuple | list) and axis < len(domain):
+        period = _period_from_domain_entry(domain[axis])
+    if period is None and x.shape[0] > 1:
+        period = float((x[1] - x[0]) * x.shape[0])
+    if period is None:
+        return jnp.ones_like(x)
+    return jnp.ones_like(x) * (period / x.shape[0])
+
+
+def _taylor_couette_domain_weights(solver: Any, field: Array) -> Array:
+    real_field = jnp.real(field)
+    r_coord = _axis_coordinate(solver.R, 0)
+    r_weights = _trapezoid_axis_weights(r_coord) * r_coord
+    weights = r_weights.reshape((r_weights.shape[0],) + (1,) * (field.ndim - 1))
+    if field.ndim >= 2:
+        z_axis = 1
+        z_coord = _axis_coordinate(solver.Z, z_axis)
+        z_weights = _taylor_couette_z_weights(solver, z_coord)
+        shape = [1] * field.ndim
+        shape[z_axis] = z_weights.shape[0]
+        weights = weights * z_weights.reshape(shape)
+    return jnp.ones_like(real_field) * weights
+
+
+def _taylor_couette_z_weights(solver: Any, z_coord: Array) -> Array:
+    if hasattr(solver, "Lz"):
+        length = float(solver.Lz)
+        if math.isfinite(length) and length > 0.0:
+            return jnp.ones_like(z_coord) * (length / z_coord.shape[0])
+    return _trapezoid_axis_weights(z_coord)
 
 
 def _trapezoid_axis_weights(coord: Array) -> Array:

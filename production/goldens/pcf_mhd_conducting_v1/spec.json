@@ -102,7 +102,7 @@
     "ny": 8,
     "nz": 8
   },
-  "spec_hash": "e1f306bc6e4cda68b08219b01f878219208b140ff12190b89500ea9702c1049f",
+  "spec_hash": "bbd5504c7f19436516f1076df68a57fc8741162c20285959f2c8d31daa1797a1",
   "support_state": "production",
   "time": {
     "dt": 0.001,
@@ -114,7 +114,13 @@
     "scalars": {
       "divergence_b_l2": 1e-10,
       "growth_rate": 1e-10,
-      "magnetic_energy": 1e-10
+      "magnetic_energy": 1e-10,
+      "divergence_u_l2": 1e-06,
+      "eigenvalue_imag": 1e-06,
+      "eigenvalue_real": 1e-06,
+      "kinetic_energy": 1e-06,
+      "maxwell_stress_xy": 1e-06,
+      "total_energy": 1e-06
     }
   },
   "unsupported_subcases": [

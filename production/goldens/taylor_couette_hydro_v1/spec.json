@@ -87,7 +87,7 @@
     "N": 28,
     "family": "C"
   },
-  "spec_hash": "64b62254a7685b7b8cf75f80d32df3f905dc1f318c895f7bd73db60fe0b34e79",
+  "spec_hash": "1957d93cf43c1c51ac4b47b25f8117811bb3af6f39f46f573e7e72573c1d8403",
   "support_state": "production",
   "time": {
     "dt": 0.001,
@@ -99,7 +99,9 @@
     "scalars": {
       "divergence_l2": 1e-10,
       "growth_rate": 1e-10,
-      "kinetic_energy": 1e-10
+      "kinetic_energy": 1e-10,
+      "eigenvalue_imag": 1e-06,
+      "eigenvalue_real": 1e-06
     }
   },
   "unsupported_subcases": []

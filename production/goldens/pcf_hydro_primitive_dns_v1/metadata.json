@@ -4,6 +4,6 @@
   "physics": "hydro",
   "problem_id": "pcf_hydro_primitive_dns_v1",
   "runner": "demo.production.run_problem",
-  "spec_hash": "496a991492e7a1166c51d6dfdd1b1769e71b494fa7a3d0985ec954f78cdfeeeb",
+  "spec_hash": "59aaa99e9970f971a6c1e690bdccc3edd41487f7615def7c1ae31ca5df69852f",
   "support_state": "production"
 }

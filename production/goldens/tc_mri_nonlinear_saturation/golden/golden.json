@@ -65,14 +65,20 @@
   "problem_id": "tc_mri_nonlinear_saturation",
   "schema_version": 1,
   "source_anchors": [],
-  "spec_hash": "8a7ab36c075dd993844d2487df725b25877c15fb498d8144d0d252f588b87061",
+  "spec_hash": "f948df630923eb9af8265e6ba0471eef3db492a788dc6352b6edf459c31a8753",
   "tolerance_model": {
     "kind": "dns-production",
     "scalars": {
       "divergence_b_l2": 0.0001,
       "growth_rate": 0.002,
       "magnetic_energy": 1e-06,
-      "maxwell_stress_xy": 1e-06
+      "maxwell_stress_xy": 1e-06,
+      "divergence_b": 1e-06,
+      "divergence_u": 1e-06,
+      "growth_rate_linear": 1e-06,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy_growth_factor": 8.232443,
+      "reynolds_stress": 1e-06
     }
   }
 }

@@ -5,17 +5,107 @@ from pathlib import Path
 
 import pytest
 
+from production.adapters import load_config
 from production.compare_goldens import validate_golden
-from production.oracles import _channel_poiseuille_kmm_state
+from production.oracles import _channel_poiseuille_kmm_state, _saturation_passed
 from production.run_problem import (
     SolverExecutionNotImplementedError,
     _assert_required_saturation_checks,
+    _assert_validation_floor_checks,
     _saturation_check_metadata,
+    _validation_floor_metadata,
+    _validation_scope_metadata,
+    _write_golden,
     main,
     run_problem,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_saturation_predicate_rejects_nonfinite_growth_and_energy():
+    assert not _saturation_passed(float("inf"), threshold=2.0, final_energies=(1.0,))
+    assert not _saturation_passed(3.0, threshold=2.0, final_energies=(float("inf"),))
+    assert not _saturation_passed(1.5, threshold=2.0, final_energies=(1.0,))
+    assert _saturation_passed(3.0, threshold=2.0, final_energies=(1.0, 0.0))
+
+
+def test_cpu_full_saturation_scope_uses_generated_gate():
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    scope = _validation_scope_metadata(
+        spec,
+        {"scalars": {"saturation_check_passed": False}},
+        device_record={"mode": "cpu_smoke"},
+        compare_golden=False,
+        steps=None,
+        resolution_tier="production",
+    )
+
+    assert scope["kind"] == "generated_saturated_golden"
+    assert scope["bounded_smoke"] is False
+
+
+def test_validation_floor_rejects_nonfinite_smoke_diagnostics(tmp_path):
+    diagnostics = {
+        "scalars": {"kinetic_energy": float("inf"), "divergence_l2": 0.0},
+        "time_series": [{"t": 0.0, "kinetic_energy": 1.0}],
+    }
+    checks = _validation_floor_metadata(
+        diagnostics, validation_scope={"kind": "bounded_saturation_smoke"}
+    )
+    assert checks["required"] is True
+    assert checks["passed"] is False
+    assert "scalars.kinetic_energy" in checks["nonfinite_diagnostics"]
+
+    out = tmp_path / "run"
+    out.mkdir()
+    metadata = {
+        "out_dir": str(out),
+        "execution": {"status": "completed", "solver_execution_wired": True},
+        "validation_floor": checks,
+    }
+    with pytest.raises(RuntimeError, match="validation floor failed"):
+        _assert_validation_floor_checks(metadata)
+    written = json.loads((out / "metadata.json").read_text())
+    assert written["execution"]["status"] == "failed"
+
+
+def test_validation_floor_rejects_missing_divergence_smoke_diagnostics():
+    checks = _validation_floor_metadata(
+        {"scalars": {"kinetic_energy": 1.0}},
+        validation_scope={"kind": "cpu_smoke_finiteness_divergence_only"},
+    )
+
+    assert checks["required"] is True
+    assert checks["passed"] is False
+    assert checks["divergence_present"] is False
+
+
+def test_write_golden_hashes_sanitized_scalars(tmp_path):
+    config = load_config(
+        ROOT / "production" / "examples" / "channel_poiseuille_hydro_v1.json"
+    )
+    diagnostics = {
+        "scalars": {
+            "flow_rate": float("inf"),
+            "kinetic_energy": 1.0,
+            "pressure_gradient": -0.002,
+            "divergence_l2": 0.0,
+        },
+        "time_series": [],
+    }
+
+    golden_path = _write_golden(
+        tmp_path / "golden.json",
+        config,
+        diagnostics,
+        {"capture_skipped": True},
+    )
+    golden = validate_golden(golden_path)
+
+    assert golden["diagnostics"]["scalars"]["flow_rate"] is None
 
 
 def test_validate_only_writes_metadata_without_claiming_solver_execution(tmp_path):

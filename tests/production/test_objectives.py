@@ -9,6 +9,7 @@ from examples.pcf_minimal_seed_jax import (
     tree_l2_norm,
 )
 from production.objectives import (
+    _domain_weights,
     final_energy_objective,
     growth_rate_proxy_objective,
     minimal_seed_gain_objective,
@@ -68,6 +69,37 @@ def test_reynolds_stress_objective_uses_nonuniform_grid_weights():
 
     assert jnp.allclose(value, 0.5, rtol=1.0e-6, atol=1.0e-7)
     assert not jnp.allclose(value, 0.4, rtol=1.0e-6, atol=1.0e-7)
+
+
+def test_periodic_axis_weights_span_full_domain():
+    class FakeSolver:
+        def __init__(self):
+            x = jnp.asarray([0.0, 0.5, 1.0])
+            y = jnp.asarray([0.0, 0.25, 0.5, 0.75])
+            z = jnp.asarray([0.0, 1.0])
+            self.domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 2.0))
+            self.X = jnp.meshgrid(x, y, z, indexing="ij")
+
+    field = jnp.ones((3, 4, 2))
+    weights = _domain_weights(FakeSolver(), field)
+
+    assert jnp.allclose(jnp.sum(weights), 2.0, rtol=1.0e-12, atol=1.0e-12)
+
+
+def test_taylor_couette_weights_use_radial_jacobian_without_x_mesh():
+    class FakeTCSolver:
+        def __init__(self):
+            r = jnp.asarray([1.0, 2.0, 3.0])
+            z = jnp.asarray([0.0, 0.5, 1.0, 1.5])
+            self.R, self.Z = jnp.meshgrid(r, z, indexing="ij")
+            self.Lz = 2.0
+
+    solver = FakeTCSolver()
+    weights = _domain_weights(solver, solver.R)
+    weighted_mean_radius = jnp.sum(solver.R * weights) / jnp.sum(weights)
+
+    assert jnp.allclose(weighted_mean_radius, 2.25, rtol=1.0e-12, atol=1.0e-12)
+    assert not jnp.allclose(weighted_mean_radius, 2.0, rtol=1.0e-12, atol=1.0e-12)
 
 
 def test_final_energy_objective_gradient_matches_finite_difference(pcf_solver):

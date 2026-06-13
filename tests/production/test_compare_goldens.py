@@ -5,6 +5,7 @@ import pytest
 
 from production.compare_goldens import (
     compare_problem,
+    compare_to_golden,
     load_golden,
     resolve_golden,
     scalar_hash,
@@ -66,6 +67,38 @@ def test_comparison_uses_per_observable_tolerances_and_passes_exact_golden_scala
         "maxwell_stress_xy",
         "total_energy",
     }
+
+
+def test_missing_numeric_golden_tolerance_fails(tmp_path):
+    golden = load_golden(GOLDENS / "pcf_hydro_laminar_v1" / "golden" / "golden.json")
+    golden["tolerance_model"]["scalars"].pop("kinetic_energy")
+    golden["comparison_fields"]["scalars_sha256"] = scalar_hash(
+        golden["diagnostics"]["scalars"]
+    )
+    path = tmp_path / "golden.json"
+    path.write_text(json.dumps(golden), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing tolerance"):
+        validate_golden(path)
+
+    result = compare_to_golden(golden["diagnostics"]["scalars"], golden)
+    assert not result.passed
+    failure = next(item for item in result.comparisons if item.key == "kinetic_energy")
+    assert failure.message == "numeric scalar missing tolerance"
+
+
+def test_bool_numeric_scalar_mismatch_fails_type_check():
+    golden = load_golden(GOLDENS / "pcf_mhd_divfree" / "golden" / "golden.json")
+    actual = dict(golden["diagnostics"]["scalars"])
+    actual["saturation_check_passed"] = 0.0
+
+    result = compare_to_golden(actual, golden, require_all_golden_scalars=True)
+
+    assert not result.passed
+    failure = next(
+        item for item in result.comparisons if item.key == "saturation_check_passed"
+    )
+    assert failure.message == "scalar type mismatch"
 
 
 @pytest.mark.parametrize(

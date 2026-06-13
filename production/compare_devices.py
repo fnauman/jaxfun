@@ -17,8 +17,8 @@ from typing import Any
 @dataclass(frozen=True)
 class ScalarComparison:
     key: str
-    left: float | None
-    right: float | None
+    left: Any | None
+    right: Any | None
     atol: float
     rtol: float
     passed: bool
@@ -107,8 +107,8 @@ def compare_final_diagnostics(
 ) -> list[ScalarComparison]:
     """Compare final numeric scalar diagnostics from two run directories."""
 
-    left = _numeric_scalars(_load_final_row(Path(left_run) / "diagnostics.jsonl"))
-    right = _numeric_scalars(_load_final_row(Path(right_run) / "diagnostics.jsonl"))
+    left = _comparable_scalars(_load_final_row(Path(left_run) / "diagnostics.jsonl"))
+    right = _comparable_scalars(_load_final_row(Path(right_run) / "diagnostics.jsonl"))
     comparisons: list[ScalarComparison] = []
     for key in sorted(set(left) | set(right)):
         if key not in left:
@@ -125,18 +125,7 @@ def compare_final_diagnostics(
                 )
             )
             continue
-        lhs = left[key]
-        rhs = right[key]
-        tolerance = atol + rtol * abs(rhs)
-        passed = (
-            math.isfinite(lhs) and math.isfinite(rhs) and abs(lhs - rhs) <= tolerance
-        )
-        message = (
-            ""
-            if passed
-            else f"abs diff {abs(lhs - rhs):.6e} > tolerance {tolerance:.6e}"
-        )
-        comparisons.append(ScalarComparison(key, lhs, rhs, atol, rtol, passed, message))
+        comparisons.append(_compare_scalar(key, left[key], right[key], atol, rtol))
     return comparisons
 
 
@@ -230,14 +219,30 @@ def _load_final_row(path: Path) -> dict[str, Any]:
     return rows[-1]
 
 
-def _numeric_scalars(row: dict[str, Any]) -> dict[str, float]:
-    out: dict[str, float] = {}
+def _comparable_scalars(row: dict[str, Any]) -> dict[str, float | bool]:
+    out: dict[str, float | bool] = {}
     for key, value in row.items():
-        if key == "t" or isinstance(value, bool):
+        if key == "t":
             continue
-        if isinstance(value, int | float):
+        if isinstance(value, bool):
+            out[key] = value
+        elif isinstance(value, int | float):
             out[key] = float(value)
     return out
+
+
+def _compare_scalar(
+    key: str, left: float | bool, right: float | bool, atol: float, rtol: float
+) -> ScalarComparison:
+    if isinstance(left, bool) or isinstance(right, bool):
+        passed = isinstance(left, bool) and isinstance(right, bool) and left == right
+        message = "" if passed else "boolean scalar mismatch"
+        return ScalarComparison(key, left, right, atol, rtol, passed, message)
+    tolerance = atol + rtol * abs(right)
+    diff = abs(left - right)
+    passed = math.isfinite(left) and math.isfinite(right) and diff <= tolerance
+    message = "" if passed else f"abs diff {diff:.6e} > tolerance {tolerance:.6e}"
+    return ScalarComparison(key, left, right, atol, rtol, passed, message)
 
 
 def _summary(

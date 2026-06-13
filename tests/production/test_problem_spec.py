@@ -81,6 +81,14 @@ def test_pm_equals_rm_over_re_invariant_is_enforced():
         validate_spec(spec)
 
 
+def test_pcf_mri_requires_positive_rotation_and_shear():
+    spec = json.loads((EXAMPLES / "pcf_mri_shearbox_v1.json").read_text())
+    spec["nondimensional_groups"]["Omega"] = 0.0
+
+    with pytest.raises(ProblemSpecError, match="Omega.*positive"):
+        validate_spec(spec)
+
+
 def test_spec_hash_ignores_existing_hash_field():
     spec = json.loads((EXAMPLES / "pcf_hydro_laminar_v1.json").read_text())
     expected = spec_hash(spec)

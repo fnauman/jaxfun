@@ -79,7 +79,11 @@
       "divergence_l2": 0.01,
       "growth_rate": 0.002,
       "kinetic_energy": 0.000001,
-      "torque": 0.000001
+      "torque": 0.000001,
+      "divergence_linf": 1e-06,
+      "energy_growth_factor": 2.30152,
+      "growth_rate_linear": 1e-06,
+      "radial_velocity_linf": 1e-06
     }
   },
   "golden": {

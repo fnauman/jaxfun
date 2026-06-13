@@ -98,7 +98,8 @@
       "divergence_u": 1e-09,
       "growth_rate": 1e-06,
       "growth_rate_linear": 1e-10,
-      "kinetic_energy": 1e-09
+      "kinetic_energy": 1e-09,
+      "magnetic_energy": 1e-06
     }
   },
   "unsupported_subcases": []

@@ -98,7 +98,9 @@
     "scalars": {
       "divergence_l2": 1e-10,
       "growth_rate": 1e-10,
-      "kinetic_energy": 1e-10
+      "kinetic_energy": 1e-10,
+      "eigenvalue_imag": 1e-06,
+      "eigenvalue_real": 1e-06
     }
   },
   "unsupported_subcases": []

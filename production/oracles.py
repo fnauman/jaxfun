@@ -16,6 +16,25 @@ class ProductionOracleNotImplementedError(NotImplementedError):
     """Raised when a spec has no wired jaxfun production execution path yet."""
 
 
+def _saturation_passed(
+    growth: Any, *, threshold: float, final_energies: tuple[Any, ...]
+) -> bool:
+    try:
+        growth_value = float(growth)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(growth_value) or growth_value <= threshold:
+        return False
+    for energy in final_energies:
+        try:
+            energy_value = float(energy)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(energy_value) or energy_value < 0.0:
+            return False
+    return True
+
+
 def run_supported_spec(
     spec: dict[str, Any],
     *,
@@ -472,7 +491,16 @@ def _run_taylor_couette_hydro_saturation(
         "torque": float(torque),
         "radial_velocity_linf": float(radial_velocity_linf),
         "energy_growth_factor": float(energy_growth),
-        "saturation_check_passed": bool(energy_growth > 1.0e3),
+        "saturation_check_passed": _saturation_passed(
+            energy_growth,
+            threshold=1.0e3,
+            final_energies=(
+                final["E"],
+                final["continuity_l2"],
+                final["div_linf"],
+                radial_velocity_linf,
+            ),
+        ),
     }
     return {
         "scalars": scalars,
@@ -703,7 +731,17 @@ def _run_pcf_fluctuation_saturation(
         **final,
         "growth_rate": float(growth_rate),
         "energy_growth_factor": float(energy_growth),
-        "saturation_check_passed": bool(energy_growth > 2.0),
+        "saturation_check_passed": _saturation_passed(
+            energy_growth,
+            threshold=2.0,
+            final_energies=(
+                final["kinetic_energy"],
+                final["total_kinetic_energy"],
+                final["divergence_l2"],
+                final["streak_rms"],
+                final["roll_rms"],
+            ),
+        ),
     }
     first = {
         "t": 0.0,
@@ -720,7 +758,7 @@ def _run_pcf_fluctuation_saturation(
         "mean_shear": final["mean_shear"],
         "growth_rate": float(growth_rate),
         "energy_growth_factor": float(energy_growth),
-        "saturation_check_passed": bool(energy_growth > 2.0),
+        "saturation_check_passed": scalars["saturation_check_passed"],
         "wall_shear_lower": final["wall_shear_lower"],
         "wall_shear_upper": final["wall_shear_upper"],
         "streak_rms": final["streak_rms"],
@@ -790,13 +828,17 @@ def _run_pcf_primitive_mhd_saturation(
         if initial["magnetic_energy"] > 0.0
         else 0.0
     )
-    if spec["physics"] == "mri":
-        saturation_passed = magnetic_growth > 2.0
-    else:
-        saturation_passed = magnetic_growth > 2.0 and all(
-            math.isfinite(float(final[key])) and float(final[key]) >= 0.0
-            for key in ("kinetic_energy", "magnetic_energy", "total_energy")
-        )
+    saturation_passed = _saturation_passed(
+        magnetic_growth,
+        threshold=2.0,
+        final_energies=(
+            final["kinetic_energy"],
+            final["magnetic_energy"],
+            final["total_energy"],
+            final["divergence_u_l2"],
+            final["divergence_b_l2"],
+        ),
+    )
     scalars = {
         **final,
         "growth_rate": float(growth_rate),
@@ -887,6 +929,8 @@ def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:
     }
     if spec["physics"] == "mri":
         assert shear is not None and omega is not None
+        if shear <= 0.0 or omega <= 0.0:
+            raise ValueError("PCF MRI linear oracle requires positive S and Omega")
         opt = _mri_keplerian_optimum(Omega=omega)
         scalars.update(
             {
@@ -1045,7 +1089,7 @@ def _run_taylor_couette_mhd_saturation(
         ),
         B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
         nu=float(groups["nu"]),
-        eta_mag=float(groups["eta_mag"]),
+        eta_mag=float(groups.get("eta_mag", groups["nu"])),
         Nr=int(resolution.get("Nr", resolution.get("N", 40))),
         Nz=int(resolution.get("Nz", 24)),
         Lz=float(spec["domain"]["z_period"]),
@@ -1087,7 +1131,16 @@ def _run_taylor_couette_mhd_saturation(
         "maxwell_stress_xy": float(maxwell_stress),
         "reynolds_stress": float(reynolds_stress),
         "magnetic_energy_growth_factor": float(magnetic_growth),
-        "saturation_check_passed": bool(magnetic_growth > 2.0),
+        "saturation_check_passed": _saturation_passed(
+            magnetic_growth,
+            threshold=2.0,
+            final_energies=(
+                final["Ekin"],
+                final["Emag"],
+                final["divu"],
+                final["divb"],
+            ),
+        ),
         "magnetic_bc": magnetic_bc,
     }
     return {
@@ -1140,7 +1193,7 @@ def _run_taylor_couette_mhd_dns(
         ),
         B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
         nu=float(groups["nu"]),
-        eta_mag=float(groups["eta_mag"]),
+        eta_mag=float(groups.get("eta_mag", groups["nu"])),
         Nr=int(resolution.get("Nr", resolution.get("N", 40))),
         Nz=int(resolution.get("Nz", 8)),
         Lz=float(spec["domain"]["z_period"]),

@@ -4,7 +4,7 @@
   "physics": "hydro",
   "problem_id": "tc_supercritical_saturation",
   "runner": "production.validate_gpu",
-  "spec_hash": "8e782c89152ff1376951660deb6cea418da0ce20832b54b6a250679449f5126a",
+  "spec_hash": "5d737f0e7051be81ca973cca228d8a262a9122d763bad6a74ba10db48bf98fc2",
   "support_state": "experimental",
   "validation_scope": "generated_saturated_golden",
   "source_run": {

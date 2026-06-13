@@ -96,7 +96,7 @@
     "ny": 8,
     "nz": 16
   },
-  "spec_hash": "507eae14c5177c46b3e5bb99254dbdd83037fa85c51bd8812aaab86af1dd7fa3",
+  "spec_hash": "7c75dd546bba682dcfc29f344f42243887f83d24d7e80de231f69938da290063",
   "support_state": "production",
   "time": {
     "dt": 0.001,
@@ -108,7 +108,16 @@
     "scalars": {
       "divergence_b_l2": 1e-08,
       "growth_rate": 1e-08,
-      "local_mri_growth": 1e-08
+      "local_mri_growth": 1e-08,
+      "divergence_u_l2": 1e-06,
+      "eigenvalue_imag": 1e-06,
+      "eigenvalue_real": 1e-06,
+      "kinetic_energy": 1e-06,
+      "local_mri_smax_over_omega": 1e-06,
+      "magnetic_energy": 1e-06,
+      "maxwell_stress_xy": 1e-06,
+      "q_shear": 1.5e-06,
+      "total_energy": 1e-06
     }
   },
   "unsupported_subcases": [

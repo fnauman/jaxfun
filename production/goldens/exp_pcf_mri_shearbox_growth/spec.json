@@ -131,7 +131,7 @@
       "Nz": 16
     }
   },
-  "spec_hash": "1157a908594cf7320baab45583a8a14c7878c24cd65e05577b841d3a70b488af",
+  "spec_hash": "96c9088d4cde5a5fdfdb1e20fb20175bb20b8e3b5dff951a15411b8ef3ee534b",
   "support_state": "experimental",
   "time": {
     "dt": 0.005,
@@ -144,7 +144,15 @@
       "divergence_b_l2": 1e-10,
       "growth_rate": 0.002,
       "magnetic_energy": 1e-06,
-      "maxwell_stress_xy": 1e-06
+      "maxwell_stress_xy": 1e-06,
+      "butterfly_by_mean": 1e-06,
+      "divergence_u_l2": 1e-06,
+      "growth_rate_linear": 1e-06,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy_growth_factor": 0.6392551117500747,
+      "reynolds_stress": 1e-06,
+      "total_energy": 1e-06,
+      "transport_alpha": 4.850302696228027e-06
     }
   },
   "unsupported_subcases": []

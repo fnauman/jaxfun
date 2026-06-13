@@ -25,7 +25,7 @@
     "duration_seconds": 46,
     "timestamp": "20260610T023548Z"
   },
-  "spec_hash": "f2b220edf77840891bcb930cb2e70f3f0e93345e23605d5c35954808b4a8a089",
+  "spec_hash": "55b47fc3e3fe274bc2e971882e7fbc35cd78664cb3fd36cda622d66f135a4e38",
   "support_state": "experimental",
   "validation_scope": "failed_generated_saturated_candidate"
 }

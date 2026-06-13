@@ -48,13 +48,17 @@
     "solver_survey.md:200",
     "demo/test_taylor_couette.py:245"
   ],
-  "spec_hash": "154c8940ace0ef9a6a28bf53e195f3479cdcd04fb921c977723409ef9b4026fb",
+  "spec_hash": "15662c21f59fbbffaf8f87968479fba6ca96f1c6ccf39645bce0ed3b423102f0",
   "tolerance_model": {
     "kind": "physics-regression",
     "scalars": {
       "divergence_b_l2": 1e-08,
       "growth_rate": 1e-08,
-      "magnetic_energy": 1e-08
+      "magnetic_energy": 1e-08,
+      "eigenvalue_imag": 1e-06,
+      "eigenvalue_real": 1e-06,
+      "kinetic_energy": 1e-06,
+      "total_energy": 1.0000000000000004e-06
     }
   }
 }

@@ -80,7 +80,16 @@
     "scalars": {
       "divergence_l2": 1e-6,
       "growth_rate": 0.002,
-      "kinetic_energy": 0.0001
+      "kinetic_energy": 0.0001,
+      "energy_growth_factor": 3.618966868220214e-05,
+      "mean_shear": 1.6385924816131591e-06,
+      "roll_rms": 1e-06,
+      "streak_rms": 1e-06,
+      "total_kinetic_energy": 2.4288536071777343e-05,
+      "wall_shear_lower": 3.532483100891113e-06,
+      "wall_shear_upper": 3.528271913528442e-06,
+      "wall_velocity_lower": 1e-06,
+      "wall_velocity_upper": 1e-06
     }
   },
   "golden": {

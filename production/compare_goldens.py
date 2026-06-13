@@ -13,8 +13,6 @@ from typing import Any
 
 from .problem_spec import validate_spec
 
-DEFAULT_UNTOLERANCED_NUMERIC_ABSTOL = 1.0e-8
-
 REQUIRED_GOLDEN_FIELDS = [
     "schema_version",
     "artifact_id",
@@ -150,6 +148,12 @@ def validate_golden(
     stored_hash = data["comparison_fields"].get("scalars_sha256")
     if stored_hash != expected_hash:
         raise ValueError("golden scalar hash does not match diagnostics.scalars")
+    missing_tolerances = _numeric_scalars_missing_tolerance(data)
+    if missing_tolerances:
+        raise ValueError(
+            "golden numeric scalar(s) missing tolerance: "
+            + ", ".join(missing_tolerances)
+        )
     if spec is not None:
         validated = validate_spec(
             spec, allow_unsupported=True, allow_unimplemented=True
@@ -264,8 +268,36 @@ def _compare_one(
             "actual scalar missing",
         )
 
-    tol = DEFAULT_UNTOLERANCED_NUMERIC_ABSTOL if tolerance is None else float(tolerance)
-    if _is_number(expected) and _is_number(actual):
+    if isinstance(expected, bool) != isinstance(actual, bool):
+        return ScalarComparison(
+            key,
+            expected,
+            actual,
+            _as_optional_float(tolerance),
+            False,
+            "scalar type mismatch",
+        )
+
+    if _is_number(expected) or _is_number(actual):
+        if not (_is_number(expected) and _is_number(actual)):
+            return ScalarComparison(
+                key,
+                expected,
+                actual,
+                _as_optional_float(tolerance),
+                False,
+                "scalar type mismatch",
+            )
+        if tolerance is None:
+            return ScalarComparison(
+                key,
+                float(expected),
+                float(actual),
+                None,
+                False,
+                "numeric scalar missing tolerance",
+            )
+        tol = float(tolerance)
         diff = abs(float(actual) - float(expected))
         passed = math.isfinite(diff) and diff <= tol
         msg = "" if passed else f"abs diff {diff:g} exceeds tolerance {tol:g}"
@@ -274,7 +306,17 @@ def _compare_one(
     passed = actual == expected
     msg = "" if passed else "non-numeric scalar mismatch"
     return ScalarComparison(
-        key, expected, actual, None if tolerance is None else tol, passed, msg
+        key, expected, actual, _as_optional_float(tolerance), passed, msg
+    )
+
+
+def _numeric_scalars_missing_tolerance(golden: dict[str, Any]) -> list[str]:
+    scalars = golden["diagnostics"]["scalars"]
+    tolerances = golden.get("tolerance_model", {}).get("scalars", {})
+    return sorted(
+        key
+        for key, value in scalars.items()
+        if _is_number(value) and key not in tolerances
     )
 
 

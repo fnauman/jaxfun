@@ -88,7 +88,15 @@
       "divergence_b_l2": 1e-10,
       "growth_rate": 0.002,
       "magnetic_energy": 0.000001,
-      "maxwell_stress_xy": 0.000001
+      "maxwell_stress_xy": 0.000001,
+      "butterfly_by_mean": 1e-06,
+      "divergence_u_l2": 1e-06,
+      "growth_rate_linear": 1e-06,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy_growth_factor": 0.6392551117500747,
+      "reynolds_stress": 1e-06,
+      "total_energy": 1e-06,
+      "transport_alpha": 4.850302696228027e-06
     }
   },
   "golden": {

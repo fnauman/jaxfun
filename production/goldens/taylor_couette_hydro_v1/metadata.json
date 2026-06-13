@@ -4,6 +4,6 @@
   "physics": "hydro",
   "problem_id": "taylor_couette_hydro_v1",
   "runner": "demo.production.run_problem",
-  "spec_hash": "64b62254a7685b7b8cf75f80d32df3f905dc1f318c895f7bd73db60fe0b34e79",
+  "spec_hash": "1957d93cf43c1c51ac4b47b25f8117811bb3af6f39f46f573e7e72573c1d8403",
   "support_state": "production"
 }

@@ -86,7 +86,7 @@
     "Nz": 16,
     "family": "C"
   },
-  "spec_hash": "496a991492e7a1166c51d6dfdd1b1769e71b494fa7a3d0985ec954f78cdfeeeb",
+  "spec_hash": "59aaa99e9970f971a6c1e690bdccc3edd41487f7615def7c1ae31ca5df69852f",
   "support_state": "production",
   "time": {
     "dt": 0.002,
@@ -99,7 +99,8 @@
       "divergence_u": 1e-09,
       "growth_rate": 1e-06,
       "growth_rate_linear": 1e-10,
-      "kinetic_energy": 1e-09
+      "kinetic_energy": 1e-09,
+      "magnetic_energy": 1e-06
     }
   },
   "unsupported_subcases": []

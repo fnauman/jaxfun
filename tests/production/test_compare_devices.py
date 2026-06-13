@@ -49,6 +49,30 @@ def test_empty_device_comparison_is_failed_not_vacuously_passed(tmp_path):
     assert summary == {"passed": 0, "failed": 1, "skipped": 0, "compared": 0}
 
 
+def test_compare_final_diagnostics_reports_boolean_mismatches(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    (left / "diagnostics.jsonl").write_text(
+        json.dumps({"t": 0.0, "saturation_check_passed": True}) + "\n",
+        encoding="utf-8",
+    )
+    (right / "diagnostics.jsonl").write_text(
+        json.dumps({"t": 0.0, "saturation_check_passed": False}) + "\n",
+        encoding="utf-8",
+    )
+
+    comparisons = compare_final_diagnostics(left, right)
+    summary = _summary(comparisons, subprocess_ok=True)
+
+    assert len(comparisons) == 1
+    assert comparisons[0].key == "saturation_check_passed"
+    assert comparisons[0].passed is False
+    assert comparisons[0].message == "boolean scalar mismatch"
+    assert summary == {"passed": 0, "failed": 1, "skipped": 0, "compared": 1}
+
+
 def test_compare_devices_cli_runs_cpu_cpu_channel_smoke(tmp_path):
     out = tmp_path / "compare"
     rc = main(

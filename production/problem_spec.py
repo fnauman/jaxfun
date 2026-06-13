@@ -271,6 +271,16 @@ def _validate_nondimensional_groups(data: dict[str, Any]) -> None:
                 f"Pm must equal Rm/Re; got Pm={pm:g}, Rm/Re={expected:g}"
             )
 
+    if data["geometry"] == "pcf" and data["physics"] == "mri":
+        for key in ("S", "Omega"):
+            if key not in groups:
+                raise ProblemSpecError(f"PCF MRI specs must state {key}")
+            value = _finite_number(groups[key], f"nondimensional_groups.{key}")
+            if value <= 0.0:
+                raise ProblemSpecError(
+                    f"nondimensional_groups.{key} must be positive for PCF MRI"
+                )
+
     if data["geometry"] == "taylor_couette":
         if "radius_ratio" not in groups:
             raise ProblemSpecError("Taylor-Couette specs must state radius_ratio")
