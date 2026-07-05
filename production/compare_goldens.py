@@ -154,9 +154,22 @@ def validate_golden(
             "golden numeric scalar(s) missing tolerance: "
             + ", ".join(missing_tolerances)
         )
+    invalid_tolerances = _invalid_numeric_tolerances(data)
+    if invalid_tolerances:
+        raise ValueError(
+            "golden numeric scalar(s) have invalid tolerance: "
+            + ", ".join(invalid_tolerances)
+        )
+    stored_tolerance_hash = data["comparison_fields"].get(
+        "tolerance_model_sha256"
+    )
+    if stored_tolerance_hash is not None and stored_tolerance_hash != scalar_hash(
+        data["tolerance_model"]
+    ):
+        raise ValueError("golden tolerance hash does not match tolerance_model")
     if spec is not None:
         validated = validate_spec(
-            spec, allow_unsupported=True, allow_unimplemented=True
+            spec, allow_unsupported=False, allow_unimplemented=False
         )
         if data["spec_hash"] != validated["spec_hash"]:
             raise ValueError("golden spec_hash does not match spec")
@@ -298,6 +311,15 @@ def _compare_one(
                 "numeric scalar missing tolerance",
             )
         tol = float(tolerance)
+        if not math.isfinite(tol) or tol < 0.0:
+            return ScalarComparison(
+                key,
+                float(expected),
+                float(actual),
+                tol,
+                False,
+                "numeric scalar has invalid tolerance",
+            )
         diff = abs(float(actual) - float(expected))
         passed = math.isfinite(diff) and diff <= tol
         msg = "" if passed else f"abs diff {diff:g} exceeds tolerance {tol:g}"
@@ -318,6 +340,27 @@ def _numeric_scalars_missing_tolerance(golden: dict[str, Any]) -> list[str]:
         for key, value in scalars.items()
         if _is_number(value) and key not in tolerances
     )
+
+
+def _invalid_numeric_tolerances(golden: dict[str, Any]) -> list[str]:
+    scalars = golden["diagnostics"]["scalars"]
+    tolerances = golden.get("tolerance_model", {}).get("scalars", {})
+    invalid = []
+    for key, value in scalars.items():
+        if not _is_number(value) or key not in tolerances:
+            continue
+        tolerance = tolerances[key]
+        if isinstance(tolerance, bool):
+            invalid.append(key)
+            continue
+        try:
+            tol = float(tolerance)
+        except (TypeError, ValueError):
+            invalid.append(key)
+            continue
+        if not math.isfinite(tol) or tol < 0.0:
+            invalid.append(key)
+    return sorted(invalid)
 
 
 def _as_optional_float(value: Any) -> float | None:

@@ -1,4 +1,4 @@
-.PHONY: validate-all validate-% parity-cheap parity-dns parity-dns-pcf parity-dns-tc report
+.PHONY: validate-all validate-% parity-cheap parity-dns parity-dns-pcf parity-dns-tc parity-saturation report
 
 validate-all:
 	./validate_gpu.sh all
@@ -27,6 +27,12 @@ TC_DNS_PARITY_IDS := \
 
 DNS_PARITY_IDS := $(PCF_DNS_PARITY_IDS) $(TC_DNS_PARITY_IDS)
 
+SATURATION_PARITY_IDS := \
+	pcf_fluct_re400 \
+	exp_pcf_mri_shearbox_growth \
+	tc_supercritical_saturation \
+	tc_mri_nonlinear_saturation
+
 parity-cheap:
 	./validate_gpu.sh cheap
 
@@ -38,6 +44,9 @@ parity-dns-pcf:
 
 parity-dns-tc:
 	./validate_gpu.sh dns-tc
+
+parity-saturation:
+	./validate_gpu.sh saturation
 
 report:
 	cd .. && .venv/bin/python -m production.report --runs-root runs --out runs/_report

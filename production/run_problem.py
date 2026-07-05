@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from dataclasses import asdict
@@ -23,12 +24,17 @@ try:
     from .compare_goldens import (
         compare_problem,
         compare_to_golden,
-        load_golden,
         resolve_golden,
+        validate_golden,
         scalar_hash,
     )
-    from .device import capture_device_record
-    from .oracles import ProductionOracleNotImplementedError, run_supported_spec
+    from .device import capture_device_record, configure_production_dtype
+    from .oracles import (
+        ProductionOracleNotImplementedError,
+        load_resume_checkpoint,
+        run_supported_spec,
+        validate_resume_checkpoint,
+    )
     from .problem_spec import ProblemSpecError, UnsupportedSpecError
 except ImportError:  # pragma: no cover - direct script mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -36,14 +42,19 @@ except ImportError:  # pragma: no cover - direct script mode
     from production.compare_goldens import (
         compare_problem,
         compare_to_golden,
-        load_golden,
         resolve_golden,
+        validate_golden,
         scalar_hash,
     )  # type: ignore
-    from production.device import capture_device_record  # type: ignore
+    from production.device import (  # type: ignore
+        capture_device_record,
+        configure_production_dtype,
+    )
     from production.oracles import (
         ProductionOracleNotImplementedError,
+        load_resume_checkpoint,
         run_supported_spec,
+        validate_resume_checkpoint,
     )  # type: ignore
     from production.problem_spec import (  # type: ignore
         ProblemSpecError,
@@ -65,19 +76,33 @@ def run_problem(
     device: str = "auto",
     steps: int | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     resolution_tier: str | None = None,
     validate_only: bool = False,
     capture_device: bool = True,
+    resume: str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate a config, write metadata, and eventually execute its solver."""
 
     config = load_config(config_path, resolution_tier=resolution_tier)
+    resume_record = load_resume_checkpoint(resume) if resume is not None else None
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    compilation_cache = _configure_compilation_cache(out_dir)
+    effective_diagnostics_every = _effective_diagnostics_every(
+        config.spec,
+        diagnostics_every=diagnostics_every,
+        steps=steps,
+        resolution_tier=resolution_tier,
+    )
 
     device_record = (
         capture_device_record(device) if capture_device else {"capture_skipped": True}
     )
+    if resume_record is not None:
+        validate_resume_checkpoint(resume_record, config.spec, device_record)
+
     metadata = build_metadata(
         config,
         config_path=Path(config_path),
@@ -89,8 +114,12 @@ def run_problem(
         requested_device=device,
         steps=steps,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=effective_diagnostics_every,
         resolution_tier=resolution_tier,
         validate_only=validate_only,
+        resume=Path(resume) if resume is not None else None,
+        compilation_cache=compilation_cache,
     )
     _write_json(out_dir / "metadata.json", metadata)
 
@@ -99,23 +128,33 @@ def run_problem(
 
     solver_started_at = _utc_timestamp()
     solver_start = time.perf_counter()
+    solver_steps = _executed_solver_steps(
+        config.spec, steps=steps, resume_record=resume_record
+    )
     try:
         diagnostics = run_supported_spec(
             config.spec,
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=effective_diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_record,
         )
     except ProductionOracleNotImplementedError as exc:
-        metadata["timing"] = _solver_timing(solver_started_at, solver_start)
+        metadata["timing"] = _solver_timing(
+            solver_started_at, solver_start, solver_steps=solver_steps
+        )
         _write_json(out_dir / "metadata.json", metadata)
         raise SolverExecutionNotImplementedError(
             f"{exc}; contract validation metadata was written, but no DNS "
             "or golden comparison was run"
         ) from exc
     except Exception as exc:
-        metadata["timing"] = _solver_timing(solver_started_at, solver_start)
+        metadata["timing"] = _solver_timing(
+            solver_started_at, solver_start, solver_steps=solver_steps
+        )
         metadata["execution"] = {
             "status": "failed",
             "solver_execution_wired": True,
@@ -124,10 +163,16 @@ def run_problem(
         }
         _write_json(out_dir / "metadata.json", metadata)
         raise
-    metadata["timing"] = _solver_timing(solver_started_at, solver_start)
+    metadata["timing"] = _solver_timing(
+        solver_started_at, solver_start, solver_steps=solver_steps
+    )
 
     _write_json(out_dir / "spec.json", config.spec)
-    _write_diagnostics(out_dir / "diagnostics.jsonl", diagnostics)
+    _write_diagnostics(
+        out_dir / "diagnostics.jsonl",
+        diagnostics,
+        append=resume_record is not None and (out_dir / "diagnostics.jsonl").exists(),
+    )
     metadata["execution"] = {
         "status": "completed",
         "solver_execution_wired": True,
@@ -154,6 +199,12 @@ def run_problem(
     checkpoint_path = out_dir / "checkpoints" / "checkpoints.h5"
     if checkpoint_path.exists():
         metadata["checkpoint_path"] = str(checkpoint_path)
+    snapshot_path = out_dir / "snapshots" / "snapshots.h5"
+    if snapshot_path.exists():
+        metadata["snapshot_path"] = str(snapshot_path)
+        xdmf_path = snapshot_path.with_suffix(".xdmf")
+        if xdmf_path.exists():
+            metadata["snapshot_xdmf_path"] = str(xdmf_path)
 
     if compare_golden:
         result = _compare_diagnostics(
@@ -173,7 +224,11 @@ def run_problem(
 
     if write_golden:
         golden_path = _write_golden(
-            out_dir / "golden" / "golden.json", config, diagnostics, device_record
+            out_dir / "golden" / "golden.json",
+            config,
+            diagnostics,
+            device_record,
+            metadata=metadata,
         )
         metadata["written_golden"] = str(golden_path)
 
@@ -193,8 +248,12 @@ def build_metadata(
     requested_device: str,
     steps: int | None,
     checkpoint_every: int | None,
+    snapshot_every: int | None,
+    diagnostics_every: int | None,
     resolution_tier: str | None,
     validate_only: bool,
+    resume: Path | None,
+    compilation_cache: dict[str, Any],
 ) -> dict[str, Any]:
     golden_resolution = _golden_resolution_metadata(config.problem_id, shenfun_golden)
     return {
@@ -219,11 +278,15 @@ def build_metadata(
             "source_files": list(config.source_files),
         },
         "device": device_record,
+        "compilation_cache": compilation_cache,
         "run_options": {
             "requested_device": requested_device,
             "steps_override": steps,
             "checkpoint_every": checkpoint_every,
+            "snapshot_every": snapshot_every,
+            "diagnostics_every": diagnostics_every,
             "resolution_tier": resolution_tier,
+            "resume": None if resume is None else str(resume),
             "compare_golden": compare_golden,
             "write_golden": write_golden,
             "validate_only": validate_only,
@@ -340,6 +403,30 @@ def _is_bounded_smoke_run(*, steps: int | None, resolution_tier: str | None) -> 
     return steps is not None or resolution_tier in {"smoke", "start"}
 
 
+def _effective_diagnostics_every(
+    spec: dict[str, Any],
+    *,
+    diagnostics_every: int | None,
+    steps: int | None,
+    resolution_tier: str | None,
+) -> int | None:
+    if diagnostics_every is not None:
+        return diagnostics_every
+    if _execution_kind(spec) != "dns-saturation":
+        return None
+    if _is_bounded_smoke_run(steps=steps, resolution_tier=resolution_tier):
+        return None
+    total_steps = _steps_from_spec_metadata(spec, steps=steps)
+    return max(1, min(100, max(1, total_steps // 16)))
+
+
+def _steps_from_spec_metadata(spec: dict[str, Any], *, steps: int | None) -> int:
+    if steps is not None:
+        return int(steps)
+    time_spec = spec["time"]
+    return int(round(float(time_spec["final_time"]) / float(time_spec["dt"])))
+
+
 def _saturation_check_metadata(
     diagnostics: dict[str, Any], *, validation_scope: dict[str, Any]
 ) -> dict[str, Any]:
@@ -347,16 +434,21 @@ def _saturation_check_metadata(
     has_passed_key = "saturation_check_passed" in scalars
     raw_passed = scalars.get("saturation_check_passed")
     required = validation_scope.get("kind") == "generated_saturated_golden"
+    type_valid = isinstance(raw_passed, bool)
     return {
         "required": required,
         "present": has_passed_key,
-        "passed": None if raw_passed is None else bool(raw_passed),
+        "type_valid": type_valid if has_passed_key else None,
+        "passed": raw_passed if type_valid else None,
         "energy_growth_factor": scalars.get("energy_growth_factor"),
         "magnetic_energy_growth_factor": scalars.get("magnetic_energy_growth_factor"),
+        "stationarity_check_passed": scalars.get("stationarity_check_passed"),
+        "stationarity_relative_change": scalars.get("stationarity_relative_change"),
     }
 
 
 _VALIDATION_FLOOR_SCOPES = {
+    "generated_saturated_golden",
     "bounded_saturation_smoke",
     "cpu_smoke_finiteness_divergence_only",
     "cpu_smoke_fallback_oracle",
@@ -474,17 +566,34 @@ def _assert_required_saturation_checks(metadata: dict[str, Any]) -> None:
     checks = metadata.get("saturation_checks", {})
     if not checks.get("required"):
         return
-    if checks.get("present") and checks.get("passed") is True:
+    if (
+        checks.get("present")
+        and checks.get("type_valid") is True
+        and checks.get("passed") is True
+        and checks.get("stationarity_check_passed") is True
+    ):
         return
 
     details = []
-    for key in ("energy_growth_factor", "magnetic_energy_growth_factor"):
+    for key in (
+        "energy_growth_factor",
+        "magnetic_energy_growth_factor",
+        "stationarity_relative_change",
+    ):
         value = checks.get(key)
         if value is not None:
             details.append(f"{key}={value}")
-    state = (
-        "missing" if not checks.get("present") else str(checks.get("passed")).lower()
-    )
+    if checks.get("stationarity_check_passed") is not True:
+        details.append(
+            "stationarity_check_passed="
+            f"{checks.get('stationarity_check_passed')}"
+        )
+    if not checks.get("present"):
+        state = "missing"
+    elif checks.get("type_valid") is not True:
+        state = "non-boolean"
+    else:
+        state = str(checks.get("passed")).lower()
     message = f"full saturation check failed: saturation_check_passed is {state}"
     if details:
         message = f"{message} ({', '.join(details)})"
@@ -535,12 +644,63 @@ def _utc_timestamp() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
-def _solver_timing(started_at_utc: str, start: float) -> dict[str, Any]:
-    return {
+def _solver_timing(
+    started_at_utc: str, start: float, *, solver_steps: int | None = None
+) -> dict[str, Any]:
+    elapsed = time.perf_counter() - start
+    timing: dict[str, Any] = {
         "solver_started_at_utc": started_at_utc,
         "solver_finished_at_utc": _utc_timestamp(),
-        "solver_wall_time_seconds": time.perf_counter() - start,
+        "solver_wall_time_seconds": elapsed,
     }
+    if solver_steps is not None:
+        steps = max(0, int(solver_steps))
+        timing["solver_steps"] = steps
+        if steps > 0 and elapsed > 0.0:
+            timing["seconds_per_step"] = elapsed / steps
+            timing["ms_per_step"] = 1000.0 * elapsed / steps
+            timing["steps_per_second"] = steps / elapsed
+    return timing
+
+
+def _executed_solver_steps(
+    spec: dict[str, Any], *, steps: int | None, resume_record: Any | None
+) -> int | None:
+    if _execution_kind(spec) not in {"dns-saturation", "dns-linear-window"}:
+        return None
+    target_steps = _steps_from_spec_metadata(spec, steps=steps)
+    start_step = (
+        int(getattr(resume_record, "tstep", 0))
+        if resume_record is not None
+        else 0
+    )
+    return max(0, target_steps - start_step)
+
+
+def _configure_compilation_cache(out_dir: Path) -> dict[str, Any]:
+    configured = os.environ.get("JAX_COMPILATION_CACHE_DIR")
+    cache_dir = (
+        Path(configured) if configured else out_dir.parent / "_jax_compilation_cache"
+    )
+    record: dict[str, Any] = {
+        "requested": True,
+        "source": "env" if configured else "run_parent_default",
+        "path": str(cache_dir),
+        "enabled": False,
+    }
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        import jax
+
+        jax.config.update("jax_compilation_cache_dir", str(cache_dir))
+        try:
+            jax.config.update("jax_persistent_cache_min_compile_time_secs", 0.0)
+        except Exception as exc:  # pragma: no cover - depends on JAX version
+            record["min_compile_time_config_error"] = _exception_message(exc)
+        record["enabled"] = True
+    except Exception as exc:  # pragma: no cover - cache support is best effort
+        record["error"] = _exception_message(exc)
+    return record
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -550,7 +710,9 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     )
 
 
-def _write_diagnostics(path: Path, diagnostics: dict[str, Any]) -> None:
+def _write_diagnostics(
+    path: Path, diagnostics: dict[str, Any], *, append: bool = False
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     scalars = diagnostics["scalars"]
     series = diagnostics.get("time_series")
@@ -559,7 +721,10 @@ def _write_diagnostics(path: Path, diagnostics: dict[str, Any]) -> None:
         rows[-1] = {**scalars, **rows[-1]}
     else:
         rows = [{"t": 0.0, **scalars}]
-    with path.open("w", encoding="utf-8") as fh:
+    mode = "a" if append else "w"
+    if append and len(rows) > 1:
+        rows = rows[1:]
+    with path.open(mode, encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(_json_ready(row), sort_keys=True) + "\n")
 
@@ -577,7 +742,7 @@ def _compare_diagnostics(
         "source_files": list(config.source_files),
     }
     if explicit_golden is not None:
-        golden = load_golden(explicit_golden)
+        golden = validate_golden(explicit_golden, spec=config.spec)
         return compare_to_golden(
             diagnostics["scalars"],
             golden,
@@ -598,9 +763,12 @@ def _write_golden(
     config: ProductionConfig,
     diagnostics: dict[str, Any],
     device_record: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
 ) -> Path:
     diagnostics_ready = _json_ready(diagnostics)
     scalars = diagnostics_ready["scalars"]
+    tolerance_model = _golden_tolerance_model(config.spec["tolerance_model"], scalars)
     data = {
         "schema_version": 1,
         "artifact_id": config.artifact_id,
@@ -613,14 +781,37 @@ def _write_golden(
         },
         "git": {},
         "source_anchors": config.spec["expected_oracle"].get("source_anchors", []),
-        "tolerance_model": config.spec["tolerance_model"],
+        "tolerance_model": tolerance_model,
         "diagnostics": diagnostics_ready,
+        "generation": {
+            "run_options": (metadata or {}).get("run_options", {}),
+            "validation_scope": (metadata or {}).get("validation_scope", {}),
+        },
         "comparison_fields": {
             "scalars_sha256": scalar_hash(scalars),
+            "tolerance_model_sha256": scalar_hash(tolerance_model),
         },
     }
     _write_json(path, data)
     return path
+
+
+def _golden_tolerance_model(
+    tolerance_model: dict[str, Any], scalars: dict[str, Any]
+) -> dict[str, Any]:
+    model = json.loads(json.dumps(tolerance_model))
+    scalar_tolerances = model.setdefault("scalars", {})
+    stationarity_tol = scalars.get("stationarity_relative_tolerance", 5.0e-2)
+    for key, value in scalars.items():
+        if key in scalar_tolerances or not key.startswith("stationarity_"):
+            continue
+        if isinstance(value, bool) or value is None or isinstance(value, str):
+            continue
+        if key == "stationarity_relative_change":
+            scalar_tolerances[key] = float(stationarity_tol)
+        else:
+            scalar_tolerances[key] = 0.0
+    return model
 
 
 def _json_ready(value: Any) -> Any:
@@ -641,8 +832,8 @@ def _json_ready(value: Any) -> Any:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--config")
+    parser.add_argument("--out")
     parser.add_argument("--compare-golden", action="store_true")
     parser.add_argument("--shenfun-golden")
     parser.add_argument("--write-golden", action="store_true")
@@ -651,38 +842,74 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--steps", type=int)
     parser.add_argument("--checkpoint-every", type=int)
+    parser.add_argument("--snapshot-every", type=int)
+    parser.add_argument("--diagnostics-every", type=int)
     parser.add_argument(
         "--resolution-tier",
         choices=["smoke", "start", "production"],
         help="Materialize a nested resolution tier before execution.",
     )
     parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--resume", help="Resume from a prior run directory.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    resume_dir = Path(args.resume) if args.resume else None
+    config_path = Path(args.config) if args.config else None
+    out_dir = Path(args.out) if args.out else None
+    if resume_dir is not None:
+        config_path = config_path or (resume_dir / "spec.json")
+        out_dir = out_dir or resume_dir
+    if config_path is None or out_dir is None:
+        parser.error("--config and --out are required unless --resume is used")
+
+    env_keys = ("JAXFUN_PRODUCTION_DTYPE", "JAXFUN_ENABLE_X64", "JAX_ENABLE_X64")
+    previous_env = {key: os.environ.get(key) for key in env_keys}
+    previous_x64 = None
+    jax_module = None
     try:
-        run_problem(
-            config_path=args.config,
-            out=args.out,
-            compare_golden=args.compare_golden,
-            shenfun_golden=args.shenfun_golden,
-            write_golden=args.write_golden,
-            device=args.device,
-            steps=args.steps,
-            checkpoint_every=args.checkpoint_every,
-            resolution_tier=args.resolution_tier,
-            validate_only=args.validate_only,
-        )
-    except (ProblemSpecError, UnsupportedSpecError) as exc:
-        print(f"spec rejected: {exc}", file=sys.stderr)
-        return 1
-    except SolverExecutionNotImplementedError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    return 0
+        import jax as jax_module  # type: ignore[no-redef]
+
+        previous_x64 = bool(jax_module.config.read("jax_enable_x64"))
+    except Exception:
+        jax_module = None
+
+    configure_production_dtype(apply_to_process=True)
+    try:
+        try:
+            run_problem(
+                config_path=config_path,
+                out=out_dir,
+                compare_golden=args.compare_golden,
+                shenfun_golden=args.shenfun_golden,
+                write_golden=args.write_golden,
+                device=args.device,
+                steps=args.steps,
+                checkpoint_every=args.checkpoint_every,
+                snapshot_every=args.snapshot_every,
+                diagnostics_every=args.diagnostics_every,
+                resolution_tier=args.resolution_tier,
+                validate_only=args.validate_only,
+                resume=resume_dir,
+            )
+        except (ProblemSpecError, UnsupportedSpecError) as exc:
+            print(f"spec rejected: {exc}", file=sys.stderr)
+            return 1
+        except SolverExecutionNotImplementedError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        if jax_module is not None and previous_x64 is not None:
+            jax_module.config.update("jax_enable_x64", previous_x64)
 
 
 if __name__ == "__main__":  # pragma: no cover

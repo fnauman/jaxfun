@@ -48,6 +48,7 @@ def run_device_comparison(
     rtol: float = 1.0e-6,
     timeout_seconds: float = 1800.0,
     python: str | Path = sys.executable,
+    allow_same_backend: bool = False,
 ) -> dict[str, Any]:
     """Run a config twice in subprocesses and compare final numeric diagnostics."""
 
@@ -74,10 +75,17 @@ def run_device_comparison(
         python=python,
     )
     comparisons: list[ScalarComparison] = []
-    if left["returncode"] == 0 and right["returncode"] == 0:
+    subprocess_ok = left["returncode"] == 0 and right["returncode"] == 0
+    if subprocess_ok:
         comparisons = compare_final_diagnostics(
             left_dir, right_dir, atol=atol, rtol=rtol
         )
+    backend_check = _backend_check(
+        left_dir, right_dir, allow_same_backend=allow_same_backend
+    )
+    summary = _summary(comparisons, subprocess_ok=subprocess_ok)
+    if subprocess_ok and not backend_check["passed"]:
+        summary = {**summary, "failed": summary["failed"] + 1}
     report = {
         "schema_version": 1,
         "config": str(config),
@@ -85,10 +93,8 @@ def run_device_comparison(
         "run_options": {"steps": steps, "resolution_tier": resolution_tier},
         "runs": {"left": left, "right": right},
         "timing": _timing_report(left, right),
-        "summary": _summary(
-            comparisons,
-            subprocess_ok=left["returncode"] == 0 and right["returncode"] == 0,
-        ),
+        "backend_check": backend_check,
+        "summary": summary,
         "comparisons": [comparison.to_dict() for comparison in comparisons],
     }
     report_path = out_root / "device_comparison.json"
@@ -195,6 +201,37 @@ def _run_problem_subprocess(
     }
 
 
+def _backend_check(
+    left_run: Path, right_run: Path, *, allow_same_backend: bool
+) -> dict[str, Any]:
+    left_backend = _metadata_backend(left_run)
+    right_backend = _metadata_backend(right_run)
+    same = left_backend is not None and left_backend == right_backend
+    passed = bool(allow_same_backend or not same)
+    message = ""
+    if not passed:
+        message = (
+            "device comparison used the same backend on both sides; pass "
+            "--allow-same-backend only for intentional CPU/CPU smoke checks"
+        )
+    return {
+        "left_backend": left_backend,
+        "right_backend": right_backend,
+        "same_backend": same,
+        "allow_same_backend": allow_same_backend,
+        "passed": passed,
+        "message": message,
+    }
+
+
+def _metadata_backend(run_dir: Path) -> str | None:
+    path = run_dir / "metadata.json"
+    if not path.exists():
+        return None
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    return metadata.get("device", {}).get("default_backend")
+
+
 def _timing_report(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     left_time = left.get("wall_time_seconds")
     right_time = right.get("wall_time_seconds")
@@ -284,6 +321,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rtol", type=float, default=1.0e-6)
     parser.add_argument("--timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--python", default=sys.executable)
+    parser.add_argument(
+        "--allow-same-backend",
+        action="store_true",
+        help="Allow both subprocesses to resolve to the same JAX backend.",
+    )
     return parser
 
 
@@ -300,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         rtol=args.rtol,
         timeout_seconds=args.timeout_seconds,
         python=args.python,
+        allow_same_backend=args.allow_same_backend,
     )
     return 0 if report["summary"]["failed"] == 0 else 1
 

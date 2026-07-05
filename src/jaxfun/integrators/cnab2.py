@@ -37,7 +37,16 @@ def ab2_extrapolate(current: T, previous: T, have_previous: bool | jax.Array) ->
     leaves.  ``have_previous`` is intentionally array-compatible so callers can
     use this inside ``jax.lax.scan`` without Python control flow on traced data.
     """
-    have = jnp.asarray(have_previous)
+    try:
+        concrete_have = bool(have_previous)
+    except Exception:
+        concrete_have = None
+    if concrete_have is False:
+        return current
+    if concrete_have is True:
+        return jax.tree.map(lambda c, p: 1.5 * c - 0.5 * p, current, previous)
+
+    have = jnp.asarray(have_previous) != 0
     return jax.tree.map(
         lambda c, p: jnp.where(have, 1.5 * c - 0.5 * p, c),
         current,

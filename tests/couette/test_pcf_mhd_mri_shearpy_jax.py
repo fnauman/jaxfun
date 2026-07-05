@@ -21,3 +21,10 @@ def test_pcf_mhd_mri_shearpy_one_step_is_finite() -> None:
     assert bool(jnp.isfinite(diag["reynolds_xy"]))
     assert bool(jnp.isfinite(diag["maxwell_xy"]))
     assert float(diag["q_shear"]) == 1.0
+
+
+def test_pcf_mhd_mri_shearpy_defaults_match_reference():
+    solver = PlaneCouetteMRIShearpyJax(N=(9, 8, 8), family="L", dt=1.0e-3)
+
+    assert solver.background_b == (0.0, 0.0, 0.025)
+    assert solver.magnetic_amplitude == 0.0

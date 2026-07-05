@@ -42,11 +42,11 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         Rm: float | None = None,
         omega: float = 1.0,
         shear_rate: float = 1.0,
-        background_b: tuple[float, float, float] = (0.0, 0.0, 0.1),
+        background_b: tuple[float, float, float] = (0.0, 0.0, 0.025),
         dt: float = 0.01,
         family: str = "L",
         perturbation_amplitude: float = 0.05,
-        magnetic_amplitude: float = 0.05,
+        magnetic_amplitude: float = 0.0,
     ) -> None:
         self.omega = float(omega)
         self.shear_rate = float(shear_rate)
@@ -190,7 +190,7 @@ def main() -> None:
     parser.add_argument("--family", choices=("L", "C"), default="L")
     parser.add_argument("--omega", type=float, default=1.0)
     parser.add_argument("--shear", type=float, default=1.0)
-    parser.add_argument("--Bz", type=float, default=0.1)
+    parser.add_argument("--Bz", type=float, default=0.025)
     args = parser.parse_args()
 
     solver = PlaneCouetteMRIShearpyJax(

@@ -58,6 +58,14 @@ case "${parity_dtype}" in
 esac
 report_args=()
 failures=0
+smoke_banner_printed=0
+
+print_smoke_banner_once() {
+  if [[ "$smoke_banner_printed" -eq 0 ]]; then
+    echo "SMOKE ONLY: bounded start/smoke-tier runs do not validate full production saturation; use --full or saturation/parity-saturation for full-window checks." >&2
+    smoke_banner_printed=1
+  fi
+}
 
 cheap_parity_ids=(
   pcf_hydro_laminar_v1
@@ -83,6 +91,13 @@ tc_dns_parity_ids=(
 
 dns_parity_ids=("${pcf_dns_parity_ids[@]}" "${tc_dns_parity_ids[@]}")
 
+saturation_parity_ids=(
+  pcf_fluct_re400
+  exp_pcf_mri_shearbox_growth
+  tc_supercritical_saturation
+  tc_mri_nonlinear_saturation
+)
+
 usage() {
   cat >&2 <<'USAGE'
 usage: production/validate_gpu.sh [all|heavy|cheap|dns|dns-pcf|dns-tc|problem_id] [run_problem args...]
@@ -94,6 +109,7 @@ Modes:
   dns          run the four committed linear-window DNS golden comparisons
   dns-pcf      run the PCF primitive linear-window DNS golden comparisons
   dns-tc       run the Taylor-Couette linear-window DNS golden comparisons
+  saturation   run promoted generated-saturation specs against committed goldens
   problem_id   execute production/runs/<problem_id>.json as bounded smoke, or
                compare production/examples/<problem_id>.json if no run spec exists
 
@@ -103,6 +119,7 @@ Heavy-run options:
   --smoke        use the lighter checked-in smoke resolution tier
 
 Heavy non-validate runs write a schema v1 golden and checkpoint by default.
+The saturation/parity-saturation mode is intentionally full-window and may be long.
 Use --checkpoint-every or JAXFUN_VALIDATE_CHECKPOINT_EVERY to set cadence.
 USAGE
 }
@@ -158,6 +175,7 @@ run_heavy_spec() {
   mkdir -p "$out"
   local heavy_args=()
   if [[ "$validate_only_requested" -eq 0 && "$full_run" -eq 0 ]]; then
+    print_smoke_banner_once
     if [[ "$has_resolution_tier" -eq 0 ]]; then
       local resolution_tier="$heavy_resolution_tier"
       if [[ "$smoke_requested" -eq 1 ]]; then
@@ -185,13 +203,18 @@ run_heavy_spec() {
       heavy_args+=(--checkpoint-every "$checkpoint_every")
     fi
   fi
+  local status=0
   run_with_log "$id" \
     timeout "${timeout_seconds}s" "$python_bin" production/run_problem.py \
       --config "$config" \
       --out "$out" \
       --device auto \
       "${heavy_args[@]}" \
-      "${extra_args[@]}"
+      "${extra_args[@]}" || status="$?"
+  if [[ -f "$out/metadata.json" ]]; then
+    report_args+=(--metadata "$out/metadata.json")
+  fi
+  return "$status"
 }
 
 run_compare_golden() {
@@ -203,6 +226,7 @@ run_compare_golden() {
   fi
   local out="runs/${id}/${timestamp}"
   mkdir -p "$out"
+  local status=0
   run_with_log "$id" \
     env JAXFUN_PRODUCTION_DTYPE="$parity_dtype" \
       JAXFUN_ENABLE_X64="$parity_x64" \
@@ -211,7 +235,33 @@ run_compare_golden() {
       --config "$config" \
       --out "$out" \
       --device auto \
-      --compare-golden "${extra_args[@]}"
+      --compare-golden "${extra_args[@]}" || status="$?"
+  if [[ -f "$out/metadata.json" ]]; then
+    report_args+=(--metadata "$out/metadata.json")
+  fi
+  return "$status"
+}
+
+run_saturation_golden() {
+  local id="$1"
+  local config="production/runs/${id}.json"
+  if [[ ! -f "$config" ]]; then
+    echo "missing saturation run spec: $config" >&2
+    exit 1
+  fi
+  local out="runs/${id}/${timestamp}"
+  mkdir -p "$out"
+  local status=0
+  run_with_log "$id" \
+    timeout "${timeout_seconds}s" "$python_bin" production/run_problem.py \
+      --config "$config" \
+      --out "$out" \
+      --device auto \
+      --compare-golden "${extra_args[@]}" || status="$?"
+  if [[ -f "$out/metadata.json" ]]; then
+    report_args+=(--metadata "$out/metadata.json")
+  fi
+  return "$status"
 }
 
 case "$run_id" in
@@ -239,6 +289,11 @@ case "$run_id" in
   dns-tc|tc-dns|parity-dns-tc)
     for id in "${tc_dns_parity_ids[@]}"; do
       run_and_record run_compare_golden "$id"
+    done
+    ;;
+  saturation|parity-saturation)
+    for id in "${saturation_parity_ids[@]}"; do
+      run_and_record run_saturation_golden "$id"
     done
     ;;
   -h|--help|help)

@@ -535,6 +535,126 @@ def pcf_fluctuation_reference(
     )
 
 
+
+def pcf_primitive_axisymmetric_reference(
+    *,
+    steps: tuple[int, ...] = (10,),
+    n: tuple[int, int] = (8, 6),
+    dt: float = 1.0e-3,
+    amp: float = 1.0e-3,
+    family: str = "C",
+    dealias: float = 1.0,
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run live shenfun primitive-b axisymmetric PCF MRI DNS parity rows."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from pcf_mri_primitive import AxisymmetricPCFMRIDNS
+
+            solver = AxisymmetricPCFMRIDNS(
+                S=1.0,
+                omega=2.0/3.0,
+                B0=0.1,
+                nu=1.0e-3,
+                eta_mag=1.0e-3,
+                Nx={int(n[0])!r},
+                Nz={int(n[1])!r},
+                Lz=1.0,
+                dt={dt!r},
+                family={family!r},
+                dealias={dealias!r},
+            )
+            eigenvalue = solver.seed_linear_eigenmode(kz_mode=1, amp={amp!r})
+
+            def complex_nested(arr):
+                values = np.asarray(arr)
+                return np.stack((values.real, values.imag), axis=-1).tolist()
+
+            rows = []
+            tstep = 0
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                solver.run((target - tstep) * solver.dt)
+                tstep = target
+                row = solver.diagnostics(solver._t, solver._tstep)
+                row['steps'] = int(target)
+                row['eigenvalue_real'] = float(eigenvalue.real)
+                row['eigenvalue_imag'] = float(eigenvalue.imag)
+                if {include_coefficients!r}:
+                    row['coefficients'] = {{
+                        'x': [complex_nested(solver.x[i]) for i in range(6)],
+                    }}
+                rows.append(row)
+            print(json.dumps(rows))
+            """
+        )
+    )
+
+
+def pcf_primitive_3d_reference(
+    *,
+    steps: tuple[int, ...] = (10,),
+    n: tuple[int, int, int] = (8, 4, 6),
+    dt: float = 1.0e-3,
+    amp: float = 1.0e-3,
+    family: str = "C",
+    dealias: float | tuple[float, float, float] = 1.0,
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run live shenfun primitive-b 3D PCF MRI DNS parity rows."""
+    return run_shenfun_json(
+        textwrap.dedent(
+            f"""
+            import json
+            import numpy as np
+            from pcf_mri_primitive import PCFMRIDNS
+
+            solver = PCFMRIDNS(
+                S=1.0,
+                omega=2.0/3.0,
+                B0=0.1,
+                nu=1.0e-3,
+                eta_mag=1.0e-3,
+                Nx={int(n[0])!r},
+                Ny={int(n[1])!r},
+                Nz={int(n[2])!r},
+                Ly=4.0,
+                Lz=1.0,
+                dt={dt!r},
+                family={family!r},
+                dealias={dealias!r},
+            )
+            eigenvalue = solver.seed_linear_eigenmode(ky_mode=1, kz_mode=1, amp={amp!r})
+
+            def complex_nested(arr):
+                values = np.asarray(arr)
+                return np.stack((values.real, values.imag), axis=-1).tolist()
+
+            rows = []
+            tstep = 0
+            for target in {tuple(int(step) for step in steps)!r}:
+                if target < tstep:
+                    raise ValueError('steps must be sorted increasingly')
+                solver.run((target - tstep) * solver.dt)
+                tstep = target
+                row = solver.diagnostics(solver._t, solver._tstep)
+                row['steps'] = int(target)
+                row['eigenvalue_real'] = float(eigenvalue.real)
+                row['eigenvalue_imag'] = float(eigenvalue.imag)
+                if {include_coefficients!r}:
+                    row['coefficients'] = {{
+                        'x': [complex_nested(solver.x[i]) for i in range(6)],
+                    }}
+                rows.append(row)
+            print(json.dumps(rows))
+            """
+        )
+    )
+
 def pcf_mhd_reference(
     *,
     steps: tuple[int, ...] = (1, 5, 50),
@@ -629,9 +749,9 @@ def pcf_mhd_shearpy_reference(
     rm: float | None = None,
     omega: float = 1.0,
     shear_rate: float = 1.0,
-    background_b: tuple[float, float, float] = (0.0, 0.0, 0.1),
+    background_b: tuple[float, float, float] = (0.0, 0.0, 0.025),
     perturbation_amplitude: float = 0.05,
-    magnetic_amplitude: float = 0.05,
+    magnetic_amplitude: float = 0.0,
     family: str = "L",
     include_coefficients: bool = False,
 ) -> list[dict]:

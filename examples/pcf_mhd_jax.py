@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
@@ -25,15 +26,25 @@ except ModuleNotFoundError:  # direct script execution from examples/
 
 from jaxfun.galerkin import TestFunction, TrialFunction, inner
 from jaxfun.galerkin.inner import integrate
+from jaxfun.integrators.cnab2 import scan_steps
 from jaxfun.integrators.nonlinear import physical_cross
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class MHDState:
     """Coefficient-space state for PCF MHD."""
 
     flow: KMMState
     A: Velocity
+
+    def tree_flatten(self):
+        return (self.flow, self.A), None
+
+    @classmethod
+    def tree_unflatten(cls, _aux_data, children):
+        flow, A = children
+        return cls(flow=flow, A=A)
 
 
 class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
@@ -83,6 +94,7 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
         self.MA = inner(h * a, sparse=True)
         self.LA = inner(h * (self.eta * lap_a), sparse=True)
         self.SA = self.MA - (self.dt * self._gamma) * self.LA
+        self.SA_factor = self.SA.lu_factor()
 
     def initial_state(self) -> MHDState:
         flow = super().initial_state()
@@ -245,23 +257,24 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
                         for i in range(3)
                     ]
 
-            u0_new = self.Su.solve(self.TB.mask_nyquist(rhs_u))
-            g_new = self.Sg.solve(self.TD.mask_nyquist(rhs_g))
-            v00_new = self.S00.solve(rhs_v)
-            w00_new = self.S00.solve(rhs_w)
+            u0_new = self._solve_prefactor(
+                self.Su_factor, self.TB.mask_nyquist(rhs_u)
+            )
+            g_new = self._solve_prefactor(self.Sg_factor, self.TD.mask_nyquist(rhs_g))
+            v00_new = self._solve_prefactor(self.S00_factor, rhs_v)
+            w00_new = self._solve_prefactor(self.S00_factor, rhs_w)
             u_new = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
             A_stage = tuple(
-                self.TD.mask_nyquist(self.SA.solve(rhs_A[i])) for i in range(3)
+                self.TD.mask_nyquist(self._solve_prefactor(self.SA_factor, rhs_A[i]))
+                for i in range(3)
             )
             flow_stage = KMMState(u=u_new, g=g_new)
 
         return MHDState(flow=flow_stage, A=A_stage)
 
     def solve(self, state: MHDState, steps: int) -> MHDState:
-        out = state
-        for _ in range(int(steps)):
-            out = self.step(out)
-        return out
+        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
+        return scan_steps(step, state, int(steps))
 
     def magnetic_divergence_l2(self, state: MHDState) -> Array:
         B = self.update_B_from_A(state.A)

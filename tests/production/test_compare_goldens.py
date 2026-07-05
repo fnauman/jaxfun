@@ -87,6 +87,29 @@ def test_missing_numeric_golden_tolerance_fails(tmp_path):
     assert failure.message == "numeric scalar missing tolerance"
 
 
+def test_invalid_numeric_golden_tolerance_fails(tmp_path):
+    golden = load_golden(GOLDENS / "pcf_hydro_laminar_v1" / "golden" / "golden.json")
+    golden["tolerance_model"]["scalars"]["kinetic_energy"] = -1.0
+    golden["comparison_fields"]["scalars_sha256"] = scalar_hash(
+        golden["diagnostics"]["scalars"]
+    )
+    path = tmp_path / "golden.json"
+    path.write_text(json.dumps(golden), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid tolerance"):
+        validate_golden(path)
+
+
+def test_tolerance_model_hash_tampering_fails(tmp_path):
+    golden = load_golden(GOLDENS / "pcf_hydro_laminar_v1" / "golden" / "golden.json")
+    golden["comparison_fields"]["tolerance_model_sha256"] = "not-the-hash"
+    path = tmp_path / "golden.json"
+    path.write_text(json.dumps(golden), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="tolerance hash"):
+        validate_golden(path)
+
+
 def test_bool_numeric_scalar_mismatch_fails_type_check():
     golden = load_golden(GOLDENS / "pcf_mhd_divfree" / "golden" / "golden.json")
     actual = dict(golden["diagnostics"]["scalars"])

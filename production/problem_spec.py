@@ -30,6 +30,27 @@ INTEGRATORS = {"analytic", "IMEXRK222", "CNAB2", "linear_eigenproblem"}
 MAGNETIC_BCS = {None, "conducting", "insulating", "pseudo_vacuum", "dirichlet"}
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "problem_spec.schema.json"
 
+JAXFUN_IMPLEMENTED_ORACLES = {
+    "channel_poiseuille_hydro_v1": {"plane_poiseuille_laminar"},
+    "exp_pcf_mri_shearbox_growth": {"mri_saturation_ladder"},
+    "pcf_fluct_re400": {"gpu_generated_saturated_dns"},
+    "pcf_hydro_laminar_v1": {"plane_couette_laminar"},
+    "pcf_hydro_primitive_dns_v1": {"pcf_hydro_dns_decay"},
+    "pcf_mhd_conducting_v1": {"pcf_mhd_linear_conducting"},
+    "pcf_mhd_divfree": {"gpu_generated_saturated_dns"},
+    "pcf_mri_primitive_dns_v1": {"pcf_mri_dns_growth"},
+    "pcf_mri_shearbox_v1": {"local_ideal_mri"},
+    "pipe_hagen_poiseuille_v1": {"hagen_poiseuille"},
+    "pipe_womersley_v1": {"pipe_womersley"},
+    "taylor_couette_hydro_dns_v1": {"circular_couette_dns_growth"},
+    "taylor_couette_hydro_v1": {"circular_couette_base_flow"},
+    "taylor_couette_mhd_conducting_v1": {"tc_mhd_linear_conducting"},
+    "taylor_couette_mhd_dns_v1": {"tc_mri_dns_growth"},
+    "taylor_couette_mhd_insulating_v1": {"tc_mhd_linear_insulating"},
+    "tc_mri_nonlinear_saturation": {"tc_mri_saturation_ladder"},
+    "tc_supercritical_saturation": {"tc_hydro_saturation_ladder"},
+}
+
 _PROBLEM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 
 
@@ -118,6 +139,8 @@ def validate_spec(
         "spec",
     )
 
+    _validate_against_json_schema(data)
+
     if data["family"] != "shenfun":
         raise ProblemSpecError("family must be 'shenfun'")
     if not _PROBLEM_ID_RE.match(str(data["problem_id"])):
@@ -153,6 +176,22 @@ def validate_spec(
 
     data["spec_hash"] = spec_hash(data)
     return data
+
+
+def _validate_against_json_schema(data: dict[str, Any]) -> None:
+    try:
+        import jsonschema
+    except ModuleNotFoundError:  # pragma: no cover - optional validation backend
+        return
+
+    with SCHEMA_PATH.open("r", encoding="utf-8") as fh:
+        schema = json.load(fh)
+    validator = jsonschema.Draft202012Validator(schema)
+    errors = sorted(validator.iter_errors(data), key=lambda exc: list(exc.path))
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.path) or "spec"
+        raise ProblemSpecError(f"schema validation failed at {location}: {error.message}")
 
 
 def _require_keys(data: dict[str, Any], keys: list[str], context: str) -> None:
@@ -377,6 +416,14 @@ def _reject_jaxfun_unimplemented(
 ) -> None:
     if allow_unimplemented:
         return
+    problem_id = str(data["problem_id"])
+    oracle_type = str(data["expected_oracle"].get("type"))
+    implemented = JAXFUN_IMPLEMENTED_ORACLES.get(problem_id)
+    if implemented is None or oracle_type not in implemented:
+        raise UnsupportedSpecError(
+            f"problem_id {problem_id!r} with oracle {oracle_type!r} is "
+            f"not in the jaxfun implementation allowlist"
+        )
 
 
 def support_is_experimental(data: dict[str, Any]) -> bool:

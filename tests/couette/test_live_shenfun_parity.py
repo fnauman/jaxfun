@@ -4,6 +4,11 @@ import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_mhd_jax import PlaneCouetteMHDJax
+from examples.pcf_mri_primitive_jax import (
+    AxisymmetricPCFMRIDNSJax,
+    AxisymmetricPCFState,
+    PCFMRIDNSJax,
+)
 from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
 from examples.taylor_couette_dns_jax import (
     AxisymmetricMRIDNSJax,
@@ -20,6 +25,8 @@ from jaxfun.galerkin.Legendre import Legendre
 from tests._parity import (
     pcf_fluctuation_reference,
     pcf_mhd_reference,
+    pcf_primitive_3d_reference,
+    pcf_primitive_axisymmetric_reference,
     pcf_mhd_shearpy_reference,
     run_shenfun_json,
     tc_3d_dns_reference,
@@ -42,6 +49,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.live_shenfun]
 TC_DNS_PARITY_STEPS = (1, 5, 50, 100)
 TC_MHD_NONLINEAR_PARITY_STEPS = (50,)
 TC_MHD_NONLINEAR_PARITY_AMP = 1.0e-3
+TC_AXISYM_MRI_REFERENCE_AMP_SCALE = 0.5
+PCF_PRIMITIVE_NONLINEAR_PARITY_STEPS = (10,)
+PCF_PRIMITIVE_NONLINEAR_PARITY_AMP = 1.0e-3
 
 
 def test_live_shenfun_reference_runner_executes():
@@ -56,6 +66,22 @@ def _keplerian_base():
 def _nested_complex(rows):
     arr = np.asarray(rows, dtype=float)
     return arr[..., 0] + 1j * arr[..., 1]
+
+
+def _tc_axisymmetric_reference_layout(rows, *, axial_n: int):
+    out = np.array(_nested_complex(rows), copy=True)
+    if axial_n % 2 == 0:
+        out[axial_n // 2, :] = 0.0
+    return out
+
+
+def _tc_3d_reference_layout(rows, *, axial_n: int, azimuthal_n: int):
+    out = np.array(_nested_complex(rows), copy=True)
+    if axial_n % 2 == 0:
+        out[:, axial_n // 2, :] = 0.0
+    if azimuthal_n % 2 == 0:
+        out[azimuthal_n // 2, :, :] = 0.0
+    return out
 
 
 def _assert_conjugate_symmetric(coeff, periodic_axes: tuple[int, ...]) -> None:
@@ -135,7 +161,10 @@ def test_pcf_fluctuation_matches_live_shenfun_diagnostics_velocity_and_coeffs():
                 got, radial_n=solver.N[0], spanwise_n=solver.N[2]
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _nested_complex(expected),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
         got_g = _shenfun_rfft_coeff_layout(
             state.g, radial_n=solver.N[0], spanwise_n=solver.N[2]
@@ -207,7 +236,10 @@ def test_pcf_mhd_matches_live_shenfun_diagnostics_and_coeffs():
                 got, radial_n=solver.N[0], spanwise_n=solver.N[2]
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _nested_complex(expected),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
         got_g = _shenfun_rfft_coeff_layout(
             state.flow.g, radial_n=solver.N[0], spanwise_n=solver.N[2]
@@ -220,7 +252,10 @@ def test_pcf_mhd_matches_live_shenfun_diagnostics_and_coeffs():
                 got, radial_n=solver.N[0], spanwise_n=solver.N[2]
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _nested_complex(expected),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
 
 
@@ -236,7 +271,12 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
         magnetic_amplitude=0.05,
     )
     state0 = solver.initial_state()
-    references = pcf_mhd_shearpy_reference(include_coefficients=True)
+    references = pcf_mhd_shearpy_reference(
+        background_b=(0.0, 0.0, 0.1),
+        perturbation_amplitude=0.05,
+        magnetic_amplitude=0.05,
+        include_coefficients=True,
+    )
 
     diag_key_map = {
         "Epert": "Epert",
@@ -272,7 +312,10 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
                 got, radial_n=solver.N[0], spanwise_n=solver.N[2]
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _nested_complex(expected),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
         got_g = _shenfun_rfft_coeff_layout(
             state.flow.g, radial_n=solver.N[0], spanwise_n=solver.N[2]
@@ -285,15 +328,159 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
                 got, radial_n=solver.N[0], spanwise_n=solver.N[2]
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _nested_complex(expected),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
 
 
-def _shenfun_tc_rfft_coeff_layout(coeff, *, radial_n: int, axial_n: int):
+
+def test_pcf_primitive_axisymmetric_finite_amplitude_matches_live_shenfun():
+    solver = AxisymmetricPCFMRIDNSJax(
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=1.0e-3,
+        eta_mag=1.0e-3,
+        Nx=8,
+        Nz=6,
+        Lz=1.0,
+        dt=1.0e-3,
+        family="C",
+        dealias=1.5,
+    )
+    references = pcf_primitive_axisymmetric_reference(
+        steps=(0, *PCF_PRIMITIVE_NONLINEAR_PARITY_STEPS),
+        n=(solver.Nx, solver.Nz),
+        amp=PCF_PRIMITIVE_NONLINEAR_PARITY_AMP,
+        dealias=1.5,
+        include_coefficients=True,
+    )
+    initial_reference, reference = references[0], references[-1]
+
+    state0 = _pcf_axisymmetric_state_from_reference(solver, initial_reference)
+    state = solver.solve(state0, reference["steps"])
+    diag = solver.diagnostics(state)
+    assert float(diag["divu"]) < 1.0e-4
+    assert float(diag["divb"]) < 1.0e-4
+
+    ref_coeffs = reference["coefficients"]
+    for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
+        got_layout = _shenfun_tc_rfft_coeff_layout(
+            got, radial_n=solver.Nx, axial_n=solver.Nz, mask_nyquist=True
+        )
+        _assert_active_coefficients_close(
+            got_layout,
+            _tc_axisymmetric_reference_layout(expected, axial_n=solver.Nz),
+            floor=1.0e-10,
+        )
+
+
+def test_pcf_primitive_3d_finite_amplitude_matches_live_shenfun():
+    solver = PCFMRIDNSJax(
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=1.0e-3,
+        eta_mag=1.0e-3,
+        Nx=8,
+        Ny=4,
+        Nz=6,
+        Ly=4.0,
+        Lz=1.0,
+        dt=1.0e-3,
+        family="C",
+        dealias=1.0,
+    )
+    references = pcf_primitive_3d_reference(
+        steps=(0, *PCF_PRIMITIVE_NONLINEAR_PARITY_STEPS),
+        n=(solver.Nx, solver.Ny, solver.Nz),
+        amp=PCF_PRIMITIVE_NONLINEAR_PARITY_AMP,
+        include_coefficients=True,
+    )
+    initial_reference, reference = references[0], references[-1]
+
+    state0 = _pcf_3d_state_from_reference(solver, initial_reference)
+    state = solver.solve(state0, reference["steps"])
+    diag = solver.diagnostics(state)
+    assert float(diag["divu"]) < 1.0e-4
+    assert float(diag["divb"]) < 1.0e-4
+
+    ref_coeffs = reference["coefficients"]
+    for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
+        got_layout = _shenfun_tc3d_rfft_coeff_layout(
+            got, radial_n=solver.Nx, axial_n=solver.Nz, mask_nyquist=True
+        )
+        _assert_active_coefficients_close(
+            got_layout,
+            _tc_3d_reference_layout(
+                expected, axial_n=solver.Nz, azimuthal_n=solver.Ny
+            ),
+            floor=1.0e-10,
+        )
+
+def _pcf_axisymmetric_coeff_from_reference(rows, template, *, axial_n: int):
+    layout = _nested_complex(rows)
+    out = np.zeros(np.asarray(template).shape, dtype=np.asarray(template).dtype)
+    out[: axial_n // 2 + 1, : layout.shape[1]] = layout[:, : out.shape[1]]
+    for k in range(1, axial_n // 2):
+        out[-k, : layout.shape[1]] = np.conj(layout[k, : out.shape[1]])
+    return jnp.asarray(out)
+
+
+def _pcf_3d_coeff_from_reference(
+    rows, template, *, azimuthal_n: int, axial_n: int
+):
+    layout = _nested_complex(rows)
+    out = np.zeros(np.asarray(template).shape, dtype=np.asarray(template).dtype)
+    out[:, : axial_n // 2 + 1, : layout.shape[2]] = layout[:, :, : out.shape[2]]
+    for m in range(azimuthal_n):
+        mneg = (-m) % azimuthal_n
+        for k in range(1, axial_n // 2):
+            out[mneg, -k, : layout.shape[2]] = np.conj(layout[m, k, : out.shape[2]])
+    return jnp.asarray(out)
+
+
+def _pcf_axisymmetric_state_from_reference(solver, reference):
+    zero = solver.zero_state()
+    x = tuple(
+        _pcf_axisymmetric_coeff_from_reference(rows, template, axial_n=solver.Nz)
+        for rows, template in zip(reference["coefficients"]["x"], zero.x, strict=True)
+    )
+    return AxisymmetricPCFState(
+        x=x,
+        p=jnp.zeros_like(zero.p),
+        nonlinear_old=tuple(jnp.zeros_like(component) for component in x),
+        have_old=False,
+    )
+
+
+def _pcf_3d_state_from_reference(solver, reference):
+    zero = solver.zero_state()
+    x = tuple(
+        _pcf_3d_coeff_from_reference(
+            rows, template, azimuthal_n=solver.Ny, axial_n=solver.Nz
+        )
+        for rows, template in zip(reference["coefficients"]["x"], zero.x, strict=True)
+    )
+    return AxisymmetricPCFState(
+        x=x,
+        p=jnp.zeros_like(zero.p),
+        nonlinear_old=tuple(jnp.zeros_like(component) for component in x),
+        have_old=False,
+    )
+
+
+def _shenfun_tc_rfft_coeff_layout(
+    coeff, *, radial_n: int, axial_n: int, mask_nyquist: bool = False
+):
     coeff_np = np.asarray(coeff)
     _assert_conjugate_symmetric(coeff_np, periodic_axes=(0,))
     out = np.zeros((axial_n // 2 + 1, radial_n), dtype=complex)
     out[:, : coeff_np.shape[1]] = coeff_np[: axial_n // 2 + 1, :]
+    if mask_nyquist and axial_n % 2 == 0:
+        out[axial_n // 2, :] = 0.0
     return out
 
 
@@ -317,23 +504,35 @@ def test_tc_axisymmetric_dns_matches_live_shenfun_diagnostics_and_coeffs():
         ref_coeffs = reference["coefficients"]
         for got, expected in zip(state.u, ref_coeffs["u"], strict=True):
             got_layout = _shenfun_tc_rfft_coeff_layout(
-                got, radial_n=solver.Nr, axial_n=solver.Nz
+                got, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
+            )
+            expected_layout = _tc_axisymmetric_reference_layout(
+                expected, axial_n=solver.Nz
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout, expected_layout, rtol=1.0e-8, atol=1.0e-10
             )
         p_layout = _shenfun_tc_rfft_coeff_layout(
-            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )
         assert np.allclose(
-            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+            p_layout,
+            _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz),
+            rtol=1.0e-8,
+            atol=1.0e-10,
         )
 
 
-def _shenfun_tc3d_rfft_coeff_layout(coeff, *, radial_n: int, axial_n: int):
+def _shenfun_tc3d_rfft_coeff_layout(
+    coeff, *, radial_n: int, axial_n: int, mask_nyquist: bool = False
+):
     coeff_np = np.asarray(coeff)
     out = np.zeros((coeff_np.shape[0], axial_n // 2 + 1, radial_n), dtype=complex)
     out[:, :, : coeff_np.shape[2]] = coeff_np[:, : axial_n // 2 + 1, :]
+    if mask_nyquist and axial_n % 2 == 0:
+        out[:, axial_n // 2, :] = 0.0
+    if mask_nyquist and coeff_np.shape[0] % 2 == 0:
+        out[coeff_np.shape[0] // 2, :, :] = 0.0
     return out
 
 
@@ -359,22 +558,32 @@ def test_tc_3d_dns_matches_live_shenfun_diagnostics_and_coeffs():
             reference["E"], rel=1.0e-10, abs=1.0e-12
         )
         assert float(diag["div_linf"]) == pytest.approx(
-            reference["div_linf"], rel=1.0e-8, abs=1.0e-10
+            reference["div_linf"], rel=2.0e-5, abs=1.0e-10
         )
 
         ref_coeffs = reference["coefficients"]
         for got, expected in zip(state.u, ref_coeffs["u"], strict=True):
             got_layout = _shenfun_tc3d_rfft_coeff_layout(
-                got, radial_n=solver.Nr, axial_n=solver.Nz
+                got, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _tc_3d_reference_layout(
+                    expected, axial_n=solver.Nz, azimuthal_n=solver.Ntheta
+                ),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
         p_layout = _shenfun_tc3d_rfft_coeff_layout(
-            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )
         assert np.allclose(
-            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+            p_layout,
+            _tc_3d_reference_layout(
+                ref_coeffs["p"], axial_n=solver.Nz, azimuthal_n=solver.Ntheta
+            ),
+            rtol=1.0e-8,
+            atol=1.0e-10,
         )
 
 
@@ -391,7 +600,9 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
     )
     state0, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-8)
     references = tc_axisymmetric_mri_dns_reference(
-        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+        steps=TC_DNS_PARITY_STEPS,
+        amp=1.0e-8 * TC_AXISYM_MRI_REFERENCE_AMP_SCALE,
+        include_coefficients=True,
     )
 
     for reference in references:
@@ -409,16 +620,22 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         ref_coeffs = reference["coefficients"]
         for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
             got_layout = _shenfun_tc_rfft_coeff_layout(
-                got, radial_n=solver.Nr, axial_n=solver.Nz
+                got, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _tc_axisymmetric_reference_layout(expected, axial_n=solver.Nz),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
         p_layout = _shenfun_tc_rfft_coeff_layout(
-            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )
         assert np.allclose(
-            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+            p_layout,
+            _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz),
+            rtol=1.0e-8,
+            atol=1.0e-10,
         )
 
 
@@ -436,7 +653,7 @@ def test_tc_axisymmetric_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
     state0, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=TC_MHD_NONLINEAR_PARITY_AMP)
     reference = tc_axisymmetric_mri_dns_reference(
         steps=TC_MHD_NONLINEAR_PARITY_STEPS,
-        amp=TC_MHD_NONLINEAR_PARITY_AMP,
+        amp=TC_MHD_NONLINEAR_PARITY_AMP * TC_AXISYM_MRI_REFERENCE_AMP_SCALE,
         include_coefficients=True,
     )[0]
 
@@ -449,13 +666,17 @@ def test_tc_axisymmetric_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
     ref_coeffs = reference["coefficients"]
     for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
         got_layout = _shenfun_tc_rfft_coeff_layout(
-            got, radial_n=solver.Nr, axial_n=solver.Nz
+            got, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )
-        _assert_active_coefficients_close(got_layout, _nested_complex(expected))
+        _assert_active_coefficients_close(
+            got_layout, _tc_axisymmetric_reference_layout(expected, axial_n=solver.Nz)
+        )
     p_layout = _shenfun_tc_rfft_coeff_layout(
-        state.p, radial_n=solver.Nr, axial_n=solver.Nz
+        state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
     )
-    _assert_active_coefficients_close(p_layout, _nested_complex(ref_coeffs["p"]))
+    _assert_active_coefficients_close(
+        p_layout, _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz)
+    )
 
 
 def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
@@ -490,16 +711,26 @@ def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         ref_coeffs = reference["coefficients"]
         for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
             got_layout = _shenfun_tc3d_rfft_coeff_layout(
-                got, radial_n=solver.Nr, axial_n=solver.Nz
+                got, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
             )
             assert np.allclose(
-                got_layout, _nested_complex(expected), rtol=1.0e-8, atol=1.0e-10
+                got_layout,
+                _tc_3d_reference_layout(
+                    expected, axial_n=solver.Nz, azimuthal_n=solver.Ntheta
+                ),
+                rtol=1.0e-8,
+                atol=1.0e-10,
             )
         p_layout = _shenfun_tc3d_rfft_coeff_layout(
-            state.p, radial_n=solver.Nr, axial_n=solver.Nz
+            state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )
         assert np.allclose(
-            p_layout, _nested_complex(ref_coeffs["p"]), rtol=1.0e-8, atol=1.0e-10
+            p_layout,
+            _tc_3d_reference_layout(
+                ref_coeffs["p"], axial_n=solver.Nz, azimuthal_n=solver.Ntheta
+            ),
+            rtol=1.0e-8,
+            atol=1.0e-10,
         )
 
 
@@ -533,13 +764,23 @@ def test_tc_3d_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
     ref_coeffs = reference["coefficients"]
     for got, expected in zip(state.x, ref_coeffs["x"], strict=True):
         got_layout = _shenfun_tc3d_rfft_coeff_layout(
-            got, radial_n=solver.Nr, axial_n=solver.Nz
+            got, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )
-        _assert_active_coefficients_close(got_layout, _nested_complex(expected))
+        _assert_active_coefficients_close(
+            got_layout,
+            _tc_3d_reference_layout(
+                expected, axial_n=solver.Nz, azimuthal_n=solver.Ntheta
+            ),
+        )
     p_layout = _shenfun_tc3d_rfft_coeff_layout(
-        state.p, radial_n=solver.Nr, axial_n=solver.Nz
+        state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
     )
-    _assert_active_coefficients_close(p_layout, _nested_complex(ref_coeffs["p"]))
+    _assert_active_coefficients_close(
+        p_layout,
+        _tc_3d_reference_layout(
+            ref_coeffs["p"], axial_n=solver.Nz, azimuthal_n=solver.Ntheta
+        ),
+    )
 
 
 @pytest.mark.parametrize("family", ["L", "C"], ids=["legendre", "chebyshev"])

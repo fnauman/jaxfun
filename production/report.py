@@ -292,6 +292,12 @@ def _parse_skip_arg(value: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs-root", default="runs")
+    parser.add_argument(
+        "--metadata",
+        action="append",
+        default=[],
+        help="Exact metadata.json path to include; repeat to avoid stale runs.",
+    )
     parser.add_argument("--out", default="runs/_report")
     parser.add_argument("--print", dest="print_path")
     parser.add_argument(
@@ -308,9 +314,10 @@ def main(argv: list[str] | None = None) -> int:
         print(Path(args.print_path).read_text(encoding="utf-8"), end="")
         return 0
 
-    write_report(
-        find_metadata_files(args.runs_root), args.out, skipped_records=args.skip
-    )
+    metadata_paths = [Path(path) for path in args.metadata]
+    if not metadata_paths:
+        metadata_paths = find_metadata_files(args.runs_root)
+    write_report(metadata_paths, args.out, skipped_records=args.skip)
     return 0
 
 

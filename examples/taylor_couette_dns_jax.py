@@ -95,7 +95,12 @@ class AxisymmetricTCState:
     have_old: bool | Array = False
 
     def tree_flatten(self):
-        return (self.u, self.p, self.nonlinear_old, jnp.asarray(self.have_old)), None
+        return (
+            self.u,
+            self.p,
+            self.nonlinear_old,
+            jnp.asarray(self.have_old, dtype=jnp.float32),
+        ), None
 
     @classmethod
     def tree_unflatten(cls, _aux_data, children):
@@ -117,7 +122,12 @@ class AxisymmetricMRIState:
     have_old: bool | Array = False
 
     def tree_flatten(self):
-        return (self.x, self.p, self.nonlinear_old, jnp.asarray(self.have_old)), None
+        return (
+            self.x,
+            self.p,
+            self.nonlinear_old,
+            jnp.asarray(self.have_old, dtype=jnp.float32),
+        ), None
 
     @classmethod
     def tree_unflatten(cls, _aux_data, children):
@@ -487,7 +497,8 @@ class AxisymmetricTCDNSJax:
         )
 
     def solve(self, state: AxisymmetricTCState, steps: int) -> AxisymmetricTCState:
-        return scan_steps(self.step, state, steps)
+        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
+        return scan_steps(step, state, int(steps))
 
     def solve_with_cadence(
         self,
@@ -500,6 +511,8 @@ class AxisymmetricTCDNSJax:
         on_snapshot=None,
         on_checkpoint=None,
         should_stop=None,
+        t0: float = 0.0,
+        tstep0: int = 0,
     ) -> AxisymmetricTCState:
         return run_with_cadence(
             self.solve,
@@ -513,6 +526,8 @@ class AxisymmetricTCDNSJax:
             on_snapshot=on_snapshot,
             on_checkpoint=on_checkpoint,
             should_stop=should_stop,
+            t0=t0,
+            tstep0=tstep0,
         )
 
     def velocity_physical(self, state: AxisymmetricTCState) -> Velocity:
@@ -1142,7 +1157,8 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         return AxisymmetricMRIState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
 
     def solve(self, state: AxisymmetricMRIState, steps: int) -> AxisymmetricMRIState:
-        return scan_steps(self.step, state, steps)
+        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
+        return scan_steps(step, state, int(steps))
 
     def seed_linear_eigenmode(
         self, kz_mode: int = 1, amp: float = 1.0e-6, which: int = 0

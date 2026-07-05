@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from typing import Any
 
+import jax.numpy as jnp
 import numpy as np
 
 from . import observables
@@ -14,6 +16,109 @@ from .checkpoint import write_production_checkpoint
 
 class ProductionOracleNotImplementedError(NotImplementedError):
     """Raised when a spec has no wired jaxfun production execution path yet."""
+
+
+def load_resume_checkpoint(run_dir: str | Path):
+    """Read the latest production checkpoint from a run directory or HDF5 file."""
+    from jaxfun.io import read_checkpoint
+
+    path = Path(run_dir)
+    checkpoint_path = path if path.suffix == ".h5" else path / "checkpoints" / "checkpoints.h5"
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"resume checkpoint not found at {checkpoint_path}")
+    return read_checkpoint(checkpoint_path)
+
+
+def validate_resume_checkpoint(
+    record: Any, spec: dict[str, Any], device_record: dict[str, Any] | None = None
+) -> None:
+    """Validate checkpoint metadata against the run being resumed."""
+    attrs = record.attrs
+    if str(attrs.get("spec_hash")) != str(spec["spec_hash"]):
+        raise ValueError("resume checkpoint spec_hash does not match requested spec")
+    dtype_json = attrs.get("dtype_metadata_json", "{}")
+    if isinstance(dtype_json, bytes):
+        dtype_json = dtype_json.decode()
+    dtype_metadata = json.loads(dtype_json or "{}")
+    expected_dtype = dtype_metadata.get("production_run_dtype")
+    active_dtype = None if device_record is None else device_record.get("production_run_dtype")
+    if active_dtype is not None and expected_dtype is not None and active_dtype != expected_dtype:
+        raise ValueError(
+            "resume checkpoint production dtype "
+            f"{expected_dtype!r} does not match active dtype {active_dtype!r}"
+        )
+
+
+def _resume_or_initial_state(
+    resume_checkpoint: Any | None,
+    initial_state: Any,
+    *,
+    spec: dict[str, Any],
+    state_kind: str,
+) -> tuple[Any, int, float]:
+    if resume_checkpoint is None:
+        return initial_state, 0, 0.0
+    validate_resume_checkpoint(resume_checkpoint, spec)
+    checkpoint_kind = str(resume_checkpoint.attrs.get("state_kind"))
+    if checkpoint_kind != state_kind:
+        raise ValueError(
+            f"resume checkpoint state_kind {checkpoint_kind!r} does not match "
+            f"expected {state_kind!r}"
+        )
+    payload = resume_checkpoint.fields.get("state")
+    if not isinstance(payload, dict):
+        raise ValueError("resume checkpoint is missing state payload")
+    return (
+        _state_from_checkpoint_payload(payload, state_kind=state_kind),
+        int(resume_checkpoint.tstep),
+        float(resume_checkpoint.t),
+    )
+
+
+def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) -> Any:
+    if state_kind == "pcf_fluctuation_saturation":
+        from examples.channelflow_kmm import KMMState
+
+        return KMMState(u=tuple(payload["u"]), g=payload["g"])
+    if state_kind in {"axisymmetric_tc_hydro", "axisymmetric_tc_hydro_saturation"}:
+        from examples.taylor_couette_dns_jax import AxisymmetricTCState
+
+        return AxisymmetricTCState(
+            u=tuple(payload["u"]),
+            p=payload["p"],
+            nonlinear_old=tuple(payload["nonlinear_old"]),
+            have_old=payload["have_old"],
+        )
+    if state_kind in {"axisymmetric_tc_mhd", "axisymmetric_tc_mhd_saturation"}:
+        from examples.taylor_couette_dns_jax import AxisymmetricMRIState
+
+        return AxisymmetricMRIState(
+            x=tuple(payload["x"]),
+            p=payload["p"],
+            nonlinear_old=tuple(payload["nonlinear_old"]),
+            have_old=payload["have_old"],
+        )
+    if state_kind in {"axisymmetric_pcf_primitive", "pcf_primitive_mhd_saturation"}:
+        from examples.pcf_mri_primitive_jax import AxisymmetricPCFState
+
+        return AxisymmetricPCFState(
+            x=tuple(payload["x"]),
+            p=payload["p"],
+            nonlinear_old=tuple(payload["nonlinear_old"]),
+            have_old=payload["have_old"],
+        )
+    raise ValueError(f"unsupported resume state_kind {state_kind!r}")
+
+
+def _remaining_steps_from_resume(
+    spec: dict[str, Any], *, steps: int | None, tstep0: int
+) -> tuple[int, int]:
+    target = _steps_from_spec(spec, steps=steps)
+    if int(tstep0) > target:
+        raise ValueError(
+            f"resume checkpoint step {int(tstep0)} is beyond target step {target}"
+        )
+    return target, target - int(tstep0)
 
 
 def _saturation_passed(
@@ -41,7 +146,10 @@ def run_supported_spec(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     """Run a supported production spec and return canonical diagnostics."""
 
@@ -55,7 +163,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -67,7 +178,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -79,7 +193,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -91,7 +208,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["geometry"] == "pcf"
@@ -103,7 +223,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["geometry"] == "pcf"
@@ -115,7 +238,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["problem_id"] == "pcf_fluct_re400"
@@ -128,7 +254,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["problem_id"] == "pcf_mhd_divfree"
@@ -141,7 +270,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["problem_id"] == "exp_pcf_mri_shearbox_growth"
@@ -154,7 +286,10 @@ def run_supported_spec(
             steps=steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
             device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
         )
     if (
         spec["geometry"] == "pipe"
@@ -436,7 +571,10 @@ def _run_taylor_couette_hydro_saturation(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
 
@@ -463,7 +601,27 @@ def _run_taylor_couette_hydro_saturation(
         amp=float(spec["initial_condition"].get("amplitude", 1.0e-4)),
     )
     initial = solver.diagnostics(state)
-    n_steps = _steps_from_spec(spec, steps=steps)
+    diagnostic_rows: list[dict[str, Any]] = []
+
+    def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
+        diagnostic_rows.append(
+            {
+                "t": float(t),
+                "kinetic_energy": float(diag["E"]),
+                "divergence_l2": float(diag.get("continuity_l2", diag["div_linf"])),
+                "divergence_linf": float(diag["div_linf"]),
+            }
+        )
+
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint,
+        state,
+        spec=spec,
+        state_kind="axisymmetric_tc_hydro_saturation",
+    )
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -471,12 +629,18 @@ def _run_taylor_couette_hydro_saturation(
         spec=spec,
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
         state_kind="axisymmetric_tc_hydro_saturation",
         device_record=device_record,
+        t0=t0,
+        tstep0=tstep0,
     )
     final = solver.diagnostics(out)
-    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
-    elapsed = n_steps * float(spec["time"]["dt"])
+    growth_rate = _growth_rate_from_energy(
+        initial["E"], final["E"], target_steps, solver.dt
+    )
+    elapsed = target_steps * float(spec["time"]["dt"])
     energy_growth = (
         float(final["E"] / initial["E"]) if float(initial["E"]) > 0.0 else 0.0
     )
@@ -502,26 +666,25 @@ def _run_taylor_couette_hydro_saturation(
             ),
         ),
     }
-    return {
-        "scalars": scalars,
-        "time_series": [
-            {
-                "t": 0.0,
-                "kinetic_energy": float(initial["E"]),
-                "growth_rate_linear": float(eigenvalue.real),
-                "divergence_l2": float(initial["continuity_l2"]),
-                "radial_velocity_linf": _radial_velocity_linf(solver, state),
-            },
-            {
-                "t": elapsed,
-                "kinetic_energy": float(final["E"]),
-                "growth_rate": float(growth_rate),
-                "divergence_l2": float(final["continuity_l2"]),
-                "radial_velocity_linf": float(radial_velocity_linf),
-                "torque": float(torque),
-            },
-        ],
+    first = {
+        "t": 0.0,
+        "kinetic_energy": float(initial["E"]),
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_l2": float(initial["continuity_l2"]),
+        "radial_velocity_linf": _radial_velocity_linf(solver, state),
     }
+    last = {
+        "t": elapsed,
+        "kinetic_energy": float(final["E"]),
+        "growth_rate": float(growth_rate),
+        "divergence_l2": float(final["continuity_l2"]),
+        "divergence_linf": float(final["div_linf"]),
+        "radial_velocity_linf": float(radial_velocity_linf),
+        "torque": float(torque),
+    }
+    series = _dedupe_time_rows([first, *diagnostic_rows, last])
+    scalars.update(_stationarity_scalars(series, key="kinetic_energy"))
+    return {"scalars": scalars, "time_series": series}
 
 
 def _run_taylor_couette_hydro_dns(
@@ -530,7 +693,10 @@ def _run_taylor_couette_hydro_dns(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
 
@@ -557,7 +723,12 @@ def _run_taylor_couette_hydro_dns(
         amp=float(spec["initial_condition"].get("amplitude", 1.0e-6)),
     )
     initial = solver.diagnostics(state)
-    n_steps = _steps_from_spec(spec, steps=steps)
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint, state, spec=spec, state_kind="axisymmetric_tc_hydro"
+    )
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -565,12 +736,18 @@ def _run_taylor_couette_hydro_dns(
         spec=spec,
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
         state_kind="axisymmetric_tc_hydro",
         device_record=device_record,
+        t0=t0,
+        tstep0=tstep0,
     )
     final = solver.diagnostics(out)
-    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
-    elapsed = n_steps * float(spec["time"]["dt"])
+    growth_rate = _growth_rate_from_energy(
+        initial["E"], final["E"], target_steps, solver.dt
+    )
+    elapsed = target_steps * float(spec["time"]["dt"])
     scalars = {
         "kinetic_energy": float(final["E"]),
         "growth_rate": float(growth_rate),
@@ -601,7 +778,10 @@ def _run_pcf_primitive_dns(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
 
@@ -629,7 +809,15 @@ def _run_pcf_primitive_dns(
         amp=float(spec["initial_condition"].get("amplitude", 1.0e-7)),
     )
     initial = solver.diagnostics(state)
-    n_steps = _steps_from_spec(spec, steps=steps)
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint,
+        state,
+        spec=spec,
+        state_kind="axisymmetric_pcf_primitive",
+    )
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -637,12 +825,18 @@ def _run_pcf_primitive_dns(
         spec=spec,
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
         state_kind="axisymmetric_pcf_primitive",
         device_record=device_record,
+        t0=t0,
+        tstep0=tstep0,
     )
     final = solver.diagnostics(out)
-    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
-    elapsed = n_steps * float(spec["time"]["dt"])
+    growth_rate = _growth_rate_from_energy(
+        initial["E"], final["E"], target_steps, solver.dt
+    )
+    elapsed = target_steps * float(spec["time"]["dt"])
     scalars = {
         "kinetic_energy": float(final["Ekin"]),
         "magnetic_energy": float(final["Emag"]),
@@ -679,7 +873,10 @@ def _run_pcf_fluctuation_saturation(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 
@@ -706,7 +903,28 @@ def _run_pcf_fluctuation_saturation(
     )
     state = solver.initial_state()
     initial = _pcf_fluctuation_scalars(solver, state)
-    n_steps = _steps_from_spec(spec, steps=steps)
+    diagnostic_rows: list[dict[str, Any]] = []
+
+    def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
+        diagnostic_rows.append(
+            {
+                "t": float(t),
+                "kinetic_energy": float(diag["Epert"]),
+                "total_kinetic_energy": float(diag["Etot"]),
+                "divergence_l2": float(diag["divL2"]),
+                "mean_shear": float(diag["mean_shear"]),
+            }
+        )
+
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint,
+        state,
+        spec=spec,
+        state_kind="pcf_fluctuation_saturation",
+    )
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -714,14 +932,21 @@ def _run_pcf_fluctuation_saturation(
         spec=spec,
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
         state_kind="pcf_fluctuation_saturation",
         device_record=device_record,
+        t0=t0,
+        tstep0=tstep0,
     )
     final = _pcf_fluctuation_scalars(solver, out)
     growth_rate = _growth_rate_from_energy(
-        initial["kinetic_energy"], final["kinetic_energy"], n_steps, solver.dt
+        initial["kinetic_energy"],
+        final["kinetic_energy"],
+        target_steps,
+        solver.dt,
     )
-    elapsed = n_steps * float(spec["time"]["dt"])
+    elapsed = target_steps * float(spec["time"]["dt"])
     energy_growth = (
         final["kinetic_energy"] / initial["kinetic_energy"]
         if initial["kinetic_energy"] > 0.0
@@ -764,7 +989,9 @@ def _run_pcf_fluctuation_saturation(
         "streak_rms": final["streak_rms"],
         "roll_rms": final["roll_rms"],
     }
-    return {"scalars": scalars, "time_series": [first, last]}
+    series = _dedupe_time_rows([first, *diagnostic_rows, last])
+    scalars.update(_stationarity_scalars(series, key="kinetic_energy"))
+    return {"scalars": scalars, "time_series": series}
 
 
 def _run_pcf_primitive_mhd_saturation(
@@ -773,7 +1000,10 @@ def _run_pcf_primitive_mhd_saturation(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
 
@@ -807,7 +1037,29 @@ def _run_pcf_primitive_mhd_saturation(
         state, eigenvalue = _pcf_mhd_perturbation_state(solver, spec)
 
     initial = _pcf_primitive_3d_scalars(solver, state)
-    n_steps = _steps_from_spec(spec, steps=steps)
+    diagnostic_rows: list[dict[str, Any]] = []
+
+    def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
+        diagnostic_rows.append(
+            {
+                "t": float(t),
+                "kinetic_energy": float(diag["Ekin"]),
+                "magnetic_energy": float(diag["Emag"]),
+                "total_energy": float(diag["E"]),
+                "divergence_u_l2": float(diag["divu"]),
+                "divergence_b_l2": float(diag["divb"]),
+            }
+        )
+
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint,
+        state,
+        spec=spec,
+        state_kind="pcf_primitive_mhd_saturation",
+    )
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -815,14 +1067,18 @@ def _run_pcf_primitive_mhd_saturation(
         spec=spec,
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
         state_kind="pcf_primitive_mhd_saturation",
         device_record=device_record,
+        t0=t0,
+        tstep0=tstep0,
     )
     final = _pcf_primitive_3d_scalars(solver, out)
     growth_rate = _growth_rate_from_energy(
-        initial["total_energy"], final["total_energy"], n_steps, solver.dt
+        initial["total_energy"], final["total_energy"], target_steps, solver.dt
     )
-    elapsed = n_steps * float(spec["time"]["dt"])
+    elapsed = target_steps * float(spec["time"]["dt"])
     magnetic_growth = (
         final["magnetic_energy"] / initial["magnetic_energy"]
         if initial["magnetic_energy"] > 0.0
@@ -875,7 +1131,9 @@ def _run_pcf_primitive_mhd_saturation(
         "transport_alpha": final["transport_alpha"],
         "butterfly_by_mean": final["butterfly_by_mean"],
     }
-    return {"scalars": scalars, "time_series": [first, last]}
+    series = _dedupe_time_rows([first, *diagnostic_rows, last])
+    scalars.update(_stationarity_scalars(series, key="total_energy"))
+    return {"scalars": scalars, "time_series": series}
 
 
 def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:
@@ -890,7 +1148,7 @@ def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:
     ky = float(mode.get("streamwise_wavenumber", 1.0))
     kz = float(mode.get("spanwise_wavenumber", 1.0))
     by = float(groups.get("By", 0.0))
-    bz = float(groups.get("Bz", 0.1))
+    bz = float(groups.get("Bz", 0.025))
     magnetic_bc = _magnetic_bc(spec)
     if spec["physics"] == "mri":
         shear = float(groups.get("S", 1.0))
@@ -1068,7 +1326,10 @@ def _run_taylor_couette_mhd_saturation(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
 
@@ -1102,7 +1363,29 @@ def _run_taylor_couette_mhd_saturation(
         amp=float(spec["initial_condition"].get("amplitude", 1.0e-4)),
     )
     initial = solver.diagnostics(state)
-    n_steps = _steps_from_spec(spec, steps=steps)
+    diagnostic_rows: list[dict[str, Any]] = []
+
+    def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
+        diagnostic_rows.append(
+            {
+                "t": float(t),
+                "kinetic_energy": float(diag["Ekin"]),
+                "magnetic_energy": float(diag["Emag"]),
+                "divergence_u": float(diag["divu"]),
+                "divergence_b": float(diag["divb"]),
+                "divergence_b_l2": float(diag["divb"]),
+            }
+        )
+
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint,
+        state,
+        spec=spec,
+        state_kind="axisymmetric_tc_mhd_saturation",
+    )
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -1110,12 +1393,18 @@ def _run_taylor_couette_mhd_saturation(
         spec=spec,
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
         state_kind="axisymmetric_tc_mhd_saturation",
         device_record=device_record,
+        t0=t0,
+        tstep0=tstep0,
     )
     final = solver.diagnostics(out)
-    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
-    elapsed = n_steps * float(spec["time"]["dt"])
+    growth_rate = _growth_rate_from_energy(
+        initial["E"], final["E"], target_steps, solver.dt
+    )
+    elapsed = target_steps * float(spec["time"]["dt"])
     magnetic_growth = (
         float(final["Emag"] / initial["Emag"]) if float(initial["Emag"]) > 0.0 else 0.0
     )
@@ -1143,27 +1432,25 @@ def _run_taylor_couette_mhd_saturation(
         ),
         "magnetic_bc": magnetic_bc,
     }
-    return {
-        "scalars": scalars,
-        "time_series": [
-            {
-                "t": 0.0,
-                "kinetic_energy": float(initial["Ekin"]),
-                "magnetic_energy": float(initial["Emag"]),
-                "growth_rate_linear": float(eigenvalue.real),
-                "divergence_b_l2": float(initial["divb"]),
-            },
-            {
-                "t": elapsed,
-                "kinetic_energy": float(final["Ekin"]),
-                "magnetic_energy": float(final["Emag"]),
-                "growth_rate": float(growth_rate),
-                "divergence_b_l2": float(final["divb"]),
-                "maxwell_stress_xy": float(maxwell_stress),
-                "reynolds_stress": float(reynolds_stress),
-            },
-        ],
+    first = {
+        "t": 0.0,
+        "kinetic_energy": float(initial["Ekin"]),
+        "magnetic_energy": float(initial["Emag"]),
+        "growth_rate_linear": float(eigenvalue.real),
+        "divergence_b_l2": float(initial["divb"]),
     }
+    last = {
+        "t": elapsed,
+        "kinetic_energy": float(final["Ekin"]),
+        "magnetic_energy": float(final["Emag"]),
+        "growth_rate": float(growth_rate),
+        "divergence_b_l2": float(final["divb"]),
+        "maxwell_stress_xy": float(maxwell_stress),
+        "reynolds_stress": float(reynolds_stress),
+    }
+    series = _dedupe_time_rows([first, *diagnostic_rows, last])
+    scalars.update(_stationarity_scalars(series, key="magnetic_energy"))
+    return {"scalars": scalars, "time_series": series}
 
 
 def _run_taylor_couette_mhd_dns(
@@ -1172,7 +1459,10 @@ def _run_taylor_couette_mhd_dns(
     steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
 
@@ -1206,7 +1496,12 @@ def _run_taylor_couette_mhd_dns(
         amp=float(spec["initial_condition"].get("amplitude", 1.0e-7)),
     )
     initial = solver.diagnostics(state)
-    n_steps = _steps_from_spec(spec, steps=steps)
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint, state, spec=spec, state_kind="axisymmetric_tc_mhd"
+    )
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -1214,12 +1509,18 @@ def _run_taylor_couette_mhd_dns(
         spec=spec,
         out_dir=out_dir,
         checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
         state_kind="axisymmetric_tc_mhd",
         device_record=device_record,
+        t0=t0,
+        tstep0=tstep0,
     )
     final = solver.diagnostics(out)
-    growth_rate = _growth_rate_from_energy(initial["E"], final["E"], n_steps, solver.dt)
-    elapsed = n_steps * float(spec["time"]["dt"])
+    growth_rate = _growth_rate_from_energy(
+        initial["E"], final["E"], target_steps, solver.dt
+    )
+    elapsed = target_steps * float(spec["time"]["dt"])
     scalars = {
         "kinetic_energy": float(final["Ekin"]),
         "magnetic_energy": float(final["Emag"]),
@@ -1272,23 +1573,48 @@ def _solve_with_optional_checkpoints(
     spec: dict[str, Any],
     out_dir: str | Path | None,
     checkpoint_every: int | None,
+    snapshot_every: int | None,
+    diagnostics_every: int | None,
     state_kind: str,
     device_record: dict[str, Any] | None = None,
+    on_diagnostics_row: Any | None = None,
+    t0: float = 0.0,
+    tstep0: int = 0,
 ) -> Any:
-    if checkpoint_every is None:
-        return solver.solve(state, steps)
-    if checkpoint_every <= 0:
+    if checkpoint_every is not None and checkpoint_every <= 0:
         raise ValueError("checkpoint_every must be positive")
-    if out_dir is None:
-        raise ValueError("out_dir is required when checkpoint_every is set")
+    if snapshot_every is not None and snapshot_every <= 0:
+        raise ValueError("snapshot_every must be positive")
+    if diagnostics_every is not None and diagnostics_every <= 0:
+        raise ValueError("diagnostics_every must be positive")
+    if (checkpoint_every is not None or snapshot_every is not None) and out_dir is None:
+        raise ValueError("out_dir is required when checkpoint or snapshot output is set")
 
-    from jaxfun.io import Cadence
+    monitor_every = _monitor_every(
+        steps,
+        checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
+    )
+    if monitor_every is None and not (
+        checkpoint_every or snapshot_every or diagnostics_every
+    ):
+        return solver.solve(state, steps)
 
-    checkpoint_path = Path(out_dir) / "checkpoints" / "checkpoints.h5"
-    diagnostics_path = Path(out_dir) / "diagnostics.jsonl"
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    from jaxfun.io import Cadence, generate_xdmf, write_uniform_snapshot
+
+    out_path = None if out_dir is None else Path(out_dir)
+    checkpoint_path = None
+    diagnostics_path = None
+    snapshot_path = None
+    if out_path is not None:
+        checkpoint_path = out_path / "checkpoints" / "checkpoints.h5"
+        diagnostics_path = out_path / "diagnostics.jsonl"
+        snapshot_path = out_path / "snapshots" / "snapshots.h5"
 
     def on_checkpoint(t: float, tstep: int, checkpoint_state: Any) -> None:
+        assert checkpoint_path is not None
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         write_production_checkpoint(
             checkpoint_path,
             {"state": _checkpoint_payload(checkpoint_state)},
@@ -1300,16 +1626,240 @@ def _solve_with_optional_checkpoints(
             diagnostics_path=diagnostics_path,
         )
 
+    def on_snapshot(t: float, tstep: int, snapshot_state: Any) -> None:
+        assert snapshot_path is not None
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        write_uniform_snapshot(
+            snapshot_path,
+            _snapshot_payload(solver, snapshot_state),
+            t=t,
+            tstep=tstep,
+            attrs={
+                "problem_id": spec["problem_id"],
+                "spec_hash": spec["spec_hash"],
+                "state_kind": state_kind,
+            },
+        )
+
+    def on_diagnostics(t: float, tstep: int, diag: Any) -> None:
+        if on_diagnostics_row is not None:
+            on_diagnostics_row(t, tstep, diag)
+
+    def should_stop(t: float, tstep: int, candidate_state: Any) -> bool:
+        if not _tree_all_finite(candidate_state):
+            raise FloatingPointError(
+                f"nonfinite solver state at tstep={int(tstep)} t={float(t):g}"
+            )
+        _raise_on_divergence_drift(solver, candidate_state, t=t, tstep=tstep)
+        return False
+
+    cadence = Cadence(
+        diagnostics_every=diagnostics_every,
+        snapshot_every=snapshot_every,
+        checkpoint_every=checkpoint_every,
+    )
+    block_size = monitor_every or max(1, int(steps))
     out = solver.solve_with_cadence(
         state,
         steps,
-        Cadence(checkpoint_every=checkpoint_every),
-        block_size=max(1, int(checkpoint_every)),
-        on_checkpoint=on_checkpoint,
+        cadence,
+        block_size=block_size,
+        on_diagnostics=on_diagnostics
+        if diagnostics_every is not None and on_diagnostics_row is not None
+        else None,
+        on_snapshot=on_snapshot if snapshot_every is not None else None,
+        on_checkpoint=on_checkpoint if checkpoint_every is not None else None,
+        should_stop=should_stop,
+        t0=float(t0),
+        tstep0=int(tstep0),
     )
-    if steps == 0 or steps % int(checkpoint_every) != 0:
-        on_checkpoint(float(steps) * float(solver.dt), int(steps), out)
+    final_tstep = int(tstep0) + int(steps)
+    final_t = float(t0) + int(steps) * float(solver.dt)
+    if checkpoint_every is not None and (
+        steps == 0 or final_tstep % int(checkpoint_every) != 0
+    ):
+        on_checkpoint(final_t, final_tstep, out)
+    if snapshot_every is not None and (
+        steps == 0 or final_tstep % int(snapshot_every) != 0
+    ):
+        on_snapshot(final_t, final_tstep, out)
+    if snapshot_path is not None and snapshot_path.exists():
+        xdmf_path = generate_xdmf(snapshot_path)
+        _write_snapshot_manifest(
+            snapshot_path.with_name("manifest.json"),
+            snapshot_path=snapshot_path,
+            xdmf_path=xdmf_path,
+            spec=spec,
+            state_kind=state_kind,
+            snapshot_every=snapshot_every,
+            device_record=device_record,
+        )
     return out
+
+
+def _stationarity_scalars(
+    rows: list[dict[str, Any]],
+    *,
+    key: str,
+    tolerance: float = 5.0e-2,
+) -> dict[str, Any]:
+    values = [float(row[key]) for row in rows if key in row and math.isfinite(float(row[key]))]
+    samples = len(values)
+    if samples < 4:
+        return {
+            "stationarity_key": key,
+            "stationarity_window_samples": samples,
+            "stationarity_relative_tolerance": tolerance,
+            "stationarity_relative_change": None,
+            "stationarity_check_passed": None,
+        }
+    quarter = max(1, samples // 4)
+    previous = values[-2 * quarter : -quarter]
+    current = values[-quarter:]
+    previous_mean = float(np.mean(previous))
+    current_mean = float(np.mean(current))
+    denom = max(abs(previous_mean), abs(current_mean), 1.0e-300)
+    relative_change = abs(current_mean - previous_mean) / denom
+    return {
+        "stationarity_key": key,
+        "stationarity_window_samples": samples,
+        "stationarity_relative_tolerance": tolerance,
+        "stationarity_previous_mean": previous_mean,
+        "stationarity_current_mean": current_mean,
+        "stationarity_relative_change": float(relative_change),
+        "stationarity_check_passed": bool(relative_change <= tolerance),
+    }
+
+
+def _dedupe_time_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[float] = set()
+    for row in rows:
+        t = float(row.get("t", len(out)))
+        if t in seen:
+            out[-1] = row
+            continue
+        seen.add(t)
+        out.append(row)
+    return out
+
+
+def _monitor_every(
+    steps: int,
+    *,
+    checkpoint_every: int | None,
+    snapshot_every: int | None,
+    diagnostics_every: int | None,
+) -> int | None:
+    candidates = [
+        value
+        for value in (checkpoint_every, snapshot_every, diagnostics_every)
+        if value is not None and value > 0
+    ]
+    if candidates:
+        return min(int(value) for value in candidates)
+    if steps <= 0:
+        return 1
+    return min(100, max(1, int(steps)))
+
+
+_DIVERGENCE_GUARD_LIMIT = 1.0e-2
+
+
+def _raise_on_divergence_drift(
+    solver: Any, state: Any, *, t: float, tstep: int
+) -> None:
+    diagnostics = getattr(solver, "diagnostics", None)
+    if diagnostics is None:
+        return
+    diag = diagnostics(state)
+    offenders = []
+    for key, value in diag.items():
+        if not _is_divergence_key(str(key)):
+            continue
+        try:
+            magnitude = abs(float(value))
+        except (TypeError, ValueError):
+            offenders.append(f"{key}=non-numeric")
+            continue
+        if not math.isfinite(magnitude) or magnitude > _DIVERGENCE_GUARD_LIMIT:
+            offenders.append(f"{key}={magnitude:g}")
+    if offenders:
+        details = ", ".join(offenders)
+        raise FloatingPointError(
+            f"divergence guard failed at tstep={int(tstep)} t={float(t):g}: "
+            f"{details} > {_DIVERGENCE_GUARD_LIMIT:g}"
+        )
+
+
+def _is_divergence_key(key: str) -> bool:
+    name = key.rsplit(".", 1)[-1].lower()
+    return (
+        name.startswith("divergence")
+        or name.startswith("divu")
+        or name.startswith("divb")
+        or name.startswith("div")
+        or name.startswith("continuity")
+    )
+
+
+def _tree_all_finite(tree: Any) -> bool:
+    import jax
+
+    leaves = jax.tree_util.tree_leaves(tree)
+    if not leaves:
+        return True
+    checks = [jnp.all(jnp.isfinite(leaf)) for leaf in leaves if hasattr(leaf, "dtype")]
+    if not checks:
+        return True
+    return bool(jax.device_get(jnp.all(jnp.asarray(checks))))
+
+
+def _snapshot_payload(solver: Any, state: Any) -> dict[str, Any]:
+    def real_fields(names: tuple[str, ...], values: tuple[Any, ...]) -> dict[str, Any]:
+        return {name: jnp.real(value) for name, value in zip(names, values, strict=True)}
+
+    if hasattr(solver, "fields_physical"):
+        fields = tuple(solver.fields_physical(state))
+        if len(fields) >= 6:
+            return real_fields(
+                ("u_x", "u_y", "u_z", "b_x", "b_y", "b_z"), fields[:6]
+            )
+        if len(fields) >= 3:
+            return real_fields(("u_x", "u_y", "u_z"), fields[:3])
+    if hasattr(solver, "velocity_physical"):
+        u = tuple(solver.velocity_physical(state))
+        return real_fields(("u_x", "u_y", "u_z"), u[:3])
+    if hasattr(solver, "total_velocity_physical"):
+        u = tuple(solver.total_velocity_physical(state))
+        return real_fields(("u_x", "u_y", "u_z"), u[:3])
+    if hasattr(solver, "_backward_velocity") and hasattr(state, "u"):
+        u = tuple(solver._backward_velocity(state.u))
+        return real_fields(("u_x", "u_y", "u_z"), u[:3])
+    raise TypeError(f"solver {type(solver).__name__} does not expose snapshot fields")
+
+
+def _write_snapshot_manifest(
+    path: Path,
+    *,
+    snapshot_path: Path,
+    xdmf_path: Path,
+    spec: dict[str, Any],
+    state_kind: str,
+    snapshot_every: int | None,
+    device_record: dict[str, Any] | None,
+) -> None:
+    data = {
+        "schema_version": 1,
+        "problem_id": spec["problem_id"],
+        "spec_hash": spec["spec_hash"],
+        "state_kind": state_kind,
+        "snapshot_every": snapshot_every,
+        "snapshot_path": str(snapshot_path),
+        "xdmf_path": str(xdmf_path),
+        "device": device_record or {},
+    }
+    path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 def _checkpoint_payload(state: Any) -> dict[str, Any]:
@@ -1320,14 +1870,14 @@ def _checkpoint_payload(state: Any) -> dict[str, Any]:
             "u": state.u,
             "p": state.p,
             "nonlinear_old": state.nonlinear_old,
-            "have_old": state.have_old,
+            "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
         }
     if hasattr(state, "x"):
         return {
             "x": state.x,
             "p": state.p,
             "nonlinear_old": state.nonlinear_old,
-            "have_old": state.have_old,
+            "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
         }
     raise TypeError(f"unsupported checkpoint state type {type(state).__name__}")
 

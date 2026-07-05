@@ -43,22 +43,28 @@ def pytest_configure(config) -> None:
     import jax
 
     jax.config.update("jax_enable_x64", True)
+    if not hasattr(config, "workerinput"):
+        config._jaxfun_expected_x64 = bool(jax.config.read("jax_enable_x64"))
     n = config.getoption("--num-devices")
     if n > 1:
         jax.config.update("jax_num_cpu_devices", n)
     os.environ["PYTEST"] = "True"
 
 
+def _has_marker(item, name: str) -> bool:
+    return name in item.keywords or any(mark.name == name for mark in item.iter_markers())
+
+
 def _count_live_shenfun_items(items) -> int:
-    return sum(1 for item in items if "live_shenfun" in item.keywords)
+    return sum(1 for item in items if _has_marker(item, "live_shenfun"))
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items) -> None:
     n = config.getoption("--num-devices")
     if n > 1:
-        selected = [item for item in items if "spmd" in item.keywords]
-        deselected = [item for item in items if "spmd" not in item.keywords]
+        selected = [item for item in items if _has_marker(item, "spmd")]
+        deselected = [item for item in items if not _has_marker(item, "spmd")]
         config.hook.pytest_deselected(items=deselected)
         items[:] = selected
     selected_count = _count_live_shenfun_items(items)
@@ -69,7 +75,7 @@ def pytest_collection_modifyitems(config, items) -> None:
 
 
 def pytest_runtest_setup(item) -> None:
-    if "spmd" in item.keywords:
+    if _has_marker(item, "spmd"):
         import jax
 
         if jax.device_count() < 2:
@@ -88,6 +94,16 @@ def pytest_sessionfinish(session, exitstatus) -> None:
     config = session.config
     if hasattr(config, "workerinput"):
         return
+    if exitstatus == pytest.ExitCode.OK:
+        import jax
+
+        expected_x64 = getattr(config, "_jaxfun_expected_x64", None)
+        if expected_x64 is not None and bool(jax.config.read("jax_enable_x64")) != expected_x64:
+            reporter = config.pluginmanager.get_plugin("terminalreporter")
+            if reporter is not None:
+                reporter.write_line("jax_enable_x64 changed during the test session")
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+            return
     expected = int(getattr(config, "_jaxfun_live_shenfun_selected", 0))
     if expected == 0 or exitstatus != pytest.ExitCode.OK:
         return

@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -23,12 +24,14 @@ from examples.pcf_minimal_seed_jax import (
 def final_energy_objective(solver: Any, state: Any, *, steps: int) -> Array:
     """Return final perturbation/total energy after a static number of steps."""
 
+    _require_x64_enabled()
     return _state_energy(solver, _advance_state(solver, state, steps))
 
 
 def time_integrated_energy_objective(solver: Any, state: Any, *, steps: int) -> Array:
     """Return trapezoidal time integral of solver energy over ``steps``."""
 
+    _require_x64_enabled()
     steps_int = _validate_steps(steps)
     dt = _solver_dt(solver)
     current = state
@@ -45,6 +48,7 @@ def time_integrated_energy_objective(solver: Any, state: Any, *, steps: int) -> 
 def growth_rate_proxy_objective(solver: Any, state: Any, *, steps: int) -> Array:
     """Return ``0.5 * log(E_final / E_initial) / elapsed_time``."""
 
+    _require_x64_enabled()
     steps_int = _validate_steps(steps, allow_zero=False)
     initial_energy = _state_energy(solver, state)
     final_energy = final_energy_objective(solver, state, steps=steps_int)
@@ -64,7 +68,13 @@ def reynolds_stress_objective(
 ) -> Array:
     """Return the domain-mean Reynolds stress for a velocity component pair."""
 
+    _require_x64_enabled()
     out = _advance_state(solver, state, steps)
+    exact = _exact_solver_stress(
+        solver, out, components=components, subtract_mean=subtract_mean, index=0
+    )
+    if exact is not None:
+        return exact
     velocity = velocity_fields(solver, out)
     left = velocity[components[0]]
     right = velocity[components[1]]
@@ -85,7 +95,13 @@ def maxwell_stress_objective(
 ) -> Array:
     """Return ``-mean(B_i B_j)`` for a magnetic component pair."""
 
+    _require_x64_enabled()
     out = _advance_state(solver, state, steps)
+    exact = _exact_solver_stress(
+        solver, out, components=components, subtract_mean=subtract_mean, index=1
+    )
+    if exact is not None:
+        return exact
     magnetic = magnetic_fields(solver, out)
     left = magnetic[components[0]]
     right = magnetic[components[1]]
@@ -105,13 +121,15 @@ def transport_alpha_objective(
 ) -> Array:
     """Return Reynolds plus Maxwell stress normalized by pressure."""
 
+    _require_x64_enabled()
     pressure_arr = jnp.asarray(pressure)
     _raise_if_not_zero_concrete(pressure_arr, "pressure")
     reynolds = reynolds_stress_objective(solver, state, steps=steps)
-    try:
-        maxwell = maxwell_stress_objective(solver, state, steps=steps)
-    except AttributeError:
-        maxwell = jnp.zeros((), dtype=reynolds.dtype)
+    maxwell = (
+        maxwell_stress_objective(solver, state, steps=steps)
+        if has_magnetic_fields(solver, state)
+        else jnp.zeros((), dtype=reynolds.dtype)
+    )
     return (reynolds + maxwell) / pressure_arr
 
 
@@ -124,6 +142,7 @@ def minimal_seed_gain_objective(
 ) -> Array:
     """Return PCF perturbation gain, optionally after fixed-energy normalization."""
 
+    _require_x64_enabled()
     initial_state = state
     if target_energy is not None:
         initial_state = normalize_to_energy(solver, state, target_energy)
@@ -139,10 +158,27 @@ def minimal_seed_value_and_projected_gradient(
 ) -> tuple[Array, Any]:
     """Return PCF gain and gradient projected onto the fixed-energy tangent."""
 
+    _require_x64_enabled()
     initial_state = state
     if target_energy is not None:
         initial_state = normalize_to_energy(solver, state, target_energy)
     return gain_and_projected_gradient(solver, initial_state, _validate_steps(steps))
+
+
+def _exact_solver_stress(
+    solver: Any,
+    state: Any,
+    *,
+    components: tuple[int, int],
+    subtract_mean: bool,
+    index: int,
+) -> Array | None:
+    if components != (0, 1) or subtract_mean or not hasattr(solver, "stresses"):
+        return None
+    stresses = tuple(solver.stresses(state))
+    if len(stresses) <= index:
+        return None
+    return jnp.real(stresses[index])
 
 
 def velocity_fields(solver: Any, state: Any) -> tuple[Array, ...]:
@@ -169,6 +205,46 @@ def magnetic_fields(solver: Any, state: Any) -> tuple[Array, ...]:
         if len(fields) >= 6:
             return fields[3:6]
     raise AttributeError("solver does not expose physical magnetic fields")
+
+
+def has_magnetic_fields(solver: Any, state: Any) -> bool:
+    """Return whether the solver interface advertises magnetic fields.
+
+    This probes only the declared field tuple shape. It deliberately does not
+    catch errors raised while constructing fields, so broken MHD solvers fail
+    loudly instead of being treated as hydrodynamic.
+    """
+
+    if not hasattr(solver, "fields_physical"):
+        return False
+    fields = tuple(solver.fields_physical(state))
+    return len(fields) >= 6
+
+
+def finite_difference_parameter_sensitivity(
+    objective,
+    parameter: float,
+    *,
+    step: float | None = None,
+) -> float:
+    """Return a central finite-difference sensitivity for static solver parameters.
+
+    Parameter-dependent solver construction is intentionally outside JAX's traced
+    state objective path. Use this helper for coarse production sensitivity checks
+    where the callable rebuilds any solver objects from the supplied scalar.
+    """
+
+    _require_x64_enabled()
+    value = float(parameter)
+    delta = float(step) if step is not None else max(1.0e-6, abs(value) * 1.0e-6)
+    if delta <= 0.0 or not math.isfinite(delta):
+        raise ValueError("finite-difference step must be positive and finite")
+    return float((objective(value + delta) - objective(value - delta)) / (2.0 * delta))
+
+
+def _require_x64_enabled() -> None:
+    if not bool(jax.config.read("jax_enable_x64")):
+        raise RuntimeError("production objective helpers require jax_enable_x64=True")
 
 
 def _domain_weights(solver: Any, field: Array) -> Array:
@@ -337,6 +413,8 @@ def _raise_if_not_zero_concrete(value: Array | float, name: str) -> None:
 __all__ = [
     "final_energy_objective",
     "growth_rate_proxy_objective",
+    "finite_difference_parameter_sensitivity",
+    "has_magnetic_fields",
     "magnetic_fields",
     "maxwell_stress_objective",
     "minimal_seed_gain_objective",

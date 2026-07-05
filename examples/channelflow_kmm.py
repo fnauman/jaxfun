@@ -29,6 +29,7 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.integrators import IMEXRK3, IMEXRK222, PDEIMEXRK, ars_stage_rhs
+from jaxfun.integrators.cnab2 import scan_steps
 from jaxfun.io import Cadence, run_with_cadence
 from jaxfun.la.solvers import Biharmonic, Helmholtz
 
@@ -234,6 +235,19 @@ class KMM:
             self.dpdy_rhs = self.D00.scalar_product(ones)
         else:
             self.dpdy_rhs = jnp.zeros(self.D00.num_dofs)
+        self.Su_factor = self._prefactor_solver(self.Su)
+        self.Sg_factor = self._prefactor_solver(self.Sg)
+        self.S00_factor = self._prefactor_solver(self.S00)
+
+    @staticmethod
+    def _prefactor_solver(solver):
+        if isinstance(solver, tuple):
+            return tuple(item.lu_factor() for item in solver)
+        return solver.lu_factor()
+
+    @staticmethod
+    def _solve_prefactor(factor, rhs):
+        return factor.solve(rhs)
 
     def _build_pressure_cache(self) -> dict[str, Array]:
         """Assemble radial matrices for optional KMM pressure recovery."""
@@ -439,9 +453,9 @@ class KMM:
             jnp.zeros_like(jnp.real(state.u[2][:, 0, 0])),
         )
 
-        assert isinstance(self.Su, tuple)
-        assert isinstance(self.Sg, tuple)
-        assert isinstance(self.S00, tuple)
+        assert isinstance(self.Su_factor, tuple)
+        assert isinstance(self.Sg_factor, tuple)
+        assert isinstance(self.S00_factor, tuple)
         for rk in range(self.timestepper.steps()):
             H = self.convection(KMMState(u=u_stage, g=g_stage))
             current = self._nonlinear_rhs(H)
@@ -459,10 +473,14 @@ class KMM:
             rhs_v = rhs_v + self.dt * (a[rk] * current[2] + b[rk] * previous[2])
             rhs_w = rhs_w + self.dt * (a[rk] * current[3] + b[rk] * previous[3])
 
-            u0_new = self.Su[rk].solve(self.TB.mask_nyquist(rhs_u))
-            g_new = self.TD.mask_nyquist(self.Sg[rk].solve(self.TD.mask_nyquist(rhs_g)))
-            v00_new = jnp.real(self.S00[rk].solve(rhs_v))
-            w00_new = jnp.real(self.S00[rk].solve(rhs_w))
+            u0_new = self._solve_prefactor(
+                self.Su_factor[rk], self.TB.mask_nyquist(rhs_u)
+            )
+            g_new = self.TD.mask_nyquist(
+                self._solve_prefactor(self.Sg_factor[rk], self.TD.mask_nyquist(rhs_g))
+            )
+            v00_new = jnp.real(self._solve_prefactor(self.S00_factor[rk], rhs_v))
+            w00_new = jnp.real(self._solve_prefactor(self.S00_factor[rk], rhs_w))
             u_stage = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
             g_stage = g_new
             previous = current
@@ -506,20 +524,22 @@ class KMM:
             rhs_u, rhs_g, rhs_v, rhs_w = ars_stage_rhs(
                 base_rhs, nonlinear_history, linear_history, a, b, self.dt, rk
             )
-            u0_new = self.Su.solve(self.TB.mask_nyquist(rhs_u))
-            g_new = self.TD.mask_nyquist(self.Sg.solve(self.TD.mask_nyquist(rhs_g)))
-            v00_new = jnp.real(self.S00.solve(rhs_v))
-            w00_new = jnp.real(self.S00.solve(rhs_w))
+            u0_new = self._solve_prefactor(
+                self.Su_factor, self.TB.mask_nyquist(rhs_u)
+            )
+            g_new = self.TD.mask_nyquist(
+                self._solve_prefactor(self.Sg_factor, self.TD.mask_nyquist(rhs_g))
+            )
+            v00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_v))
+            w00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_w))
             u_stage = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
             g_stage = g_new
 
         return KMMState(u=u_stage, g=g_stage)
 
     def solve(self, state: KMMState, steps: int) -> KMMState:
-        out = state
-        for _ in range(int(steps)):
-            out = self.step(out)
-        return out
+        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
+        return scan_steps(step, state, int(steps))
 
     def solve_with_cadence(
         self,
@@ -532,6 +552,8 @@ class KMM:
         on_snapshot=None,
         on_checkpoint=None,
         should_stop=None,
+        t0: float = 0.0,
+        tstep0: int = 0,
     ) -> KMMState:
         return run_with_cadence(
             self.solve,
@@ -545,6 +567,8 @@ class KMM:
             on_snapshot=on_snapshot,
             on_checkpoint=on_checkpoint,
             should_stop=should_stop,
+            t0=t0,
+            tstep0=tstep0,
         )
 
     def divergence_l2(self, state: KMMState) -> Array:

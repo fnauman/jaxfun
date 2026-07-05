@@ -3,6 +3,8 @@ import jax.numpy as jnp
 import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
+from examples.pcf_mhd_jax import PlaneCouetteMHDJax
+from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
 from examples.pcf_minimal_seed_jax import (
     gain_and_projected_gradient,
     jax_complex_directional_derivative,
@@ -234,3 +236,80 @@ def test_axisymmetric_tc_energy_gradient_wrt_initial_amplitude_matches_fd():
 
     assert jnp.isfinite(grad)
     assert jnp.allclose(grad, fd, rtol=2.0e-3, atol=1.0e-12)
+
+
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="Couette differentiability checks use x64 finite differences",
+)
+def test_pcf_mhd_state_gradient_is_finite_through_cnab2_history_flag():
+    solver = PlaneCouetteMHDJax(
+        N=(7, 4, 4),
+        Re=200.0,
+        Rm=200.0,
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+        perturbation_amplitude=0.02,
+        magnetic_amplitude=0.01,
+    )
+    state = solver.initial_state()
+
+    def final_energy(initial_state):
+        out = solver.solve(initial_state, steps=1)
+        diag = solver.diagnostics(out)
+        return diag["Etot"] + diag["Emag"]
+
+    grad_state = jax.grad(final_energy)(state)
+
+    assert all(
+        bool(jnp.isfinite(leaf).all()) for leaf in jax.tree_util.tree_leaves(grad_state)
+    )
+    assert tree_l2_norm(grad_state) > 0.0
+
+
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="Couette differentiability checks use x64 finite differences",
+)
+def test_axisymmetric_primitive_pcf_state_gradient_is_finite():
+    solver = AxisymmetricPCFMRIDNSJax(
+        Nx=8,
+        Nz=4,
+        nu=1.0e-3,
+        eta_mag=1.0e-3,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-6)
+
+    def final_energy(initial_state):
+        out = solver.solve(initial_state, steps=1)
+        return solver.diagnostics(out)["E"]
+
+    grad_state = jax.grad(final_energy)(state)
+
+    assert all(
+        bool(jnp.isfinite(leaf).all()) for leaf in jax.tree_util.tree_leaves(grad_state)
+    )
+    assert tree_l2_norm(grad_state) > 0.0
+
+
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="Couette differentiability checks use x64 finite differences",
+)
+def test_axisymmetric_tc_state_gradient_is_finite_through_cnab2_history_flag():
+    solver = AxisymmetricTCDNSJax(
+        CircularCouette(), nu=0.002, Nr=8, Nz=6, dt=1.0e-3, dealias=1.0
+    )
+    state = solver.initial_state(amp=1.0e-4)
+
+    def final_energy(initial_state):
+        return solver.energy(solver.solve(initial_state, steps=1))
+
+    grad_state = jax.grad(final_energy)(state)
+
+    assert all(
+        bool(jnp.isfinite(leaf).all()) for leaf in jax.tree_util.tree_leaves(grad_state)
+    )
+    assert tree_l2_norm(grad_state) > 0.0

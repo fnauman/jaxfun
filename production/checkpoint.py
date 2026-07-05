@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -36,21 +37,35 @@ def write_production_checkpoint(
 
     from jaxfun.io import write_checkpoint
 
-    write_checkpoint(
-        path,
-        fields,
-        t=t,
-        tstep=tstep,
-        attrs=production_checkpoint_attrs(
-            spec,
-            state_kind=state_kind,
-            fields=fields,
-            device_record=device_record,
-            diagnostics_path=diagnostics_path,
-            prng_state=prng_state,
-        ),
-        mode=mode,
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.tmp")
+    attrs = production_checkpoint_attrs(
+        spec,
+        state_kind=state_kind,
+        fields=fields,
+        device_record=device_record,
+        diagnostics_path=diagnostics_path,
+        prng_state=prng_state,
     )
+    try:
+        if mode == "a" and target.exists():
+            shutil.copy2(target, tmp)
+            write_mode = "a"
+        else:
+            write_mode = "w" if mode == "a" else mode
+        write_checkpoint(
+            tmp,
+            fields,
+            t=t,
+            tstep=tstep,
+            attrs=attrs,
+            mode=write_mode,
+        )
+        os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def production_checkpoint_attrs(

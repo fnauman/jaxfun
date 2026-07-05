@@ -48,6 +48,16 @@ This runs the four committed non-pipe linear-window DNS goldens with the
 production runner and a 30-minute timeout per run. Use `parity-dns-pcf` or
 `parity-dns-tc` for the geometry-specific subsets.
 
+## Generated-saturation parity
+
+```bash
+make -C production parity-saturation
+```
+
+This compares current code against the promoted generated saturation goldens. It
+uses the full checked-in saturation specs and can be long; it deliberately does
+not apply the bounded smoke defaults used by `validate-all`.
+
 ## Validation script parity modes
 
 ```bash
@@ -79,7 +89,8 @@ the lighter checked-in `smoke` resolution tier for local CPU/consumer-GPU
 development. Non-validate heavy runs also write `golden/golden.json` and
 `checkpoints/checkpoints.h5` by default. Reduced or step-limited saturation
 runs are reported as `validation_scope=bounded_saturation_smoke`; their generated
-artifacts are smoke diagnostics, not full production saturation goldens. Pass
+artifacts are smoke diagnostics, not full production saturation goldens. The
+script prints a `SMOKE ONLY` banner for these bounded heavy/default modes. Pass
 `--full` to run the checked-in production spec without smoke defaults, or pass
 `--validate-only` for metadata-only validation. `JAXFUN_VALIDATE_RESOLUTION_TIER`,
 `JAXFUN_VALIDATE_SMOKE_RESOLUTION_TIER`, `JAXFUN_VALIDATE_HEAVY_STEPS`, and
@@ -162,7 +173,7 @@ artifacts are smoke diagnostics, not full production saturation goldens. Pass
 
 This launches separate runner subprocesses for each device so JAX backend
 selection is process-local, then compares the final numeric diagnostics and writes
-`device_comparison.json` with per-side wall times and a left/right speedup ratio. Use `--device-b gpu` to require CUDA explicitly. For
+`device_comparison.json` with per-side wall times and a left/right speedup ratio. Same-backend runs fail by default so CPU/CPU does not masquerade as CPU/GPU evidence; pass `--allow-same-backend` only for an intentional determinism smoke. Use `--device-b gpu` to require CUDA explicitly. For
 Phase J5 production-run specs, pass `--resolution-tier smoke` or
 `--resolution-tier start` with `--steps` to get bounded CPU/GPU agreement evidence
 without running the full saturation case. The report records the selected
@@ -177,20 +188,31 @@ without running the full saturation case. The report records the selected
 This checks the production objective wrappers with finite-difference gradients on
 a reduced Plane Couette solver.
 
-## Runner checkpoint smoke
+## Runner checkpoint, resume, and snapshot smoke
 
 ```bash
 .venv/bin/python production/run_problem.py \
   --config production/examples/taylor_couette_hydro_dns_v1.json \
   --out runs/taylor_couette_hydro_dns_v1/checkpoint_smoke \
   --steps 4 \
+  --checkpoint-every 2 \
+  --snapshot-every 2 \
+  --diagnostics-every 1
+
+.venv/bin/python production/run_problem.py \
+  --resume runs/taylor_couette_hydro_dns_v1/checkpoint_smoke \
+  --steps 6 \
   --checkpoint-every 2
 ```
 
 This writes `checkpoints/checkpoints.h5` with coefficient-space state payloads
-readable by `jaxfun.io.read_checkpoint`. Production checkpoint attrs include the
-spec hash, schema versions, dtype/shape metadata, device metadata, and the
-diagnostics path.
+readable by `jaxfun.io.read_checkpoint`, plus `snapshots/snapshots.h5`,
+`snapshots/snapshots.xdmf`, and `snapshots/manifest.json` when
+`--snapshot-every` is provided. Production checkpoint attrs include the spec
+hash, schema versions, dtype/shape metadata, device metadata, and the diagnostics
+path. `--resume` defaults `--config` and `--out` to the resumed run directory when
+omitted, validates the checkpoint spec hash/dtype metadata, continues `tstep`,
+and appends diagnostics without duplicating the first resumed row.
 
 ## PCF fluctuation smoke
 
@@ -325,3 +347,6 @@ committed; the comparator validates `golden/golden.json` against `spec.json`.
 
 Non-`--validate-only` execution now runs wired DNS/heavy specs; unsupported or
 intentionally unwired specs still exit with status 1/2 before solver allocation.
+Runner metadata also records the persistent JAX compilation-cache path and DNS
+timing fields (`solver_steps`, `ms_per_step`, `steps_per_second`) so throughput
+regressions are visible in `metadata.json` and reports.

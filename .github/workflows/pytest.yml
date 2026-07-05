@@ -96,6 +96,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: spectralDNS/shenfun
+          ref: 4.2.2
           path: .reference/shenfun
 
       - name: Install shenfun reference

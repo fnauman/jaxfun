@@ -6,12 +6,27 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_validation_scope_docs_cover_bounded_smoke_outputs():
     readme = (ROOT / "production" / "README.md").read_text()
     commands = (ROOT / "production" / "commands.md").read_text()
+    validate_gpu = (ROOT / "production" / "validate_gpu.sh").read_text()
 
     assert "## Validation scopes" in readme
     assert "bounded_saturation_smoke" in readme
     assert "cpu_smoke_finiteness_divergence_only" in readme
     assert "generated_saturated_golden" in readme
     assert "not full production saturation goldens" in commands
+    assert "SMOKE ONLY" in validate_gpu
+    assert "parity-saturation" in readme
+    assert "parity-saturation" in commands
+    assert "--resume" in readme
+    assert "--resume" in commands
+    assert "--snapshot-every" in readme
+    assert "--snapshot-every" in commands
+    assert "--diagnostics-every" in readme
+    assert "--diagnostics-every" in commands
+    assert "compilation-cache" in commands
+    assert "ms_per_step" in readme
+    assert "ms_per_step" in commands
+    assert "--allow-same-backend" in readme
+    assert "--allow-same-backend" in commands
     assert "validation_scope=bounded_saturation_smoke" in commands
     assert "failed row" in commands
     assert "comparison details before exiting nonzero" in commands

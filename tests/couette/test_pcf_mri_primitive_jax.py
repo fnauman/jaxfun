@@ -140,3 +140,52 @@ def test_pcf_primitive_mri_dns_growth_matches_linear_solver_x64() -> None:
     assert jnp.allclose(rate, eig.real, rtol=5.0e-6, atol=2.0e-6)
     assert float(diag["divu"]) < 1.0e-8
     assert float(diag["divb"]) < 1.0e-8
+
+
+def _axisymmetric_precision_window(enable_x64: bool) -> dict[str, float]:
+    previous = bool(jax.config.read("jax_enable_x64"))
+    jax.config.update("jax_enable_x64", enable_x64)
+    try:
+        solver = AxisymmetricPCFMRIDNSJax(
+            S=1.0,
+            omega=2.0 / 3.0,
+            B0=0.1,
+            nu=0.001,
+            eta_mag=0.001,
+            Nx=12,
+            Nz=6,
+            Lz=1.0,
+            dt=1.0e-3,
+            dealias=1.5,
+        )
+        state, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-5)
+        out = solver.solve(state, 3)
+        diag = solver.diagnostics(out)
+        return {
+            "E": float(diag["E"]),
+            "Ekin": float(diag["Ekin"]),
+            "Emag": float(diag["Emag"]),
+            "divu": float(diag["divu"]),
+            "divb": float(diag["divb"]),
+        }
+    finally:
+        jax.config.update("jax_enable_x64", previous)
+        jax.clear_caches()
+
+
+def test_pcf_primitive_dealiased_short_window_float32_matches_float64() -> None:
+    fp64 = _axisymmetric_precision_window(True)
+    fp32 = _axisymmetric_precision_window(False)
+
+    for key in ("E", "Ekin", "Emag"):
+        assert fp32[key] == pytest.approx(fp64[key], rel=5.0e-3, abs=1.0e-12)
+    assert fp32["divu"] < 1.0e-5
+    assert fp32["divb"] < 1.0e-5
+    assert fp64["divu"] < 1.0e-8
+    assert fp64["divb"] < 1.0e-8
+
+
+def test_pcf_3d_default_dealiases_fourier_directions_only():
+    solver = PCFMRIDNSJax(Nx=8, Ny=4, Nz=4, dt=1.0e-3)
+
+    assert solver.dealias == (1.5, 1.5, 1.0)

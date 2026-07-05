@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from production.compare_devices import _summary, compare_final_diagnostics, main
+from production.compare_devices import _backend_check, _summary, compare_final_diagnostics, main
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -73,6 +73,22 @@ def test_compare_final_diagnostics_reports_boolean_mismatches(tmp_path):
     assert summary == {"passed": 0, "failed": 1, "skipped": 0, "compared": 1}
 
 
+def test_same_backend_device_comparison_is_flagged(tmp_path):
+    for side in ("left", "right"):
+        run_dir = tmp_path / side
+        run_dir.mkdir()
+        (run_dir / "metadata.json").write_text(
+            json.dumps({"device": {"default_backend": "cpu"}}),
+            encoding="utf-8",
+        )
+
+    check = _backend_check(tmp_path / "left", tmp_path / "right", allow_same_backend=False)
+
+    assert check["same_backend"] is True
+    assert check["passed"] is False
+    assert "same backend" in check["message"]
+
+
 def test_compare_devices_cli_runs_cpu_cpu_channel_smoke(tmp_path):
     out = tmp_path / "compare"
     rc = main(
@@ -87,6 +103,7 @@ def test_compare_devices_cli_runs_cpu_cpu_channel_smoke(tmp_path):
             "cpu",
             "--timeout-seconds",
             "1800",
+            "--allow-same-backend",
         ]
     )
 
@@ -127,6 +144,7 @@ def test_compare_devices_cli_accepts_production_resolution_tier(tmp_path):
             "1e-6",
             "--rtol",
             "1e-5",
+            "--allow-same-backend",
         ]
     )
 

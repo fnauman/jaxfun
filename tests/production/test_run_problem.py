@@ -8,6 +8,7 @@ import pytest
 from production.adapters import load_config
 from production.compare_goldens import validate_golden
 from production.oracles import _channel_poiseuille_kmm_state, _saturation_passed
+from production.problem_spec import UnsupportedSpecError
 from production.run_problem import (
     SolverExecutionNotImplementedError,
     _assert_required_saturation_checks,
@@ -123,6 +124,8 @@ def test_validate_only_writes_metadata_without_claiming_solver_execution(tmp_pat
         "status": "validated",
     }
     assert metadata["adapter"]["axis_conventions"]["axis_0"] == "r radial"
+    assert metadata["compilation_cache"]["requested"] is True
+    assert Path(metadata["compilation_cache"]["path"]).exists()
 
 
 def test_resolution_tier_validate_only_materializes_effective_spec(tmp_path):
@@ -256,10 +259,70 @@ def test_bounded_smoke_saturation_check_is_not_required():
     assert metadata == {
         "required": False,
         "present": True,
+        "type_valid": True,
         "passed": False,
         "energy_growth_factor": None,
         "magnetic_energy_growth_factor": None,
+        "stationarity_check_passed": None,
+        "stationarity_relative_change": None,
     }
+
+
+def test_full_generated_scope_validates_all_numeric_diagnostics(tmp_path):
+    diagnostics = {
+        "scalars": {"kinetic_energy": 1.0, "divergence_l2": 0.0},
+        "time_series": [
+            {"t": 0.0, "kinetic_energy": 1.0, "divergence_l2": 0.0},
+            {"t": 1.0, "kinetic_energy": float("nan"), "divergence_l2": 0.0},
+        ],
+    }
+    checks = _validation_floor_metadata(
+        diagnostics, validation_scope={"kind": "generated_saturated_golden"}
+    )
+
+    assert checks["required"] is True
+    assert checks["passed"] is False
+    assert "time_series.1.kinetic_energy" in checks["nonfinite_diagnostics"]
+
+
+def test_full_saturation_check_rejects_nonboolean_pass_flag(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    checks = _saturation_check_metadata(
+        {
+            "scalars": {
+                "saturation_check_passed": 1.0,
+                "energy_growth_factor": 3.0,
+                "stationarity_check_passed": True,
+            }
+        },
+        validation_scope={"kind": "generated_saturated_golden"},
+    )
+    metadata = {"out_dir": str(out), "execution": {}, "saturation_checks": checks}
+
+    assert checks["type_valid"] is False
+    with pytest.raises(RuntimeError, match="non-boolean"):
+        _assert_required_saturation_checks(metadata)
+
+
+def test_full_saturation_check_requires_stationarity(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    metadata = {
+        "out_dir": str(out),
+        "execution": {},
+        "saturation_checks": {
+            "required": True,
+            "present": True,
+            "type_valid": True,
+            "passed": True,
+            "stationarity_check_passed": False,
+            "stationarity_relative_change": 0.25,
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="stationarity_check_passed=False"):
+        _assert_required_saturation_checks(metadata)
 
 
 @pytest.mark.parametrize(
@@ -328,7 +391,7 @@ def test_non_validate_run_fails_explicitly_for_unwired_oracle(tmp_path):
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
     with pytest.raises(
-        SolverExecutionNotImplementedError, match="solver execution is not wired"
+        UnsupportedSpecError, match="not in the jaxfun implementation allowlist"
     ):
         run_problem(
             config_path=spec_path,
@@ -531,6 +594,7 @@ def test_channel_driven_kmm_run_writes_diagnostics_and_compares_golden(tmp_path)
     assert metadata["timing"]["solver_wall_time_seconds"] >= 0.0
     assert metadata["timing"]["solver_started_at_utc"]
     assert metadata["timing"]["solver_finished_at_utc"]
+    assert "solver_steps" not in metadata["timing"]
     assert (out / "spec.json").exists()
     line = json.loads((out / "diagnostics.jsonl").read_text().splitlines()[0])
     assert line["pressure_gradient"] == pytest.approx(-0.002)
@@ -884,7 +948,7 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
         ).read_text()
     )
     spec["resolution"] = {**spec["resolution"], "Nr": 10, "Nz": 6}
-    spec["time"] = {**spec["time"], "final_time": 0.004}
+    spec["time"] = {**spec["time"], "final_time": 0.006}
     spec_path = tmp_path / "tc_dns_checkpoint.json"
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
@@ -898,6 +962,9 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
     )
     checkpoint_path = out / "checkpoints" / "checkpoints.h5"
     assert metadata["checkpoint_path"] == str(checkpoint_path)
+    assert metadata["timing"]["solver_steps"] == 4
+    assert metadata["timing"]["ms_per_step"] >= 0.0
+    assert metadata["timing"]["steps_per_second"] > 0.0
 
     record = read_checkpoint(checkpoint_path)
     assert record.tstep == 4
@@ -914,6 +981,19 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
     device_metadata = json.loads(record.attrs["device_metadata_json"])
     assert device_metadata == {"capture_skipped": True}
     assert record.attrs["prng_state_json"] == ""
+
+    resumed_metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=6,
+        checkpoint_every=2,
+        resume=out,
+        capture_device=False,
+    )
+    assert resumed_metadata["run_options"]["resume"] == str(out)
+    assert resumed_metadata["timing"]["solver_steps"] == 2
+    record = read_checkpoint(checkpoint_path)
+    assert record.tstep == 6
     payload = record.fields["state"]
     restarted = AxisymmetricTCState(
         u=tuple(payload["u"]),
@@ -938,11 +1018,43 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
         kz_mode=kz_mode, amp=spec["initial_condition"]["amplitude"]
     )
     direct = solver.solve(state0, 6)
-    continued = solver.solve(restarted, 2)
 
-    for got, expected in zip(continued.u, direct.u, strict=True):
+    for got, expected in zip(restarted.u, direct.u, strict=True):
         assert jnp.allclose(got, expected, rtol=1.0e-12, atol=1.0e-12)
-    assert jnp.allclose(continued.p, direct.p, rtol=1.0e-12, atol=1.0e-12)
+    assert jnp.allclose(restarted.p, direct.p, rtol=1.0e-12, atol=1.0e-12)
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert [row["t"] for row in rows] == sorted({row["t"] for row in rows})
+
+
+def test_tc_dns_runner_writes_uniform_snapshots(tmp_path):
+    pytest.importorskip("h5py")
+    spec = json.loads(
+        (
+            ROOT / "production" / "examples" / "taylor_couette_hydro_dns_v1.json"
+        ).read_text()
+    )
+    spec["resolution"] = {**spec["resolution"], "Nr": 8, "Nz": 4}
+    spec["time"] = {**spec["time"], "final_time": 0.001}
+    spec_path = tmp_path / "tc_dns_snapshot.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "snapshot-run"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        steps=1,
+        snapshot_every=1,
+        capture_device=False,
+    )
+
+    assert metadata["snapshot_path"] == str(out / "snapshots" / "snapshots.h5")
+    assert metadata["snapshot_xdmf_path"] == str(out / "snapshots" / "snapshots.xdmf")
+    manifest = json.loads((out / "snapshots" / "manifest.json").read_text())
+    assert manifest["problem_id"] == "taylor_couette_hydro_dns_v1"
+    assert manifest["snapshot_every"] == 1
 
 
 def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
@@ -995,4 +1107,4 @@ def test_cli_non_validate_returns_not_implemented_status(tmp_path):
             str(tmp_path / "run"),
         ]
     )
-    assert code == 2
+    assert code == 1

@@ -11,8 +11,15 @@ from pathlib import Path
 from typing import Any
 
 
-def configure_production_dtype(dtype: str | None = None) -> str:
-    """Configure the default dtype policy for production runner processes."""
+def configure_production_dtype(
+    dtype: str | None = None, *, apply_to_process: bool = False
+) -> str:
+    """Return the production dtype policy, optionally applying it to this process.
+
+    Importable helpers must not silently downgrade an already-configured x64 test
+    or analysis process. CLI entrypoints pass ``apply_to_process=True`` before
+    solver imports so subprocess production runs still get the requested dtype.
+    """
 
     requested = (dtype or os.environ.get("JAXFUN_PRODUCTION_DTYPE", "float32")).lower()
     aliases = {
@@ -28,10 +35,11 @@ def configure_production_dtype(dtype: str | None = None) -> str:
             "JAXFUN_PRODUCTION_DTYPE must be one of float32, fp32, float64, or fp64"
         )
     canonical = aliases[requested]
-    os.environ["JAXFUN_PRODUCTION_DTYPE"] = canonical
-    x64_enabled = "1" if canonical == "float64" else "0"
-    os.environ["JAXFUN_ENABLE_X64"] = x64_enabled
-    os.environ["JAX_ENABLE_X64"] = x64_enabled
+    if apply_to_process:
+        os.environ["JAXFUN_PRODUCTION_DTYPE"] = canonical
+        x64_enabled = "1" if canonical == "float64" else "0"
+        os.environ["JAXFUN_ENABLE_X64"] = x64_enabled
+        os.environ["JAX_ENABLE_X64"] = x64_enabled
     return canonical
 
 
@@ -41,7 +49,9 @@ def _env_truthy(value: str | None, *, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
-def capture_device_record(requested: str = "auto") -> dict[str, Any]:
+def capture_device_record(
+    requested: str = "auto", *, apply_dtype_to_process: bool = False
+) -> dict[str, Any]:
     """Return live JAX/JAXLIB/device metadata.
 
     Local production smoke runs default to float32 through
@@ -49,7 +59,9 @@ def capture_device_record(requested: str = "auto") -> dict[str, Any]:
     parity tests that explicitly need it.
     """
 
-    production_dtype = configure_production_dtype()
+    production_dtype = configure_production_dtype(
+        apply_to_process=apply_dtype_to_process
+    )
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     if requested == "cpu":
         os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -58,10 +70,11 @@ def capture_device_record(requested: str = "auto") -> dict[str, Any]:
 
     import jax
 
-    jax.config.update(
-        "jax_enable_x64",
-        _env_truthy(os.environ.get("JAXFUN_ENABLE_X64"), default=True),
-    )
+    if apply_dtype_to_process:
+        jax.config.update(
+            "jax_enable_x64",
+            _env_truthy(os.environ.get("JAXFUN_ENABLE_X64"), default=True),
+        )
     import jax.numpy as jnp  # noqa: I001
     import jaxlib  # noqa: I001
     import jaxfun  # noqa: F401,I001 - import applies jaxfun dtype/prealloc policy
@@ -91,10 +104,14 @@ def capture_device_record(requested: str = "auto") -> dict[str, Any]:
     }
 
 
-def production_run_env(requested: str = "auto") -> dict[str, Any]:
+def production_run_env(
+    requested: str = "auto", *, apply_dtype_to_process: bool = False
+) -> dict[str, Any]:
     from .compare_goldens import resolve_golden, vendored_golden_root
 
-    device = capture_device_record(requested)
+    device = capture_device_record(
+        requested, apply_dtype_to_process=apply_dtype_to_process
+    )
     run_specs_dir = Path(__file__).resolve().parent / "runs"
     run_specs = (
         sorted(path.stem for path in run_specs_dir.glob("*.json"))
@@ -130,11 +147,20 @@ def production_run_env(requested: str = "auto") -> dict[str, Any]:
     }
 
 
-def write_run_env(path: str | Path, requested: str = "auto") -> None:
+def write_run_env(
+    path: str | Path, requested: str = "auto", *, apply_dtype_to_process: bool = False
+) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
-        json.dumps(production_run_env(requested), sort_keys=True, indent=2) + "\n",
+        json.dumps(
+            production_run_env(
+                requested, apply_dtype_to_process=apply_dtype_to_process
+            ),
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -146,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--write")
     args = parser.parse_args(argv)
-    data = production_run_env(args.device)
+    data = production_run_env(args.device, apply_dtype_to_process=True)
     payload = json.dumps(data, sort_keys=True, indent=2) + "\n"
     if args.write:
         Path(args.write).write_text(payload, encoding="utf-8")

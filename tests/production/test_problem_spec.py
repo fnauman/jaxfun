@@ -69,7 +69,7 @@ def test_domain_required_keys_are_rejected_before_solver_setup():
     spec["domain"].pop("z_period")
 
     with pytest.raises(
-        ProblemSpecError, match="domain missing required field.*z_period"
+        ProblemSpecError, match="schema validation failed.*z_period"
     ):
         validate_spec(spec)
 
@@ -94,3 +94,21 @@ def test_spec_hash_ignores_existing_hash_field():
     expected = spec_hash(spec)
     spec["spec_hash"] = "not-used"
     assert spec_hash(spec) == expected
+
+
+def test_unknown_jaxfun_oracle_is_rejected_before_solver_setup():
+    spec = json.loads((EXAMPLES / "pcf_hydro_laminar_v1.json").read_text())
+    spec["problem_id"] = "pcf_hydro_unwired_test"
+    spec["expected_oracle"] = {**spec["expected_oracle"], "type": "unwired_test"}
+    spec["golden"] = {**spec["golden"], "artifact_id": spec["problem_id"]}
+
+    with pytest.raises(UnsupportedSpecError, match="not in the jaxfun implementation allowlist"):
+        validate_spec(spec)
+
+
+def test_json_schema_validation_runs_before_solver_setup():
+    spec = json.loads((EXAMPLES / "pcf_hydro_laminar_v1.json").read_text())
+    spec["diagnostics"] = []
+
+    with pytest.raises(ProblemSpecError, match="schema validation failed"):
+        validate_spec(spec)

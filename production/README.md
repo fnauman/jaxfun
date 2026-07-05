@@ -39,12 +39,22 @@ Current implemented entry points:
   tolerance-declared scalars.
 - `production/run_problem.py --validate-only` validates a spec and writes metadata;
   unsupported or intentionally unwired specs still fail explicitly before solver allocation.
+- `production/run_problem.py --resume RUN_DIR` resumes from the latest production
+  checkpoint after validating spec hash and dtype metadata; diagnostics append from
+  the resumed step.
 - `make -C production parity-cheap` runs the nine cheap golden comparisons, including the two pipe hydro goldens, and writes `runs/_report/results.json`.
 - `make -C production parity-dns` runs the four committed non-pipe linear-window DNS golden comparisons and writes `runs/_report/results.json`; `parity-dns-pcf` and `parity-dns-tc` run geometry-specific subsets.
+- `make -C production parity-saturation` compares the promoted generated
+  saturation goldens; this is a full-window mode and may be long.
 - `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log` with command/status/duration, and writes `runs/_report/results.json`; strict parity subprocesses default to `JAXFUN_VALIDATE_PARITY_DTYPE=float64` for the committed `1e-10` goldens. `all`, `heavy`, and direct production run IDs execute bounded start-tier float32 smoke by default (`--resolution-tier start --steps 2`) unless `--full`, `--validate-only`, `--smoke`, or explicit run args are supplied; `--smoke` selects the lighter checked-in `smoke` resolution tier. Non-validate heavy runs also write `golden/golden.json` and `checkpoints/checkpoints.h5` by default, but reduced/step-limited saturation artifacts are labeled `bounded_saturation_smoke`, not full production saturation goldens.
 - `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths through `production/checkpoint.py`, including spec hash, dtype/shape metadata, device metadata, and diagnostics pointer attrs.
+- `production/run_problem.py --snapshot-every K` writes uniform HDF5 snapshots,
+  an XDMF sidecar, and a snapshot manifest. `--diagnostics-every K` controls
+  host-side diagnostic rows and mid-run finite/divergence monitoring cadence.
+- Runner metadata records `compilation_cache` plus timing fields such as
+  `solver_steps`, `ms_per_step`, and `steps_per_second` for DNS paths.
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
-- `production/compare_devices.py` runs the same config in separate device-specific subprocesses, compares final numeric diagnostics for CPU/GPU agreement checks, and records left/right wall times plus speedup; production run specs can pass `--resolution-tier smoke|start|production` plus `--steps` for bounded agreement evidence.
+- `production/compare_devices.py` runs the same config in separate device-specific subprocesses, compares final numeric diagnostics for CPU/GPU agreement checks, and records left/right wall times plus speedup; production run specs can pass `--resolution-tier smoke|start|production` plus `--steps` for bounded agreement evidence. Same-backend comparisons fail by default; pass `--allow-same-backend` only for intentional CPU/CPU smoke checks.
 - `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, fallback rung fields, and failed comparison details. `production/validate_gpu.sh` writes this report before exiting nonzero when an executed run fails.
 
 ## Validation scopes
@@ -55,7 +65,7 @@ Current implemented entry points:
 - `cpu_smoke_fallback_oracle`: CPU smoke for a saturation run with rung-1 or rung-2 fallback checks available.
 - `cpu_smoke_finiteness_divergence_only`: CPU smoke for rung-3-only saturation specs such as `pcf_fluct_re400` and `pcf_mhd_divfree`; this proves solver completion, finite diagnostics, and emitted divergence diagnostics, not production parity.
 - `bounded_saturation_smoke`: GPU or CPU saturation execution with `--steps`, `--resolution-tier start`, or `--resolution-tier smoke`; generated golden/checkpoint files are smoke artifacts, not full production saturation goldens, and report rows are skipped rather than counted as production passes.
-- `generated_saturated_golden`: full saturation execution without bounded smoke overrides; if `saturation_check_passed` is missing or false, the runner marks metadata failed and exits nonzero instead of writing a passing full-saturation artifact.
+- `generated_saturated_golden`: full saturation execution without bounded smoke overrides; if `saturation_check_passed` is missing or false (including non-boolean values), stationarity fails, or validation-floor diagnostics are non-finite/missing divergence, the runner marks metadata failed and exits nonzero instead of writing a passing full-saturation artifact.
 - `oracle_execution`: analytic, linear, or DNS oracle execution without a committed-golden comparison.
 
 Long-run Phase J5/J6 entry point:

@@ -67,7 +67,12 @@ class AxisymmetricPCFState:
     have_old: bool | Array = False
 
     def tree_flatten(self):
-        return (self.x, self.p, self.nonlinear_old, jnp.asarray(self.have_old)), None
+        return (
+            self.x,
+            self.p,
+            self.nonlinear_old,
+            jnp.asarray(self.have_old, dtype=jnp.float32),
+        ), None
 
     @classmethod
     def tree_unflatten(cls, _aux_data, children):
@@ -439,7 +444,8 @@ class AxisymmetricPCFMRIDNSJax:
         return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
 
     def solve(self, state: AxisymmetricPCFState, steps: int) -> AxisymmetricPCFState:
-        return scan_steps(self.step, state, steps)
+        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
+        return scan_steps(step, state, int(steps))
 
     def solve_with_cadence(
         self,
@@ -452,6 +458,8 @@ class AxisymmetricPCFMRIDNSJax:
         on_snapshot=None,
         on_checkpoint=None,
         should_stop=None,
+        t0: float = 0.0,
+        tstep0: int = 0,
     ) -> AxisymmetricPCFState:
         return run_with_cadence(
             self.solve,
@@ -465,6 +473,8 @@ class AxisymmetricPCFMRIDNSJax:
             on_snapshot=on_snapshot,
             on_checkpoint=on_checkpoint,
             should_stop=should_stop,
+            t0=t0,
+            tstep0=tstep0,
         )
 
     def _linear_operator(self) -> PlaneCouetteLinear:
@@ -620,7 +630,7 @@ class PCFMRIDNSJax:
         Lz: float = 1.0,
         dt: float = 2.0e-3,
         family: str = "C",
-        dealias: float | tuple[float, float, float] = 1.0,
+        dealias: float | tuple[float, float, float] = (1.5, 1.5, 1.0),
     ) -> None:
         self.S = float(S)
         self.omega = float(omega)
@@ -1019,7 +1029,8 @@ class PCFMRIDNSJax:
         return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
 
     def solve(self, state: AxisymmetricPCFState, steps: int) -> AxisymmetricPCFState:
-        return scan_steps(self.step, state, steps)
+        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
+        return scan_steps(step, state, int(steps))
 
     def solve_with_cadence(
         self,
@@ -1032,6 +1043,8 @@ class PCFMRIDNSJax:
         on_snapshot=None,
         on_checkpoint=None,
         should_stop=None,
+        t0: float = 0.0,
+        tstep0: int = 0,
     ) -> AxisymmetricPCFState:
         return run_with_cadence(
             self.solve,
@@ -1045,6 +1058,8 @@ class PCFMRIDNSJax:
             on_snapshot=on_snapshot,
             on_checkpoint=on_checkpoint,
             should_stop=should_stop,
+            t0=t0,
+            tstep0=tstep0,
         )
 
     def _linear_operator(self) -> PlaneCouetteLinear:

@@ -3,6 +3,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from examples.pcf_mri_primitive_jax import (
+    AxisymmetricPCFMRIDNSJax,
+    AxisymmetricPCFState,
+)
 from examples.taylor_couette_dns_jax import (
     AxisymmetricMRIDNSJax,
     AxisymmetricMRIState,
@@ -25,6 +29,13 @@ def _shard_state(state):
     if isinstance(state, AxisymmetricTCState):
         return AxisymmetricTCState(
             u=_shard_tuple(state.u),
+            p=jax.device_put(state.p, spectral_sharding),
+            nonlinear_old=_shard_tuple(state.nonlinear_old),
+            have_old=state.have_old,
+        )
+    if isinstance(state, AxisymmetricPCFState):
+        return AxisymmetricPCFState(
+            x=_shard_tuple(state.x),
             p=jax.device_put(state.p, spectral_sharding),
             nonlinear_old=_shard_tuple(state.nonlinear_old),
             have_old=state.have_old,
@@ -77,6 +88,14 @@ def _seeded_mhd_state(solver):
     nold = tuple(jnp.zeros_like(component) for component in x)
     p = _seed_coefficients(state.p, len(x))
     return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=False)
+
+
+def _seeded_pcf_primitive_state(solver):
+    state = solver.zero_state()
+    x = tuple(_seed_coefficients(component, i) for i, component in enumerate(state.x))
+    nold = tuple(jnp.zeros_like(component) for component in x)
+    p = _seed_coefficients(state.p, len(x))
+    return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
 
 
 def _assert_bit_identical(actual, expected, label):
@@ -315,6 +334,31 @@ def test_taylor_couette_quadrants_sharded_five_step_rollout_matches_replicated(
 
     solver = solver_factory()
     state = state_factory(solver)
+    replicated = solver.solve(state, 5)
+    sharded = solver.solve(_shard_state(state), 5)
+
+    _assert_state_coefficients_match(replicated, sharded)
+    _assert_diagnostics_match(
+        solver.diagnostics(replicated), solver.diagnostics(sharded)
+    )
+
+
+def test_pcf_primitive_sharded_five_step_rollout_matches_replicated() -> None:
+    if jax.device_count() < 2:
+        pytest.skip("requires --num-devices=2")
+
+    solver = AxisymmetricPCFMRIDNSJax(
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=0.001,
+        eta_mag=0.001,
+        Nx=8,
+        Nz=8,
+        dt=1.0e-3,
+        dealias=1.0,
+    )
+    state = _seeded_pcf_primitive_state(solver)
     replicated = solver.solve(state, 5)
     sharded = solver.solve(_shard_state(state), 5)
 

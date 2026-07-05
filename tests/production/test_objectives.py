@@ -1,16 +1,22 @@
 import jax
+
+jax.config.update("jax_enable_x64", True)
+
 import jax.numpy as jnp
 import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_minimal_seed_jax import (
     jax_complex_directional_derivative,
+    minimal_seed_ascent,
     normalize_to_energy,
     tree_l2_norm,
 )
 from production.objectives import (
     _domain_weights,
     final_energy_objective,
+    maxwell_stress_objective,
+    finite_difference_parameter_sensitivity,
     growth_rate_proxy_objective,
     minimal_seed_gain_objective,
     minimal_seed_value_and_projected_gradient,
@@ -37,7 +43,6 @@ def _central_difference(fun, x0: float, eps: float):
 
 @pytest.fixture
 def pcf_solver():
-    jax.config.update("jax_enable_x64", True)
     return PlaneCouetteFluctuationJax(
         N=(7, 4, 4),
         Re=200.0,
@@ -153,6 +158,27 @@ def test_reynolds_stress_objective_gradient_matches_finite_difference(pcf_solver
     assert jnp.allclose(alpha, objective(amp0) / 2.0, rtol=1.0e-12, atol=1.0e-14)
 
 
+def test_stress_objectives_prefer_solver_exact_quadrature():
+    class ExactStressSolver:
+        dt = 1.0
+
+        def stresses(self, state):
+            return (jnp.asarray(2.5), jnp.asarray(-0.75))
+
+        def velocity_physical(self, state):
+            field = jnp.ones((2, 2))
+            return (field, field, field)
+
+        def fields_physical(self, state):
+            field = jnp.ones((2, 2))
+            return (field, field, field, field, field, field)
+
+    solver = ExactStressSolver()
+
+    assert reynolds_stress_objective(solver, object()) == pytest.approx(2.5)
+    assert maxwell_stress_objective(solver, object()) == pytest.approx(-0.75)
+
+
 def test_minimal_seed_gain_and_projected_gradient_are_finite_and_tangent(pcf_solver):
     state = _pcf_initial_state_with_amp(pcf_solver, 0.02)
     target_energy = 1.0e-3
@@ -179,3 +205,46 @@ def test_minimal_seed_gain_and_projected_gradient_are_finite_and_tangent(pcf_sol
         rtol=0.0,
         atol=1.0e-10,
     )
+
+
+def test_transport_alpha_does_not_swallow_mhd_field_errors():
+    class BrokenMHDSolver:
+        dt = 1.0
+
+        def velocity_physical(self, state):
+            field = jnp.ones((2, 2))
+            return (field, field, field)
+
+        def fields_physical(self, state):
+            raise AttributeError("internal field bug")
+
+    with pytest.raises(AttributeError, match="internal field bug"):
+        transport_alpha_objective(BrokenMHDSolver(), object(), pressure=1.0)
+
+
+def test_finite_difference_parameter_sensitivity_is_explicit_static_contract():
+    value = finite_difference_parameter_sensitivity(lambda nu: nu * nu, 3.0)
+
+    assert value == pytest.approx(6.0, rel=1.0e-6, abs=1.0e-8)
+
+
+def test_minimal_seed_ascent_keeps_energy_constraint(pcf_solver):
+    state = _pcf_initial_state_with_amp(pcf_solver, 0.02)
+
+    optimized, history = minimal_seed_ascent(
+        pcf_solver,
+        state,
+        target_energy=1.0e-3,
+        steps=1,
+        iterations=2,
+        step_size=1.0e-4,
+    )
+
+    assert history
+    assert jnp.allclose(
+        pcf_solver.perturbation_energy(optimized),
+        1.0e-3,
+        rtol=1.0e-10,
+        atol=1.0e-12,
+    )
+    assert all(item.gain > 0.0 for item in history)

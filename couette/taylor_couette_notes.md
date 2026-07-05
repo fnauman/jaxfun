@@ -469,3 +469,12 @@ Expose `--threads` and `--max-ranks`; default `--threads=2` and reject MPI runs
 with more than `--max-ranks` ranks unless the user explicitly raises it. Smoke
 tests should use serial or at most two ranks, tiny grids, short end times, and no
 expensive output by default. Mark larger DNS checks as `slow`.
+
+## Jaxfun Live-Parity Conventions
+
+The jaxfun live-parity tests compare Taylor-Couette real-Fourier coefficient
+layouts after explicitly masking axial and azimuthal Nyquist slots. Those slots
+are representation artifacts for the real transform and are not active physical
+modes. Axisymmetric MRI seed parity also uses the shenfun half-amplitude
+convention for the real cosine/sine pair, so coefficient comparisons pin the
+physical perturbation rather than a storage-normalization choice.
