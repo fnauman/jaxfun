@@ -32,7 +32,8 @@ def test_device_capture_preserves_jaxfun_default_x64_by_default_in_fresh_process
 
     record = _run_capture(code, env)
 
-    assert record["production_run_dtype"] == "float32"
+    assert record["production_run_dtype"] == "float64"
+    assert record["requested_production_dtype"] == "float32"
     assert record["jax_enable_x64"] is True
     assert record["jax_default_scalar_dtype"] == "float64"
     assert record["jaxfun_enable_x64"] is None
@@ -54,7 +55,8 @@ def test_device_capture_preserves_existing_x64_until_apply_requested():
 
     record = _run_capture(code, env)
 
-    assert record["production_run_dtype"] == "float32"
+    assert record["production_run_dtype"] == "float64"
+    assert record["requested_production_dtype"] == "float32"
     assert record["jax_enable_x64"] is True
     assert record["jax_default_scalar_dtype"] == "float64"
     assert record["jaxfun_enable_x64"] == "1"
@@ -77,6 +79,7 @@ def test_requested_float32_overrides_stale_x64_env_when_applied():
     record = _run_capture(code, env)
 
     assert record["production_run_dtype"] == "float32"
+    assert record["requested_production_dtype"] == "float32"
     assert record["jax_enable_x64"] is False
     assert record["jax_default_scalar_dtype"] == "float32"
     assert record["jaxfun_enable_x64"] == "0"

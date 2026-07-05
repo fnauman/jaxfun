@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -33,7 +32,12 @@ def write_production_checkpoint(
     prng_state: Any | None = None,
     mode: str = "a",
 ) -> None:
-    """Write a coefficient checkpoint with production metadata attrs."""
+    """Atomically write the latest production restart checkpoint.
+
+    Production resume only consumes the latest step, so the wrapper deliberately
+    rewrites a compact single-step HDF5 file instead of copy-appending an
+    ever-growing checkpoint history at each interval.
+    """
 
     from jaxfun.io import write_checkpoint
 
@@ -49,11 +53,7 @@ def write_production_checkpoint(
         prng_state=prng_state,
     )
     try:
-        if mode == "a" and target.exists():
-            shutil.copy2(target, tmp)
-            write_mode = "a"
-        else:
-            write_mode = "w" if mode == "a" else mode
+        write_mode = "w" if mode == "a" else mode
         write_checkpoint(
             tmp,
             fields,
@@ -81,6 +81,7 @@ def production_checkpoint_attrs(
 
     production_dtype = str(
         _device_value(device_record, "production_run_dtype")
+        or _production_dtype_from_fields(fields)
         or os.environ.get("JAXFUN_PRODUCTION_DTYPE", "float32")
     )
     jax_enable_x64 = _device_value(device_record, "jax_enable_x64")
@@ -105,6 +106,15 @@ def production_checkpoint_attrs(
         "device_metadata_json": _json_attr(dict(device_record or {})),
         "prng_state_json": "" if prng_state is None else _json_attr(prng_state),
     }
+
+
+def _production_dtype_from_fields(fields: Mapping[str, Any]) -> str | None:
+    dtypes = _tree_dtypes(fields)
+    if any(dtype in {"float64", "complex128"} for dtype in dtypes):
+        return "float64"
+    if any(dtype in {"float32", "complex64"} for dtype in dtypes):
+        return "float32"
+    return None
 
 
 def _tree_dtypes(tree: Any) -> list[str]:

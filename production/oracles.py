@@ -600,7 +600,8 @@ def _run_taylor_couette_hydro_saturation(
         kz_mode=_kz_mode_from_spec(spec, solver.Lz, strict=False),
         amp=float(spec["initial_condition"].get("amplitude", 1.0e-4)),
     )
-    initial = solver.diagnostics(state)
+    initial_state = state
+    initial = solver.diagnostics(initial_state)
     diagnostic_rows: list[dict[str, Any]] = []
 
     def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
@@ -633,6 +634,7 @@ def _run_taylor_couette_hydro_saturation(
         diagnostics_every=diagnostics_every,
         state_kind="axisymmetric_tc_hydro_saturation",
         device_record=device_record,
+        on_diagnostics_row=collect_diagnostics,
         t0=t0,
         tstep0=tstep0,
     )
@@ -671,7 +673,7 @@ def _run_taylor_couette_hydro_saturation(
         "kinetic_energy": float(initial["E"]),
         "growth_rate_linear": float(eigenvalue.real),
         "divergence_l2": float(initial["continuity_l2"]),
-        "radial_velocity_linf": _radial_velocity_linf(solver, state),
+        "radial_velocity_linf": _radial_velocity_linf(solver, initial_state),
     }
     last = {
         "t": elapsed,
@@ -936,6 +938,7 @@ def _run_pcf_fluctuation_saturation(
         diagnostics_every=diagnostics_every,
         state_kind="pcf_fluctuation_saturation",
         device_record=device_record,
+        on_diagnostics_row=collect_diagnostics,
         t0=t0,
         tstep0=tstep0,
     )
@@ -1071,6 +1074,7 @@ def _run_pcf_primitive_mhd_saturation(
         diagnostics_every=diagnostics_every,
         state_kind="pcf_primitive_mhd_saturation",
         device_record=device_record,
+        on_diagnostics_row=collect_diagnostics,
         t0=t0,
         tstep0=tstep0,
     )
@@ -1397,6 +1401,7 @@ def _run_taylor_couette_mhd_saturation(
         diagnostics_every=diagnostics_every,
         state_kind="axisymmetric_tc_mhd_saturation",
         device_record=device_record,
+        on_diagnostics_row=collect_diagnostics,
         t0=t0,
         tstep0=tstep0,
     )
@@ -1629,11 +1634,13 @@ def _solve_with_optional_checkpoints(
     def on_snapshot(t: float, tstep: int, snapshot_state: Any) -> None:
         assert snapshot_path is not None
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_payload, snapshot_spaces = _snapshot_payload(solver, snapshot_state)
         write_uniform_snapshot(
             snapshot_path,
-            _snapshot_payload(solver, snapshot_state),
+            snapshot_payload,
             t=t,
             tstep=tstep,
+            spaces=snapshot_spaces,
             attrs={
                 "problem_id": spec["problem_id"],
                 "spec_hash": spec["spec_hash"],
@@ -1758,9 +1765,7 @@ def _monitor_every(
     ]
     if candidates:
         return min(int(value) for value in candidates)
-    if steps <= 0:
-        return 1
-    return min(100, max(1, int(steps)))
+    return None
 
 
 _DIVERGENCE_GUARD_LIMIT = 1.0e-2
@@ -1815,28 +1820,43 @@ def _tree_all_finite(tree: Any) -> bool:
     return bool(jax.device_get(jnp.all(jnp.asarray(checks))))
 
 
-def _snapshot_payload(solver: Any, state: Any) -> dict[str, Any]:
+def _snapshot_payload(solver: Any, state: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     def real_fields(names: tuple[str, ...], values: tuple[Any, ...]) -> dict[str, Any]:
         return {name: jnp.real(value) for name, value in zip(names, values, strict=True)}
+
+    def spaces_for(names: tuple[str, ...]) -> dict[str, Any]:
+        space = _snapshot_space(solver)
+        return {} if space is None else {name: space for name in names}
 
     if hasattr(solver, "fields_physical"):
         fields = tuple(solver.fields_physical(state))
         if len(fields) >= 6:
-            return real_fields(
-                ("u_x", "u_y", "u_z", "b_x", "b_y", "b_z"), fields[:6]
-            )
+            names = ("u_x", "u_y", "u_z", "b_x", "b_y", "b_z")
+            return real_fields(names, fields[:6]), spaces_for(names)
         if len(fields) >= 3:
-            return real_fields(("u_x", "u_y", "u_z"), fields[:3])
+            names = ("u_x", "u_y", "u_z")
+            return real_fields(names, fields[:3]), spaces_for(names)
     if hasattr(solver, "velocity_physical"):
+        names = ("u_x", "u_y", "u_z")
         u = tuple(solver.velocity_physical(state))
-        return real_fields(("u_x", "u_y", "u_z"), u[:3])
+        return real_fields(names, u[:3]), spaces_for(names)
     if hasattr(solver, "total_velocity_physical"):
+        names = ("u_x", "u_y", "u_z")
         u = tuple(solver.total_velocity_physical(state))
-        return real_fields(("u_x", "u_y", "u_z"), u[:3])
+        return real_fields(names, u[:3]), spaces_for(names)
     if hasattr(solver, "_backward_velocity") and hasattr(state, "u"):
+        names = ("u_x", "u_y", "u_z")
         u = tuple(solver._backward_velocity(state.u))
-        return real_fields(("u_x", "u_y", "u_z"), u[:3])
+        return real_fields(names, u[:3]), spaces_for(names)
     raise TypeError(f"solver {type(solver).__name__} does not expose snapshot fields")
+
+
+def _snapshot_space(solver: Any) -> Any | None:
+    for name in ("T0", "TD", "TC", "TP"):
+        space = getattr(solver, name, None)
+        if space is not None and hasattr(space, "mesh"):
+            return space
+    return None
 
 
 def _write_snapshot_manifest(

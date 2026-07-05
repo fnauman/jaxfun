@@ -88,17 +88,29 @@ def pytest_testnodedown(node, error) -> None:
     node.config._jaxfun_live_shenfun_selected = (
         getattr(node.config, "_jaxfun_live_shenfun_selected", 0) + selected
     )
+    if node.workeroutput.get("jaxfun_x64_ok") is False:
+        node.config._jaxfun_x64_worker_failed = True
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
     config = session.config
     if hasattr(config, "workerinput"):
+        if exitstatus == pytest.ExitCode.OK:
+            import jax
+
+            config.workeroutput["jaxfun_x64_ok"] = bool(
+                jax.config.read("jax_enable_x64")
+            )
         return
     if exitstatus == pytest.ExitCode.OK:
         import jax
 
         expected_x64 = getattr(config, "_jaxfun_expected_x64", None)
-        if expected_x64 is not None and bool(jax.config.read("jax_enable_x64")) != expected_x64:
+        x64_changed = expected_x64 is not None and bool(
+            jax.config.read("jax_enable_x64")
+        ) != expected_x64
+        x64_worker_failed = bool(getattr(config, "_jaxfun_x64_worker_failed", False))
+        if x64_changed or x64_worker_failed:
             reporter = config.pluginmanager.get_plugin("terminalreporter")
             if reporter is not None:
                 reporter.write_line("jax_enable_x64 changed during the test session")

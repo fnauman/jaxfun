@@ -809,6 +809,10 @@ def _golden_tolerance_model(
             continue
         if key == "stationarity_relative_change":
             scalar_tolerances[key] = float(stationarity_tol)
+        elif key in {"stationarity_previous_mean", "stationarity_current_mean"}:
+            scalar_tolerances[key] = max(abs(float(value)) * float(stationarity_tol), 1.0e-30)
+        elif key == "stationarity_window_samples":
+            scalar_tolerances[key] = 1.0
         else:
             scalar_tolerances[key] = 0.0
     return model

@@ -59,7 +59,7 @@ def capture_device_record(
     parity tests that explicitly need it.
     """
 
-    production_dtype = configure_production_dtype(
+    requested_production_dtype = configure_production_dtype(
         apply_to_process=apply_dtype_to_process
     )
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -79,6 +79,11 @@ def capture_device_record(
     import jaxlib  # noqa: I001
     import jaxfun  # noqa: F401,I001 - import applies jaxfun dtype/prealloc policy
 
+    live_production_dtype = (
+        requested_production_dtype
+        if apply_dtype_to_process
+        else _live_production_dtype(jax)
+    )
     devices = jax.devices()
     backend = jax.default_backend()
     mode = "gpu" if backend in {"gpu", "cuda"} else "cpu_smoke"
@@ -93,7 +98,8 @@ def capture_device_record(
         "mode": mode,
         "jax_enable_x64": bool(jax.config.read("jax_enable_x64")),
         "jax_default_scalar_dtype": str(jnp.asarray(1.0).dtype),
-        "production_run_dtype": production_dtype,
+        "production_run_dtype": live_production_dtype,
+        "requested_production_dtype": requested_production_dtype,
         "jaxfun_enable_x64": os.environ.get("JAXFUN_ENABLE_X64"),
         "jax_enable_x64_env": os.environ.get("JAX_ENABLE_X64"),
         "xla_python_client_preallocate": os.environ.get(
@@ -102,6 +108,10 @@ def capture_device_record(
         "jax_platforms": os.environ.get("JAX_PLATFORMS"),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
     }
+
+
+def _live_production_dtype(jax_module: Any) -> str:
+    return "float64" if bool(jax_module.config.read("jax_enable_x64")) else "float32"
 
 
 def production_run_env(

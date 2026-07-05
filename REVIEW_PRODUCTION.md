@@ -14,26 +14,52 @@ This branch now implements the review's non-long-run fixes. The original
 sections below are kept as the audit record; this section is the current status.
 No intentionally long saturation campaigns were rerun as part of the fix pass.
 
+### 0.1 Follow-up review disposition (2026-07-05)
+
+The follow-up code review correctly identified one blocker in the F-13 hardening:
+the saturation oracles built stationarity collectors but did not pass them into
+the cadenced solve helper. That made full generated-saturation runs unsatisfiable
+because the stationarity series collapsed to first/last rows only. This is now
+fixed for the four saturation oracle paths, and a tiny full-scope regression
+exercises the pass branch without `--steps` or a reduced resolution tier.
+
+The same pass also fixes the adjacent production hazards that would have affected
+the next GPU campaign: stationarity means/sample counts now get nonzero golden
+tolerances; production checkpoints are compact latest-step HDF5 files written via
+temp-file atomic replace rather than copy-appending an ever-growing file;
+in-process device capture labels the live dtype unless the CLI explicitly applies
+the production dtype policy, and checkpoint dtype metadata falls back to field
+dtypes; snapshot writes now pass a tensor-product function space so XDMF/HDF5
+meshes carry physical coordinates; the no-cadence fast solve path is restored;
+the TC-hydro resumed time-series seed row no longer mixes seed energy with
+resumed-state velocity; and the x64 guard reports worker-side dtype pollution
+under xdist.
+
+Still open from that review: snapshot writes are not yet atomic, the persistent
+JAX compilation-cache setting remains a process-global mutation, duplicate PCF
+reference-driver code remains cleanup work, and `pcf_mhd_divfree` still needs the
+deferred long float64 GPU campaign after these infrastructure fixes.
+
 | Finding | Current status |
 |---|---|
-| F-1 dtype/test pollution | Fixed. Production dtype helpers are side-effect-free by default; only CLI entrypoints apply the process dtype policy, and `tests/conftest.py` guards x64 state. |
+| F-1 dtype/test pollution | Fixed. Production dtype helpers are side-effect-free by default; only CLI entrypoints apply the process dtype policy. In-process capture now labels the live dtype, checkpoint metadata falls back to field dtypes, and `tests/conftest.py` guards x64 state including xdist workers. |
 | F-2 live shenfun TC parity | Fixed. The parity harness masks the documented TC Nyquist convention and accounts for the axisymmetric MRI amplitude convention. Full live parity now passes. |
 | F-2b primitive PCF finite-amplitude guard | Fixed. Axisymmetric and 3D primitive PCF finite-amplitude coefficient parity tests were added against live shenfun. |
 | F-2c validation entrypoint semantics | Fixed. Default heavy/all validation prints a `SMOKE ONLY` banner, smoke rows remain scoped as `bounded_saturation_smoke`, generated goldens carry run provenance, and `parity-saturation` compares promoted saturation goldens. |
 | F-3 checkpoint resume | Fixed. `run_problem.py --resume` reloads the latest checkpoint, validates spec/dtype metadata, reconstructs solver state, continues `tstep`, and appends diagnostics. |
 | F-4 adjoint memory/remat | Fixed for the supported solve paths. KMM and CNAB2 solves use `scan_steps` with single-device `jax.checkpoint`; multi-device paths avoid remat where it conflicts with sharded execution. |
 | F-5 MHD/TC differentiability | Fixed. `MHDState` is a pytree, CNAB2 `have_old` is a real leaf, and differentiability tests now cover MHD, primitive PCF, and TC states. |
-| F-6 snapshots | Fixed. `--snapshot-every` writes uniform HDF5 snapshots, XDMF, and a manifest next to checkpoints. |
+| F-6 snapshots | Fixed for geometry. `--snapshot-every` writes uniform HDF5 snapshots, XDMF, and a manifest next to checkpoints, now with function-space mesh metadata for physical coordinates. Snapshot atomicity remains a lower-priority open item before large ROM data generation. |
 | F-7 dtype policy | Fixed for the reviewed production contracts. CLI production remains float32 by default, objectives require x64, parity uses float64, and a dealiased primitive PCF short-window float32-vs-float64 regression test was added. |
-| F-8 throughput visibility | Mitigated. KMM eager-loop dispatch was removed, persistent compilation cache is configured per run, and metadata records `solver_steps`, `ms_per_step`, and `steps_per_second`. Further primitive-solver kernel optimization remains performance work, not a correctness gate. |
+| F-8 throughput visibility | Mitigated. KMM eager-loop dispatch was removed, no-cadence solves use the fast `solver.solve` path again, persistent compilation cache is configured per run, and metadata records `solver_steps`, `ms_per_step`, and `steps_per_second`. Further primitive-solver kernel optimization remains performance work, not a correctness gate. |
 | F-9 minimal-seed loop | Fixed for the hydro-KMM DAL path. `minimal_seed_ascent` adds projected ascent, retraction to fixed energy, backtracking, and history. |
 | F-10 PCF-MHD saturation | Not rerun; long simulation skipped as requested. `pcf_mhd_divfree` remains documented as a retained failed generated-saturation candidate. A longer/higher-resolution GPU campaign is still required to decide physics versus horizon/resolution. |
 | F-11 production-envelope validation | Improved. Primitive PCF now has a dealiased live parity case, a float32-vs-float64 short-window check, and full live parity passes locally against shenfun 4.2.2. |
 | F-12 parameter sensitivity | Fixed by contract. Production objectives require x64 and expose `finite_difference_parameter_sensitivity`; solver parameters remain static and should be changed by rebuilding solvers. |
-| F-13 saturation gate holes | Fixed. Full generated saturation requires finite numeric diagnostics, boolean `saturation_check_passed`, and a windowed stationarity check. |
+| F-13 saturation gate holes | Fixed after follow-up. Full generated saturation requires finite numeric diagnostics, boolean `saturation_check_passed`, and a windowed stationarity check; the stationarity collector is wired through cadenced diagnostics and covered by a full-scope pass-branch regression. |
 | F-14 mid-run NaN blindness | Fixed. Production cadence monitoring checks state finiteness and divergence drift during long runs. |
 | F-15 primitive-MHD divergence drift | Mitigated. Divergence diagnostics remain gated and a mid-run divergence guard now fails early on drift; no long-run projection campaign was run. |
-| F-16 checkpoint atomicity | Fixed. Production checkpoint writes are copy-on-write temp files followed by atomic replace. |
+| F-16 checkpoint atomicity | Fixed and bounded. Production checkpoints now rewrite a compact latest-step HDF5 file through a temp file followed by atomic replace, avoiding the prior copy-append O(N^2) growth path. |
 | F-17 secondary integrity items | Fixed or documented: explicit goldens validate fully, tolerance models are checked and hashed, reports can take exact metadata paths, same-backend device comparisons fail unless allowed, implemented-spec allowlists/schema validation are enforced, `saturation_check_passed` is type-checked, shearpy defaults match the reference, CI pins shenfun 4.2.2, and PCF SPMD parity was added. |
 
 Current verification from this fix pass:

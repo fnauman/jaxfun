@@ -325,6 +325,108 @@ def test_full_saturation_check_requires_stationarity(tmp_path):
         _assert_required_saturation_checks(metadata)
 
 
+def test_full_saturation_oracle_collects_stationarity_rows_and_writes_golden(
+    tmp_path, monkeypatch
+):
+    import jax.numpy as jnp
+
+    import examples.taylor_couette_dns_jax as tc_dns
+    import production.oracles as oracles
+
+    class FakeCircularCouette:
+        R1 = 1.0
+        b = 0.0
+
+        def __init__(self, *_args):
+            pass
+
+    class FakeState:
+        def __init__(self, step: int):
+            self.step = int(step)
+
+    class FakeTCSaturationSolver:
+        Lz = 1.0
+        dt = 0.01
+        nu = 0.01
+
+        def __init__(self, *_args, **kwargs):
+            self.Lz = float(kwargs.get("Lz", self.Lz))
+            self.dt = float(kwargs.get("dt", self.dt))
+            self.nu = float(kwargs.get("nu", self.nu))
+
+        def seed_linear_eigenmode(self, *_args, **_kwargs):
+            return FakeState(0), complex(0.1, 0.0)
+
+        def diagnostics(self, state):
+            energy = 1.0e-6 if state.step == 0 else 2.0e-3
+            return {"E": jnp.asarray(energy), "continuity_l2": 0.0, "div_linf": 0.0}
+
+        def solve_with_cadence(
+            self,
+            state,
+            steps,
+            cadence,
+            *,
+            block_size=1,
+            on_diagnostics=None,
+            on_snapshot=None,
+            on_checkpoint=None,
+            should_stop=None,
+            t0=0.0,
+            tstep0=0,
+        ):
+            out = state
+            for local_step in range(1, int(steps) + 1):
+                tstep = int(tstep0) + local_step
+                t = float(t0) + local_step * self.dt
+                out = FakeState(tstep)
+                if on_diagnostics is not None and tstep % cadence.diagnostics_every == 0:
+                    on_diagnostics(t, tstep, self.diagnostics(out))
+                if should_stop is not None:
+                    should_stop(t, tstep, out)
+            return out
+
+        def solve(self, state, steps):
+            return FakeState(state.step + int(steps))
+
+    monkeypatch.setattr(tc_dns, "CircularCouette", FakeCircularCouette)
+    monkeypatch.setattr(tc_dns, "AxisymmetricTCDNSJax", FakeTCSaturationSolver)
+    monkeypatch.setattr(oracles, "_radial_velocity_linf", lambda _solver, _state: 0.0)
+    monkeypatch.setattr(oracles, "_tc_inner_torque", lambda _solver, _state: 1.0)
+
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "tc_supercritical_saturation.json").read_text()
+    )
+    spec["time"] = {**spec["time"], "dt": 0.01, "final_time": 0.04}
+    spec["resolution"] = {**spec["resolution"], "production": {"Nr": 4, "Nz": 4}}
+    spec_path = tmp_path / "tc_fake_full_saturation.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    out = tmp_path / "full-saturation"
+    metadata = run_problem(
+        config_path=spec_path,
+        out=out,
+        write_golden=True,
+        capture_device=False,
+    )
+
+    assert metadata["validation_scope"]["kind"] == "generated_saturated_golden"
+    assert metadata["saturation_checks"]["passed"] is True
+    assert metadata["saturation_checks"]["stationarity_check_passed"] is True
+    rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) >= 4
+    assert rows[-1]["stationarity_check_passed"] is True
+
+    golden = validate_golden(out / "golden" / "golden.json")
+    tolerances = golden["tolerance_model"]["scalars"]
+    assert tolerances["stationarity_previous_mean"] > 0.0
+    assert tolerances["stationarity_current_mean"] > 0.0
+    assert tolerances["stationarity_window_samples"] == 1.0
+
+
 @pytest.mark.parametrize(
     "problem_id",
     ["pipe_hagen_poiseuille_v1", "pipe_womersley_v1"],
@@ -975,12 +1077,15 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
     assert record.attrs["solver_schema_version"] == 1
     assert record.attrs["diagnostics_path"].endswith("diagnostics.jsonl")
     dtype_metadata = json.loads(record.attrs["dtype_metadata_json"])
-    assert dtype_metadata["production_run_dtype"] == "float32"
+    assert dtype_metadata["production_run_dtype"] == "float64"
     assert dtype_metadata["field_dtypes"]
     assert dtype_metadata["field_shapes"]
     device_metadata = json.loads(record.attrs["device_metadata_json"])
     assert device_metadata == {"capture_skipped": True}
     assert record.attrs["prng_state_json"] == ""
+    h5py = pytest.importorskip("h5py")
+    with h5py.File(checkpoint_path, "r") as h5:
+        assert sorted(h5["checkpoints"].keys()) == ["4"]
 
     resumed_metadata = run_problem(
         config_path=spec_path,
@@ -994,6 +1099,8 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
     assert resumed_metadata["timing"]["solver_steps"] == 2
     record = read_checkpoint(checkpoint_path)
     assert record.tstep == 6
+    with h5py.File(checkpoint_path, "r") as h5:
+        assert sorted(h5["checkpoints"].keys()) == ["6"]
     payload = record.fields["state"]
     restarted = AxisymmetricTCState(
         u=tuple(payload["u"]),
@@ -1030,7 +1137,7 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
 
 
 def test_tc_dns_runner_writes_uniform_snapshots(tmp_path):
-    pytest.importorskip("h5py")
+    h5py = pytest.importorskip("h5py")
     spec = json.loads(
         (
             ROOT / "production" / "examples" / "taylor_couette_hydro_dns_v1.json"
@@ -1055,6 +1162,9 @@ def test_tc_dns_runner_writes_uniform_snapshots(tmp_path):
     manifest = json.loads((out / "snapshots" / "manifest.json").read_text())
     assert manifest["problem_id"] == "taylor_couette_hydro_dns_v1"
     assert manifest["snapshot_every"] == 1
+    with h5py.File(out / "snapshots" / "snapshots.h5", "r") as h5:
+        assert "snapshots/1/mesh/u_x/x0" in h5
+        assert "snapshots/1/mesh/u_x/x1" in h5
 
 
 def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
