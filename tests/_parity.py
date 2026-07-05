@@ -536,38 +536,32 @@ def pcf_fluctuation_reference(
 
 
 
-def pcf_primitive_axisymmetric_reference(
+def _pcf_primitive_reference(
     *,
-    steps: tuple[int, ...] = (10,),
-    n: tuple[int, int] = (8, 6),
-    dt: float = 1.0e-3,
-    amp: float = 1.0e-3,
-    family: str = "C",
-    dealias: float = 1.0,
-    include_coefficients: bool = False,
+    class_name: str,
+    solver_kwargs: dict[str, Any],
+    seed_kwargs: dict[str, Any],
+    steps: tuple[int, ...],
+    amp: float,
+    include_coefficients: bool,
 ) -> list[dict]:
-    """Run live shenfun primitive-b axisymmetric PCF MRI DNS parity rows."""
+    solver_args = ",\n                ".join(
+        f"{key}={value!r}" for key, value in solver_kwargs.items()
+    )
+    seed_args = ", ".join(f"{key}={value!r}" for key, value in seed_kwargs.items())
+    if seed_args:
+        seed_args = f"{seed_args}, "
     return run_shenfun_json(
         textwrap.dedent(
             f"""
             import json
             import numpy as np
-            from pcf_mri_primitive import AxisymmetricPCFMRIDNS
+            from pcf_mri_primitive import {class_name}
 
-            solver = AxisymmetricPCFMRIDNS(
-                S=1.0,
-                omega=2.0/3.0,
-                B0=0.1,
-                nu=1.0e-3,
-                eta_mag=1.0e-3,
-                Nx={int(n[0])!r},
-                Nz={int(n[1])!r},
-                Lz=1.0,
-                dt={dt!r},
-                family={family!r},
-                dealias={dealias!r},
+            solver = {class_name}(
+                {solver_args},
             )
-            eigenvalue = solver.seed_linear_eigenmode(kz_mode=1, amp={amp!r})
+            eigenvalue = solver.seed_linear_eigenmode({seed_args}amp={amp!r})
 
             def complex_nested(arr):
                 values = np.asarray(arr)
@@ -593,6 +587,41 @@ def pcf_primitive_axisymmetric_reference(
             """
         )
     )
+
+
+
+def pcf_primitive_axisymmetric_reference(
+    *,
+    steps: tuple[int, ...] = (10,),
+    n: tuple[int, int] = (8, 6),
+    dt: float = 1.0e-3,
+    amp: float = 1.0e-3,
+    family: str = "C",
+    dealias: float = 1.0,
+    include_coefficients: bool = False,
+) -> list[dict]:
+    """Run live shenfun primitive-b axisymmetric PCF MRI DNS parity rows."""
+    return _pcf_primitive_reference(
+        class_name="AxisymmetricPCFMRIDNS",
+        solver_kwargs={
+            "S": 1.0,
+            "omega": 2.0 / 3.0,
+            "B0": 0.1,
+            "nu": 1.0e-3,
+            "eta_mag": 1.0e-3,
+            "Nx": int(n[0]),
+            "Nz": int(n[1]),
+            "Lz": 1.0,
+            "dt": dt,
+            "family": family,
+            "dealias": dealias,
+        },
+        seed_kwargs={"kz_mode": 1},
+        steps=steps,
+        amp=amp,
+        include_coefficients=include_coefficients,
+    )
+
 
 
 def pcf_primitive_3d_reference(
@@ -606,54 +635,30 @@ def pcf_primitive_3d_reference(
     include_coefficients: bool = False,
 ) -> list[dict]:
     """Run live shenfun primitive-b 3D PCF MRI DNS parity rows."""
-    return run_shenfun_json(
-        textwrap.dedent(
-            f"""
-            import json
-            import numpy as np
-            from pcf_mri_primitive import PCFMRIDNS
-
-            solver = PCFMRIDNS(
-                S=1.0,
-                omega=2.0/3.0,
-                B0=0.1,
-                nu=1.0e-3,
-                eta_mag=1.0e-3,
-                Nx={int(n[0])!r},
-                Ny={int(n[1])!r},
-                Nz={int(n[2])!r},
-                Ly=4.0,
-                Lz=1.0,
-                dt={dt!r},
-                family={family!r},
-                dealias={dealias!r},
-            )
-            eigenvalue = solver.seed_linear_eigenmode(ky_mode=1, kz_mode=1, amp={amp!r})
-
-            def complex_nested(arr):
-                values = np.asarray(arr)
-                return np.stack((values.real, values.imag), axis=-1).tolist()
-
-            rows = []
-            tstep = 0
-            for target in {tuple(int(step) for step in steps)!r}:
-                if target < tstep:
-                    raise ValueError('steps must be sorted increasingly')
-                solver.run((target - tstep) * solver.dt)
-                tstep = target
-                row = solver.diagnostics(solver._t, solver._tstep)
-                row['steps'] = int(target)
-                row['eigenvalue_real'] = float(eigenvalue.real)
-                row['eigenvalue_imag'] = float(eigenvalue.imag)
-                if {include_coefficients!r}:
-                    row['coefficients'] = {{
-                        'x': [complex_nested(solver.x[i]) for i in range(6)],
-                    }}
-                rows.append(row)
-            print(json.dumps(rows))
-            """
-        )
+    return _pcf_primitive_reference(
+        class_name="PCFMRIDNS",
+        solver_kwargs={
+            "S": 1.0,
+            "omega": 2.0 / 3.0,
+            "B0": 0.1,
+            "nu": 1.0e-3,
+            "eta_mag": 1.0e-3,
+            "Nx": int(n[0]),
+            "Ny": int(n[1]),
+            "Nz": int(n[2]),
+            "Ly": 4.0,
+            "Lz": 1.0,
+            "dt": dt,
+            "family": family,
+            "dealias": dealias,
+        },
+        seed_kwargs={"ky_mode": 1, "kz_mode": 1},
+        steps=steps,
+        amp=amp,
+        include_coefficients=include_coefficients,
     )
+
+
 
 def pcf_mhd_reference(
     *,

@@ -48,8 +48,8 @@ Current implemented entry points:
   saturation goldens; this is a full-window mode and may be long.
 - `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log` with command/status/duration, and writes `runs/_report/results.json`; strict parity subprocesses default to `JAXFUN_VALIDATE_PARITY_DTYPE=float64` for the committed `1e-10` goldens. `all`, `heavy`, and direct production run IDs execute bounded start-tier float32 smoke by default (`--resolution-tier start --steps 2`) unless `--full`, `--validate-only`, `--smoke`, or explicit run args are supplied; `--smoke` selects the lighter checked-in `smoke` resolution tier. Non-validate heavy runs also write `golden/golden.json` and `checkpoints/checkpoints.h5` by default, but reduced/step-limited saturation artifacts are labeled `bounded_saturation_smoke`, not full production saturation goldens.
 - `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths through `production/checkpoint.py`, including spec hash, dtype/shape metadata, device metadata, and diagnostics pointer attrs.
-- `production/run_problem.py --snapshot-every K` writes uniform HDF5 snapshots,
-  an XDMF sidecar, and a snapshot manifest. `--diagnostics-every K` controls
+- `production/run_problem.py --snapshot-every K` writes uniform HDF5 snapshots as atomic per-step HDF5 shards,
+  a `snapshots.h5` external-link index, an XDMF sidecar, and a snapshot manifest. `--diagnostics-every K` controls
   host-side diagnostic rows and mid-run finite/divergence monitoring cadence.
 - Runner metadata records `compilation_cache` plus timing fields such as
   `solver_steps`, `ms_per_step`, and `steps_per_second` for DNS paths.

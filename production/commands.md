@@ -206,9 +206,10 @@ a reduced Plane Couette solver.
 ```
 
 This writes `checkpoints/checkpoints.h5` with coefficient-space state payloads
-readable by `jaxfun.io.read_checkpoint`, plus `snapshots/snapshots.h5`,
-`snapshots/snapshots.xdmf`, and `snapshots/manifest.json` when
-`--snapshot-every` is provided. Production checkpoint attrs include the spec
+readable by `jaxfun.io.read_checkpoint`. With `--snapshot-every`, it writes
+atomic per-step HDF5 shards under `snapshots/steps/`, rebuilds
+`snapshots/snapshots.h5` as an external-link index, and writes
+`snapshots/snapshots.xdmf` plus `snapshots/manifest.json`. Production checkpoint attrs include the spec
 hash, schema versions, dtype/shape metadata, device metadata, and the diagnostics
 path. `--resume` defaults `--config` and `--out` to the resumed run directory when
 omitted, validates the checkpoint spec hash/dtype metadata, continues `tstep`,

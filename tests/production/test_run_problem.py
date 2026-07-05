@@ -128,6 +128,30 @@ def test_validate_only_writes_metadata_without_claiming_solver_execution(tmp_pat
     assert Path(metadata["compilation_cache"]["path"]).exists()
 
 
+def test_run_problem_restores_compilation_cache_config(tmp_path):
+    import jax
+
+    previous_dir = getattr(jax.config, "jax_compilation_cache_dir", None)
+    previous_min_time = getattr(
+        jax.config, "jax_persistent_cache_min_compile_time_secs", None
+    )
+
+    metadata = run_problem(
+        config_path=ROOT / "production" / "runs" / "tc_supercritical_saturation.json",
+        out=tmp_path / "run",
+        validate_only=True,
+        capture_device=False,
+    )
+
+    assert metadata["compilation_cache"]["enabled"] is True
+    assert metadata["compilation_cache"]["restores_process_config"] is True
+    assert getattr(jax.config, "jax_compilation_cache_dir", None) == previous_dir
+    assert (
+        getattr(jax.config, "jax_persistent_cache_min_compile_time_secs", None)
+        == previous_min_time
+    )
+
+
 def test_resolution_tier_validate_only_materializes_effective_spec(tmp_path):
     out = tmp_path / "run"
     metadata = run_problem(
@@ -425,6 +449,101 @@ def test_full_saturation_oracle_collects_stationarity_rows_and_writes_golden(
     assert tolerances["stationarity_previous_mean"] > 0.0
     assert tolerances["stationarity_current_mean"] > 0.0
     assert tolerances["stationarity_window_samples"] == 1.0
+
+
+def test_monitor_reuses_cadenced_diagnostics_for_divergence_guard():
+    import production.oracles as oracles
+    from jaxfun.io import run_with_cadence
+
+    class CountingSolver:
+        dt = 1.0
+
+        def __init__(self):
+            self.diagnostic_calls = 0
+
+        def solve(self, state, steps):
+            return int(state) + int(steps)
+
+        def solve_with_cadence(
+            self,
+            state,
+            steps,
+            cadence,
+            *,
+            block_size=1,
+            on_diagnostics=None,
+            on_snapshot=None,
+            on_checkpoint=None,
+            should_stop=None,
+            t0=0.0,
+            tstep0=0,
+        ):
+            return run_with_cadence(
+                self.solve,
+                state,
+                steps=steps,
+                dt=self.dt,
+                cadence=cadence,
+                block_size=block_size,
+                diagnostics=self.diagnostics,
+                on_diagnostics=on_diagnostics,
+                on_snapshot=on_snapshot,
+                on_checkpoint=on_checkpoint,
+                should_stop=should_stop,
+                t0=t0,
+                tstep0=tstep0,
+            )
+
+        def diagnostics(self, _state):
+            self.diagnostic_calls += 1
+            return {"divergence_l2": 0.0}
+
+    solver = CountingSolver()
+    rows = []
+
+    out = oracles._solve_with_optional_checkpoints(
+        solver,
+        0,
+        3,
+        spec={
+            "problem_id": "unit",
+            "spec_hash": "hash",
+            "golden": {"artifact_id": "unit"},
+        },
+        out_dir=None,
+        checkpoint_every=None,
+        snapshot_every=None,
+        diagnostics_every=1,
+        state_kind="unit",
+        on_diagnostics_row=lambda t, tstep, diag: rows.append((t, tstep, diag)),
+    )
+
+    assert out == 3
+    assert len(rows) == 3
+    assert solver.diagnostic_calls == 3
+
+
+def test_divergence_key_matching_is_explicit():
+    import production.oracles as oracles
+    import production.run_problem as runner
+
+    positives = [
+        "divL2",
+        "div_linf",
+        "divu",
+        "divb_l2",
+        "divergence_b",
+        "continuity_l2",
+        "scalars.divergence_l2",
+    ]
+    negatives = ["dividend_yield", "divide_error", "divergent_energy"]
+
+    for key in positives:
+        assert oracles._is_divergence_key(key)
+        assert runner._is_divergence_diagnostic(key)
+    for key in negatives:
+        assert not oracles._is_divergence_key(key)
+        assert not runner._is_divergence_diagnostic(key)
 
 
 @pytest.mark.parametrize(
@@ -1162,7 +1281,11 @@ def test_tc_dns_runner_writes_uniform_snapshots(tmp_path):
     manifest = json.loads((out / "snapshots" / "manifest.json").read_text())
     assert manifest["problem_id"] == "taylor_couette_hydro_dns_v1"
     assert manifest["snapshot_every"] == 1
-    with h5py.File(out / "snapshots" / "snapshots.h5", "r") as h5:
+    snapshot_path = out / "snapshots" / "snapshots.h5"
+    step_path = out / "snapshots" / "steps" / "snapshot_00000001.h5"
+    assert step_path.exists()
+    with h5py.File(snapshot_path, "r") as h5:
+        assert isinstance(h5["snapshots"].get("1", getlink=True), h5py.ExternalLink)
         assert "snapshots/1/mesh/u_x/x0" in h5
         assert "snapshots/1/mesh/u_x/x1" in h5
 

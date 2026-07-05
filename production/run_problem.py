@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -89,151 +90,154 @@ def run_problem(
     resume_record = load_resume_checkpoint(resume) if resume is not None else None
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    compilation_cache = _configure_compilation_cache(out_dir)
-    effective_diagnostics_every = _effective_diagnostics_every(
-        config.spec,
-        diagnostics_every=diagnostics_every,
-        steps=steps,
-        resolution_tier=resolution_tier,
-    )
-
-    device_record = (
-        capture_device_record(device) if capture_device else {"capture_skipped": True}
-    )
-    if resume_record is not None:
-        validate_resume_checkpoint(resume_record, config.spec, device_record)
-
-    metadata = build_metadata(
-        config,
-        config_path=Path(config_path),
-        out_dir=out_dir,
-        device_record=device_record,
-        compare_golden=compare_golden,
-        shenfun_golden=Path(shenfun_golden) if shenfun_golden is not None else None,
-        write_golden=write_golden,
-        requested_device=device,
-        steps=steps,
-        checkpoint_every=checkpoint_every,
-        snapshot_every=snapshot_every,
-        diagnostics_every=effective_diagnostics_every,
-        resolution_tier=resolution_tier,
-        validate_only=validate_only,
-        resume=Path(resume) if resume is not None else None,
-        compilation_cache=compilation_cache,
-    )
-    _write_json(out_dir / "metadata.json", metadata)
-
-    if validate_only:
-        return metadata
-
-    solver_started_at = _utc_timestamp()
-    solver_start = time.perf_counter()
-    solver_steps = _executed_solver_steps(
-        config.spec, steps=steps, resume_record=resume_record
-    )
+    compilation_cache, restore_compilation_cache = _configure_compilation_cache(out_dir)
     try:
-        diagnostics = run_supported_spec(
+        effective_diagnostics_every = _effective_diagnostics_every(
             config.spec,
+            diagnostics_every=diagnostics_every,
             steps=steps,
+            resolution_tier=resolution_tier,
+        )
+
+        device_record = (
+            capture_device_record(device) if capture_device else {"capture_skipped": True}
+        )
+        if resume_record is not None:
+            validate_resume_checkpoint(resume_record, config.spec, device_record)
+
+        metadata = build_metadata(
+            config,
+            config_path=Path(config_path),
             out_dir=out_dir,
+            device_record=device_record,
+            compare_golden=compare_golden,
+            shenfun_golden=Path(shenfun_golden) if shenfun_golden is not None else None,
+            write_golden=write_golden,
+            requested_device=device,
+            steps=steps,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
             diagnostics_every=effective_diagnostics_every,
-            device_record=device_record,
-            resume_checkpoint=resume_record,
-        )
-    except ProductionOracleNotImplementedError as exc:
-        metadata["timing"] = _solver_timing(
-            solver_started_at, solver_start, solver_steps=solver_steps
+            resolution_tier=resolution_tier,
+            validate_only=validate_only,
+            resume=Path(resume) if resume is not None else None,
+            compilation_cache=compilation_cache,
         )
         _write_json(out_dir / "metadata.json", metadata)
-        raise SolverExecutionNotImplementedError(
-            f"{exc}; contract validation metadata was written, but no DNS "
-            "or golden comparison was run"
-        ) from exc
-    except Exception as exc:
+
+        if validate_only:
+            return metadata
+
+        solver_started_at = _utc_timestamp()
+        solver_start = time.perf_counter()
+        solver_steps = _executed_solver_steps(
+            config.spec, steps=steps, resume_record=resume_record
+        )
+        try:
+            diagnostics = run_supported_spec(
+                config.spec,
+                steps=steps,
+                out_dir=out_dir,
+                checkpoint_every=checkpoint_every,
+                snapshot_every=snapshot_every,
+                diagnostics_every=effective_diagnostics_every,
+                device_record=device_record,
+                resume_checkpoint=resume_record,
+            )
+        except ProductionOracleNotImplementedError as exc:
+            metadata["timing"] = _solver_timing(
+                solver_started_at, solver_start, solver_steps=solver_steps
+            )
+            _write_json(out_dir / "metadata.json", metadata)
+            raise SolverExecutionNotImplementedError(
+                f"{exc}; contract validation metadata was written, but no DNS "
+                "or golden comparison was run"
+            ) from exc
+        except Exception as exc:
+            metadata["timing"] = _solver_timing(
+                solver_started_at, solver_start, solver_steps=solver_steps
+            )
+            metadata["execution"] = {
+                "status": "failed",
+                "solver_execution_wired": True,
+                "execution_kind": _execution_kind(config.spec),
+                "failure_reason": _exception_message(exc),
+            }
+            _write_json(out_dir / "metadata.json", metadata)
+            raise
         metadata["timing"] = _solver_timing(
             solver_started_at, solver_start, solver_steps=solver_steps
+        )
+
+        _write_json(out_dir / "spec.json", config.spec)
+        _write_diagnostics(
+            out_dir / "diagnostics.jsonl",
+            diagnostics,
+            append=resume_record is not None and (out_dir / "diagnostics.jsonl").exists(),
         )
         metadata["execution"] = {
-            "status": "failed",
+            "status": "completed",
             "solver_execution_wired": True,
             "execution_kind": _execution_kind(config.spec),
-            "failure_reason": _exception_message(exc),
         }
+        metadata["validation_scope"] = _validation_scope_metadata(
+            config.spec,
+            diagnostics,
+            device_record=device_record,
+            compare_golden=compare_golden,
+            steps=steps,
+            resolution_tier=resolution_tier,
+        )
+        metadata["saturation_checks"] = _saturation_check_metadata(
+            diagnostics, validation_scope=metadata["validation_scope"]
+        )
+        metadata["validation_floor"] = _validation_floor_metadata(
+            diagnostics, validation_scope=metadata["validation_scope"]
+        )
+        metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
         _write_json(out_dir / "metadata.json", metadata)
-        raise
-    metadata["timing"] = _solver_timing(
-        solver_started_at, solver_start, solver_steps=solver_steps
-    )
+        _assert_validation_floor_checks(metadata)
+        _assert_required_saturation_checks(metadata)
+        checkpoint_path = out_dir / "checkpoints" / "checkpoints.h5"
+        if checkpoint_path.exists():
+            metadata["checkpoint_path"] = str(checkpoint_path)
+        snapshot_path = out_dir / "snapshots" / "snapshots.h5"
+        if snapshot_path.exists():
+            metadata["snapshot_path"] = str(snapshot_path)
+            xdmf_path = snapshot_path.with_suffix(".xdmf")
+            if xdmf_path.exists():
+                metadata["snapshot_xdmf_path"] = str(xdmf_path)
 
-    _write_json(out_dir / "spec.json", config.spec)
-    _write_diagnostics(
-        out_dir / "diagnostics.jsonl",
-        diagnostics,
-        append=resume_record is not None and (out_dir / "diagnostics.jsonl").exists(),
-    )
-    metadata["execution"] = {
-        "status": "completed",
-        "solver_execution_wired": True,
-        "execution_kind": _execution_kind(config.spec),
-    }
-    metadata["validation_scope"] = _validation_scope_metadata(
-        config.spec,
-        diagnostics,
-        device_record=device_record,
-        compare_golden=compare_golden,
-        steps=steps,
-        resolution_tier=resolution_tier,
-    )
-    metadata["saturation_checks"] = _saturation_check_metadata(
-        diagnostics, validation_scope=metadata["validation_scope"]
-    )
-    metadata["validation_floor"] = _validation_floor_metadata(
-        diagnostics, validation_scope=metadata["validation_scope"]
-    )
-    metadata["diagnostics_path"] = str(out_dir / "diagnostics.jsonl")
-    _write_json(out_dir / "metadata.json", metadata)
-    _assert_validation_floor_checks(metadata)
-    _assert_required_saturation_checks(metadata)
-    checkpoint_path = out_dir / "checkpoints" / "checkpoints.h5"
-    if checkpoint_path.exists():
-        metadata["checkpoint_path"] = str(checkpoint_path)
-    snapshot_path = out_dir / "snapshots" / "snapshots.h5"
-    if snapshot_path.exists():
-        metadata["snapshot_path"] = str(snapshot_path)
-        xdmf_path = snapshot_path.with_suffix(".xdmf")
-        if xdmf_path.exists():
-            metadata["snapshot_xdmf_path"] = str(xdmf_path)
+        if compare_golden:
+            result = _compare_diagnostics(
+                config,
+                diagnostics,
+                explicit_golden=Path(shenfun_golden)
+                if shenfun_golden is not None
+                else None,
+            )
+            metadata["comparison_passed"] = result.passed
+            metadata["comparisons"] = [item.to_dict() for item in result.comparisons]
+            metadata["observables_compared"] = [item.key for item in result.comparisons]
+            metadata["golden_resolution"].update(result.metadata)
+            if not result.passed:
+                _write_json(out_dir / "metadata.json", metadata)
+                raise RuntimeError(f"golden comparison failed for {config.problem_id}")
 
-    if compare_golden:
-        result = _compare_diagnostics(
-            config,
-            diagnostics,
-            explicit_golden=Path(shenfun_golden)
-            if shenfun_golden is not None
-            else None,
-        )
-        metadata["comparison_passed"] = result.passed
-        metadata["comparisons"] = [item.to_dict() for item in result.comparisons]
-        metadata["observables_compared"] = [item.key for item in result.comparisons]
-        metadata["golden_resolution"].update(result.metadata)
-        if not result.passed:
-            _write_json(out_dir / "metadata.json", metadata)
-            raise RuntimeError(f"golden comparison failed for {config.problem_id}")
+        if write_golden:
+            golden_path = _write_golden(
+                out_dir / "golden" / "golden.json",
+                config,
+                diagnostics,
+                device_record,
+                metadata=metadata,
+            )
+            metadata["written_golden"] = str(golden_path)
 
-    if write_golden:
-        golden_path = _write_golden(
-            out_dir / "golden" / "golden.json",
-            config,
-            diagnostics,
-            device_record,
-            metadata=metadata,
-        )
-        metadata["written_golden"] = str(golden_path)
-
-    _write_json(out_dir / "metadata.json", metadata)
-    return metadata
+        _write_json(out_dir / "metadata.json", metadata)
+        return metadata
+    finally:
+        restore_compilation_cache()
 
 
 def build_metadata(
@@ -525,14 +529,19 @@ def _iter_final_numeric_diagnostics(diagnostics: dict[str, Any]):
                 yield f"{prefix}.{key}", float(value)
 
 
+_DIVERGENCE_DIAGNOSTIC_RE = re.compile(
+    r"^(?:"
+    r"divergence(?:[_-](?:u|b))?(?:[_-]?(?:l2|linf|norm|rms|max))?"
+    r"|div(?:u|b)(?:[_-]?(?:l2|linf|norm|rms|max))?"
+    r"|div(?:[_-]?(?:l2|linf|norm|rms|max))"
+    r"|continuity(?:[_-]?(?:residual|l2|linf|norm|rms|max))?"
+    r")$"
+)
+
+
 def _is_divergence_diagnostic(key: str) -> bool:
-    name = key.rsplit(".", 1)[-1]
-    return (
-        name.startswith("divergence")
-        or name.startswith("divu")
-        or name.startswith("divb")
-        or name.startswith("continuity")
-    )
+    name = key.rsplit(".", 1)[-1].lower()
+    return _DIVERGENCE_DIAGNOSTIC_RE.match(name) is not None
 
 
 def _assert_validation_floor_checks(metadata: dict[str, Any]) -> None:
@@ -677,7 +686,7 @@ def _executed_solver_steps(
     return max(0, target_steps - start_step)
 
 
-def _configure_compilation_cache(out_dir: Path) -> dict[str, Any]:
+def _configure_compilation_cache(out_dir: Path):
     configured = os.environ.get("JAX_COMPILATION_CACHE_DIR")
     cache_dir = (
         Path(configured) if configured else out_dir.parent / "_jax_compilation_cache"
@@ -687,10 +696,17 @@ def _configure_compilation_cache(out_dir: Path) -> dict[str, Any]:
         "source": "env" if configured else "run_parent_default",
         "path": str(cache_dir),
         "enabled": False,
+        "restores_process_config": True,
     }
+    restore = lambda: None
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         import jax
+
+        restore_state = _capture_compilation_cache_config(jax)
+
+        def restore() -> None:
+            _restore_compilation_cache_config(jax, restore_state)
 
         jax.config.update("jax_compilation_cache_dir", str(cache_dir))
         try:
@@ -700,7 +716,28 @@ def _configure_compilation_cache(out_dir: Path) -> dict[str, Any]:
         record["enabled"] = True
     except Exception as exc:  # pragma: no cover - cache support is best effort
         record["error"] = _exception_message(exc)
-    return record
+    return record, restore
+
+
+def _capture_compilation_cache_config(jax_module: Any) -> dict[str, Any]:
+    return {
+        "jax_compilation_cache_dir": getattr(
+            jax_module.config, "jax_compilation_cache_dir", None
+        ),
+        "jax_persistent_cache_min_compile_time_secs": getattr(
+            jax_module.config, "jax_persistent_cache_min_compile_time_secs", None
+        ),
+    }
+
+
+def _restore_compilation_cache_config(
+    jax_module: Any, restore_state: dict[str, Any]
+) -> None:
+    for key, value in restore_state.items():
+        try:
+            jax_module.config.update(key, value)
+        except Exception:
+            pass
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:

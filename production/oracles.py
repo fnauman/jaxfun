@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -1606,7 +1608,7 @@ def _solve_with_optional_checkpoints(
     ):
         return solver.solve(state, steps)
 
-    from jaxfun.io import Cadence, generate_xdmf, write_uniform_snapshot
+    from jaxfun.io import Cadence, generate_xdmf
 
     out_path = None if out_dir is None else Path(out_dir)
     checkpoint_path = None
@@ -1635,7 +1637,7 @@ def _solve_with_optional_checkpoints(
         assert snapshot_path is not None
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_payload, snapshot_spaces = _snapshot_payload(solver, snapshot_state)
-        write_uniform_snapshot(
+        _write_atomic_uniform_snapshot(
             snapshot_path,
             snapshot_payload,
             t=t,
@@ -1648,7 +1650,10 @@ def _solve_with_optional_checkpoints(
             },
         )
 
+    diagnostics_cache: dict[int, Any] = {}
+
     def on_diagnostics(t: float, tstep: int, diag: Any) -> None:
+        diagnostics_cache[int(tstep)] = diag
         if on_diagnostics_row is not None:
             on_diagnostics_row(t, tstep, diag)
 
@@ -1657,7 +1662,10 @@ def _solve_with_optional_checkpoints(
             raise FloatingPointError(
                 f"nonfinite solver state at tstep={int(tstep)} t={float(t):g}"
             )
-        _raise_on_divergence_drift(solver, candidate_state, t=t, tstep=tstep)
+        diag = diagnostics_cache.pop(int(tstep), None)
+        _raise_on_divergence_drift(
+            solver, candidate_state, t=t, tstep=tstep, diagnostics=diag
+        )
         return False
 
     cadence = Cadence(
@@ -1772,12 +1780,19 @@ _DIVERGENCE_GUARD_LIMIT = 1.0e-2
 
 
 def _raise_on_divergence_drift(
-    solver: Any, state: Any, *, t: float, tstep: int
+    solver: Any,
+    state: Any,
+    *,
+    t: float,
+    tstep: int,
+    diagnostics: dict[str, Any] | None = None,
 ) -> None:
-    diagnostics = getattr(solver, "diagnostics", None)
     if diagnostics is None:
-        return
-    diag = diagnostics(state)
+        diagnostics_fn = getattr(solver, "diagnostics", None)
+        if diagnostics_fn is None:
+            return
+        diagnostics = diagnostics_fn(state)
+    diag = diagnostics
     offenders = []
     for key, value in diag.items():
         if not _is_divergence_key(str(key)):
@@ -1797,15 +1812,19 @@ def _raise_on_divergence_drift(
         )
 
 
+_DIVERGENCE_KEY_RE = re.compile(
+    r"^(?:"
+    r"divergence(?:[_-](?:u|b))?(?:[_-]?(?:l2|linf|norm|rms|max))?"
+    r"|div(?:u|b)(?:[_-]?(?:l2|linf|norm|rms|max))?"
+    r"|div(?:[_-]?(?:l2|linf|norm|rms|max))"
+    r"|continuity(?:[_-]?(?:residual|l2|linf|norm|rms|max))?"
+    r")$"
+)
+
+
 def _is_divergence_key(key: str) -> bool:
     name = key.rsplit(".", 1)[-1].lower()
-    return (
-        name.startswith("divergence")
-        or name.startswith("divu")
-        or name.startswith("divb")
-        or name.startswith("div")
-        or name.startswith("continuity")
-    )
+    return _DIVERGENCE_KEY_RE.match(name) is not None
 
 
 def _tree_all_finite(tree: Any) -> bool:
@@ -1818,6 +1837,77 @@ def _tree_all_finite(tree: Any) -> bool:
     if not checks:
         return True
     return bool(jax.device_get(jnp.all(jnp.asarray(checks))))
+
+
+def _write_atomic_uniform_snapshot(
+    snapshot_path: Path,
+    fields: dict[str, Any],
+    *,
+    t: float,
+    tstep: int,
+    spaces: dict[str, Any] | None,
+    attrs: dict[str, Any],
+) -> None:
+    from jaxfun.io import write_uniform_snapshot
+
+    step_path = _snapshot_step_path(snapshot_path, tstep)
+    step_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = step_path.with_name(f".{step_path.name}.tmp")
+    try:
+        write_uniform_snapshot(
+            tmp,
+            fields,
+            t=t,
+            tstep=tstep,
+            spaces=spaces,
+            attrs=attrs,
+            mode="w",
+        )
+        tmp.replace(step_path)
+        _rebuild_snapshot_index(snapshot_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _snapshot_step_path(snapshot_path: Path, tstep: int) -> Path:
+    return snapshot_path.parent / "steps" / f"snapshot_{int(tstep):08d}.h5"
+
+
+def _rebuild_snapshot_index(snapshot_path: Path) -> None:
+    import h5py
+
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = snapshot_path.with_name(f".{snapshot_path.name}.tmp")
+    step_files = sorted((snapshot_path.parent / "steps").glob("snapshot_*.h5"))
+    try:
+        with h5py.File(tmp, "w") as h5:
+            root = h5.create_group("snapshots")
+            latest_step: int | None = None
+            for step_file in step_files:
+                with h5py.File(step_file, "r") as step_h5:
+                    if "snapshots" not in step_h5:
+                        continue
+                    step_names = sorted(
+                        step_h5["snapshots"].keys(), key=lambda key: int(key)
+                    )
+                    for step_name in step_names:
+                        rel = os.path.relpath(step_file, snapshot_path.parent)
+                        root[step_name] = h5py.ExternalLink(
+                            rel, f"/snapshots/{step_name}"
+                        )
+                        step = int(step_name)
+                        latest_step = (
+                            step
+                            if latest_step is None
+                            else max(step, latest_step)
+                        )
+            if latest_step is not None:
+                root.attrs["latest_step"] = latest_step
+        tmp.replace(snapshot_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _snapshot_payload(solver: Any, state: Any) -> tuple[dict[str, Any], dict[str, Any]]:

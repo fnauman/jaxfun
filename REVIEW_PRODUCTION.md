@@ -29,16 +29,17 @@ tolerances; production checkpoints are compact latest-step HDF5 files written vi
 temp-file atomic replace rather than copy-appending an ever-growing file;
 in-process device capture labels the live dtype unless the CLI explicitly applies
 the production dtype policy, and checkpoint dtype metadata falls back to field
-dtypes; snapshot writes now pass a tensor-product function space so XDMF/HDF5
-meshes carry physical coordinates; the no-cadence fast solve path is restored;
+dtypes; snapshot writes now use atomic per-step HDF5 shards plus an
+external-link index and pass a tensor-product function space so XDMF/HDF5 meshes
+carry physical coordinates; the no-cadence fast solve path is restored;
 the TC-hydro resumed time-series seed row no longer mixes seed energy with
 resumed-state velocity; and the x64 guard reports worker-side dtype pollution
 under xdist.
 
-Still open from that review: snapshot writes are not yet atomic, the persistent
-JAX compilation-cache setting remains a process-global mutation, duplicate PCF
-reference-driver code remains cleanup work, and `pcf_mhd_divfree` still needs the
-deferred long float64 GPU campaign after these infrastructure fixes.
+Still open from that review: `pcf_mhd_divfree` still needs the deferred long
+float64 GPU campaign after these infrastructure fixes. Snapshot atomicity,
+compilation-cache restoration, duplicate primitive-PCF reference helpers,
+redundant cadence diagnostics, and divergence-key prefix matching are now fixed.
 
 | Finding | Current status |
 |---|---|
@@ -49,9 +50,9 @@ deferred long float64 GPU campaign after these infrastructure fixes.
 | F-3 checkpoint resume | Fixed. `run_problem.py --resume` reloads the latest checkpoint, validates spec/dtype metadata, reconstructs solver state, continues `tstep`, and appends diagnostics. |
 | F-4 adjoint memory/remat | Fixed for the supported solve paths. KMM and CNAB2 solves use `scan_steps` with single-device `jax.checkpoint`; multi-device paths avoid remat where it conflicts with sharded execution. |
 | F-5 MHD/TC differentiability | Fixed. `MHDState` is a pytree, CNAB2 `have_old` is a real leaf, and differentiability tests now cover MHD, primitive PCF, and TC states. |
-| F-6 snapshots | Fixed for geometry. `--snapshot-every` writes uniform HDF5 snapshots, XDMF, and a manifest next to checkpoints, now with function-space mesh metadata for physical coordinates. Snapshot atomicity remains a lower-priority open item before large ROM data generation. |
+| F-6 snapshots | Fixed for geometry and crash-safety. `--snapshot-every` writes atomic per-step HDF5 shards, rebuilds `snapshots.h5` as an external-link index via atomic replace, and emits XDMF plus a manifest with function-space mesh metadata for physical coordinates. |
 | F-7 dtype policy | Fixed for the reviewed production contracts. CLI production remains float32 by default, objectives require x64, parity uses float64, and a dealiased primitive PCF short-window float32-vs-float64 regression test was added. |
-| F-8 throughput visibility | Mitigated. KMM eager-loop dispatch was removed, no-cadence solves use the fast `solver.solve` path again, persistent compilation cache is configured per run, and metadata records `solver_steps`, `ms_per_step`, and `steps_per_second`. Further primitive-solver kernel optimization remains performance work, not a correctness gate. |
+| F-8 throughput visibility | Mitigated. KMM eager-loop dispatch was removed, no-cadence solves use the fast `solver.solve` path again, cadenced diagnostics are reused for divergence checks, persistent compilation cache is configured per run and restored after importable `run_problem()` calls, and metadata records `solver_steps`, `ms_per_step`, and `steps_per_second`. Further primitive-solver kernel optimization remains performance work, not a correctness gate. |
 | F-9 minimal-seed loop | Fixed for the hydro-KMM DAL path. `minimal_seed_ascent` adds projected ascent, retraction to fixed energy, backtracking, and history. |
 | F-10 PCF-MHD saturation | Not rerun; long simulation skipped as requested. `pcf_mhd_divfree` remains documented as a retained failed generated-saturation candidate. A longer/higher-resolution GPU campaign is still required to decide physics versus horizon/resolution. |
 | F-11 production-envelope validation | Improved. Primitive PCF now has a dealiased live parity case, a float32-vs-float64 short-window check, and full live parity passes locally against shenfun 4.2.2. |
@@ -66,7 +67,7 @@ Current verification from this fix pass:
 
 | Tier | Command | Result |
 |---|---|---|
-| Production suite | `.venv/bin/python -m pytest -q tests/production` | 133 passed |
+| Production suite | `.venv/bin/python -m pytest -q tests/production` | 137 passed |
 | Live shenfun parity | `.venv/bin/python -m pytest -q -m "integration and live_shenfun" tests/couette/test_live_shenfun_parity.py` | 24 passed |
 | Couette focused solver checks | `.venv/bin/python -m pytest -q tests/couette/test_pcf_mri_primitive_jax.py tests/couette/test_differentiability_jax.py tests/couette/test_pcf_mhd_jax.py tests/couette/test_pcf_mhd_mri_shearpy_jax.py` | 23 passed |
 | SPMD parity | `.venv/bin/python -m pytest -q -m spmd tests/couette/test_sharding_parity_jax.py --num-devices=2` | 14 passed |
