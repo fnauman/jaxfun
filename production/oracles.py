@@ -1864,7 +1864,7 @@ def _write_atomic_uniform_snapshot(
             mode="w",
         )
         tmp.replace(step_path)
-        _rebuild_snapshot_index(snapshot_path)
+        _update_snapshot_index(snapshot_path, step_path=step_path, tstep=tstep)
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -1874,36 +1874,38 @@ def _snapshot_step_path(snapshot_path: Path, tstep: int) -> Path:
     return snapshot_path.parent / "steps" / f"snapshot_{int(tstep):08d}.h5"
 
 
-def _rebuild_snapshot_index(snapshot_path: Path) -> None:
+def _update_snapshot_index(
+    snapshot_path: Path, *, step_path: Path, tstep: int
+) -> None:
     import h5py
 
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = snapshot_path.with_name(f".{snapshot_path.name}.tmp")
-    step_files = sorted((snapshot_path.parent / "steps").glob("snapshot_*.h5"))
+    entries: dict[str, tuple[str, str]] = {}
+    latest_step: int | None = None
+    if snapshot_path.exists():
+        with h5py.File(snapshot_path, "r") as existing:
+            if "snapshots" in existing:
+                root = existing["snapshots"]
+                for step_name in root:
+                    link = root.get(step_name, getlink=True)
+                    if isinstance(link, h5py.ExternalLink):
+                        entries[str(step_name)] = (link.filename, link.path)
+                        step = int(step_name)
+                        latest_step = (
+                            step if latest_step is None else max(step, latest_step)
+                        )
+    rel = os.path.relpath(step_path, snapshot_path.parent)
+    step_name = str(int(tstep))
+    entries[step_name] = (rel, f"/snapshots/{step_name}")
+    latest_step = int(tstep) if latest_step is None else max(int(tstep), latest_step)
     try:
         with h5py.File(tmp, "w") as h5:
             root = h5.create_group("snapshots")
-            latest_step: int | None = None
-            for step_file in step_files:
-                with h5py.File(step_file, "r") as step_h5:
-                    if "snapshots" not in step_h5:
-                        continue
-                    step_names = sorted(
-                        step_h5["snapshots"].keys(), key=lambda key: int(key)
-                    )
-                    for step_name in step_names:
-                        rel = os.path.relpath(step_file, snapshot_path.parent)
-                        root[step_name] = h5py.ExternalLink(
-                            rel, f"/snapshots/{step_name}"
-                        )
-                        step = int(step_name)
-                        latest_step = (
-                            step
-                            if latest_step is None
-                            else max(step, latest_step)
-                        )
-            if latest_step is not None:
-                root.attrs["latest_step"] = latest_step
+            for name in sorted(entries, key=lambda item: int(item)):
+                filename, link_path = entries[name]
+                root[name] = h5py.ExternalLink(filename, link_path)
+            root.attrs["latest_step"] = latest_step
         tmp.replace(snapshot_path)
     finally:
         if tmp.exists():

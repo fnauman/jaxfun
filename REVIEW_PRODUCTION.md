@@ -10,9 +10,9 @@
 
 ## 0. Implementation status update (2026-07-05)
 
-This branch now implements the review's non-long-run fixes. The original
+This branch now implements the review's infrastructure fixes, and the
+previously deferred F-10 long PCF-MHD campaign has now been run. The original
 sections below are kept as the audit record; this section is the current status.
-No intentionally long saturation campaigns were rerun as part of the fix pass.
 
 ### 0.1 Follow-up review disposition (2026-07-05)
 
@@ -36,10 +36,24 @@ the TC-hydro resumed time-series seed row no longer mixes seed energy with
 resumed-state velocity; and the x64 guard reports worker-side dtype pollution
 under xdist.
 
-Still open from that review: `pcf_mhd_divfree` still needs the deferred long
-float64 GPU campaign after these infrastructure fixes. Snapshot atomicity,
-compilation-cache restoration, duplicate primitive-PCF reference helpers,
-redundant cadence diagnostics, and divergence-key prefix matching are now fixed.
+F-10 update: `pcf_mhd_divfree` no longer remains unrun. A full production
+`float64` GPU run completed 1000 steps at `N=(32,64,32)` in 4374.9 seconds
+(`runs/pcf_mhd_divfree/20260705T205917Z`) and correctly failed the generated
+saturation gate: `magnetic_energy_growth_factor=0.3524918691011408`,
+`stationarity_relative_change=0.24053174005544709`, and
+`saturation_check_passed=false`. This is not the no-field hydro case: the spec
+uses `B0=0.05`, but it omits `Omega`, so the runner defaults to `Omega=0.0` and
+therefore models stable plain PCF-MHD rather than the rotating MRI/shearbox
+problem. The leading linear eigenvalue for the seeded `ky=1,kz=1` mode is
+`growth_rate_linear=-0.0526771745766`, matching the observed decay. The actual
+PCF MRI/shearbox production target remains `exp_pcf_mri_shearbox_growth`, which
+declares `Omega=2/3`, `S=1`, `q_shear=1.5`, and an MRI eigenmode packet.
+
+Snapshot atomicity, compilation-cache restoration, duplicate primitive-PCF
+reference helpers, redundant cadence diagnostics, and divergence-key prefix
+matching are now fixed. Snapshot indexing now updates from the existing
+external-link index plus the new shard, so it no longer reopens every prior
+per-step shard on each snapshot.
 
 | Finding | Current status |
 |---|---|
@@ -54,7 +68,7 @@ redundant cadence diagnostics, and divergence-key prefix matching are now fixed.
 | F-7 dtype policy | Fixed for the reviewed production contracts. CLI production remains float32 by default, objectives require x64, parity uses float64, and a dealiased primitive PCF short-window float32-vs-float64 regression test was added. |
 | F-8 throughput visibility | Mitigated. KMM eager-loop dispatch was removed, no-cadence solves use the fast `solver.solve` path again, cadenced diagnostics are reused for divergence checks, persistent compilation cache is configured per run and restored after importable `run_problem()` calls, and metadata records `solver_steps`, `ms_per_step`, and `steps_per_second`. Further primitive-solver kernel optimization remains performance work, not a correctness gate. |
 | F-9 minimal-seed loop | Fixed for the hydro-KMM DAL path. `minimal_seed_ascent` adds projected ascent, retraction to fixed energy, backtracking, and history. |
-| F-10 PCF-MHD saturation | Not rerun; long simulation skipped as requested. `pcf_mhd_divfree` remains documented as a retained failed generated-saturation candidate. A longer/higher-resolution GPU campaign is still required to decide physics versus horizon/resolution. |
+| F-10 PCF-MHD saturation | Run and failed honestly. The full `float64` `pcf_mhd_divfree` campaign completed 1000 production-resolution steps in 72.9 minutes, kept `div u`/`div b` at machine precision, and failed promotion because both linear analysis and the nonlinear run decay. It remains a retained failed generated-saturation candidate, not an open infrastructure bug. |
 | F-11 production-envelope validation | Improved. Primitive PCF now has a dealiased live parity case, a float32-vs-float64 short-window check, and full live parity passes locally against shenfun 4.2.2. |
 | F-12 parameter sensitivity | Fixed by contract. Production objectives require x64 and expose `finite_difference_parameter_sensitivity`; solver parameters remain static and should be changed by rebuilding solvers. |
 | F-13 saturation gate holes | Fixed after follow-up. Full generated saturation requires finite numeric diagnostics, boolean `saturation_check_passed`, and a windowed stationarity check; the stationarity collector is wired through cadenced diagnostics and covered by a full-scope pass-branch regression. |
@@ -71,6 +85,7 @@ Current verification from this fix pass:
 | Live shenfun parity | `.venv/bin/python -m pytest -q -m "integration and live_shenfun" tests/couette/test_live_shenfun_parity.py` | 24 passed |
 | Couette focused solver checks | `.venv/bin/python -m pytest -q tests/couette/test_pcf_mri_primitive_jax.py tests/couette/test_differentiability_jax.py tests/couette/test_pcf_mhd_jax.py tests/couette/test_pcf_mhd_mri_shearpy_jax.py` | 23 passed |
 | SPMD parity | `.venv/bin/python -m pytest -q -m spmd tests/couette/test_sharding_parity_jax.py --num-devices=2` | 14 passed |
+| F-10 long PCF-MHD run | `JAXFUN_PRODUCTION_DTYPE=float64 JAXFUN_ENABLE_X64=1 JAX_ENABLE_X64=1 JAXFUN_VALIDATE_TIMEOUT_SECONDS=10800 production/validate_gpu.sh pcf_mhd_divfree --full` | completed 1000 steps; failed expected saturation gate (`magnetic_energy_growth_factor=0.35249`) |
 | Syntax/format checks | `py_compile` on edited Python files, `bash -n production/validate_gpu.sh`, `git diff --check` | passed |
 
 ## 1. Executive summary
@@ -176,8 +191,20 @@ Measured this review (float64, RTX 5090; production float32 should be up to ~2×
 *Scope note:* the helpers hardcode the hydro-KMM interface (`solver.perturbation_energy`, `KMMState` tree helpers — `pcf_minimal_seed_jax.py:106,118`; `production/objectives.py:129`); on the MHD solver they fail on the missing `.u`, on the primitive solver on the missing `perturbation_energy`. Extending DAL beyond hydro needs a small energy-interface shim in addition to F-5.
 
 ### F-10 · MEDIUM (physics coverage) · PCF-MHD saturation target unresolved; one production spec is a placeholder
-`production/README.md` records that the `pcf_mhd_divfree` full run (N=32×64×32, final_time 10) **decayed** and is retained as a failed candidate — so the PCF-MHD nonlinear saturation regime, one of your stated targets, has no validated golden. `stab_PCF_MRI_stability` is declared `config-undetermined placeholder / not executable`. Also note `final_time: 10.0` is short for PCF-MHD transition; decay vs. sustainment at these parameters may be physical or resolution/horizon-limited — currently indistinguishable.
-*Fix:* treat as an open physics-validation task: rerun with larger N/longer horizon in float64 once F-3 (resume) exists; keep the failed-candidate labeling (it is honest and correct).
+Update 2026-07-06: Section 0 supersedes this original audit note. The full
+`pcf_mhd_divfree` float64 production run has now completed, and its decay is
+consistent with the negative seeded linear eigenvalue for stable plain PCF-MHD
+with `B0=0.05` and `Omega=0.0`; it remains an honest retained failed candidate,
+not an unrun infrastructure task.
+
+Original audit finding: `production/README.md` records that the
+`pcf_mhd_divfree` full run (N=32×64×32, final_time 10) **decayed** and is
+retained as a failed candidate — so the PCF-MHD nonlinear saturation regime, one
+of your stated targets, has no validated golden. `stab_PCF_MRI_stability` is
+declared `config-undetermined placeholder / not executable`.
+*Fix:* keep the failed-candidate labeling (it is honest and correct) and use the
+separate `exp_pcf_mri_shearbox_growth` spec for rotating PCF MRI/shearbox
+comparisons.
 
 ### F-11 · MEDIUM · The exact configuration you will run in production is not the configuration that is parity-validated
 Two axes, same pattern (validated ≠ deployed):

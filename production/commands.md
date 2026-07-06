@@ -207,9 +207,9 @@ a reduced Plane Couette solver.
 
 This writes `checkpoints/checkpoints.h5` with coefficient-space state payloads
 readable by `jaxfun.io.read_checkpoint`. With `--snapshot-every`, it writes
-atomic per-step HDF5 shards under `snapshots/steps/`, rebuilds
-`snapshots/snapshots.h5` as an external-link index, and writes
-`snapshots/snapshots.xdmf` plus `snapshots/manifest.json`. Production checkpoint attrs include the spec
+atomic per-step HDF5 shards under `snapshots/steps/`, updates
+`snapshots/snapshots.h5` as an external-link index without reopening prior
+shards, and writes `snapshots/snapshots.xdmf` plus `snapshots/manifest.json`. Production checkpoint attrs include the spec
 hash, schema versions, dtype/shape metadata, device metadata, and the diagnostics
 path. `--resume` defaults `--config` and `--out` to the resumed run directory when
 omitted, validates the checkpoint spec hash/dtype metadata, continues `tstep`,
@@ -265,16 +265,31 @@ time and production resolution and remains a long GPU run; `pcf_mhd_divfree`
 uses the Phase J5 pinned `N=(32,64,32)` production grid, with its `start` tier
 kept lower for bounded smoke.
 
-The full `pcf_mhd_divfree` run currently has a retained failed generated-saturation
+The full `pcf_mhd_divfree` run has a retained failed generated-saturation
 candidate in `production/goldens/pcf_mhd_divfree`; it is not promoted because the
-recorded magnetic energy decays below the required 2x threshold. Re-run with:
+recorded magnetic energy decays below the required 2x threshold. A follow-up
+production-resolution float64 GPU run also completed the full 1000-step horizon
+(`runs/pcf_mhd_divfree/20260705T205917Z`, 4374.9 seconds) and failed the gate
+for the same physics reason: `magnetic_energy_growth_factor=0.35249`,
+`stationarity_check_passed=false`, and `saturation_check_passed=false`.
+
+This is not the no-field case: `pcf_mhd_divfree` includes `B0=0.05`, but it
+omits `Omega`, so the runner defaults `Omega=0.0` and models stable plain
+PCF-MHD rather than rotating MRI/shearbox dynamics. The seeded linear mode has
+`growth_rate_linear=-0.0526771745766`, consistent with decay. Use
+`exp_pcf_mri_shearbox_growth` for the rotating PCF MRI/shearbox production
+comparison. To reproduce the retained failed generated-saturation result, run:
 
 ```bash
+JAXFUN_PRODUCTION_DTYPE=float64 \
+JAXFUN_ENABLE_X64=1 \
+JAX_ENABLE_X64=1 \
+JAXFUN_VALIDATE_TIMEOUT_SECONDS=10800 \
 production/validate_gpu.sh pcf_mhd_divfree --full
 ```
 
-A passing full run must record `validation_scope=generated_saturated_golden`
-and `magnetic_energy_growth_factor > 2.0`; the retained candidate records
+A passing full run would have to record `validation_scope=generated_saturated_golden`
+and `magnetic_energy_growth_factor > 2.0`; the retained candidates record
 `saturation_check_passed=false`. The generated 64 MB HDF5 checkpoint is
 intentionally not committed; the comparator validates `golden/golden.json`
 against `spec.json`.

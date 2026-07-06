@@ -1271,7 +1271,7 @@ def test_tc_dns_runner_writes_uniform_snapshots(tmp_path):
     metadata = run_problem(
         config_path=spec_path,
         out=out,
-        steps=1,
+        steps=2,
         snapshot_every=1,
         capture_device=False,
     )
@@ -1282,12 +1282,19 @@ def test_tc_dns_runner_writes_uniform_snapshots(tmp_path):
     assert manifest["problem_id"] == "taylor_couette_hydro_dns_v1"
     assert manifest["snapshot_every"] == 1
     snapshot_path = out / "snapshots" / "snapshots.h5"
-    step_path = out / "snapshots" / "steps" / "snapshot_00000001.h5"
-    assert step_path.exists()
+    step_path_1 = out / "snapshots" / "steps" / "snapshot_00000001.h5"
+    step_path_2 = out / "snapshots" / "steps" / "snapshot_00000002.h5"
+    assert step_path_1.exists()
+    assert step_path_2.exists()
     with h5py.File(snapshot_path, "r") as h5:
-        assert isinstance(h5["snapshots"].get("1", getlink=True), h5py.ExternalLink)
+        root = h5["snapshots"]
+        assert int(root.attrs["latest_step"]) == 2
+        assert isinstance(root.get("1", getlink=True), h5py.ExternalLink)
+        assert isinstance(root.get("2", getlink=True), h5py.ExternalLink)
         assert "snapshots/1/mesh/u_x/x0" in h5
         assert "snapshots/1/mesh/u_x/x1" in h5
+        assert "snapshots/2/mesh/u_x/x0" in h5
+        assert "snapshots/2/mesh/u_x/x1" in h5
 
 
 def test_channel_analytic_run_can_write_schema_v1_golden(tmp_path):
