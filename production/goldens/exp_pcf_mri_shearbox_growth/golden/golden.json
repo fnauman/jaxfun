@@ -96,9 +96,10 @@
     }
   },
   "quarantined": {
-    "reason": "pre-FJ-01 invalid nonlinear reference: div_b_l2=0.0267 and div_u_l2=0.0230 both exceed the 1e-2 solenoidality guard, and it was generated with the mis-ordered (streamwise-undealiased) padding. Regression-only evidence; forbidden from seeding or validating production (FJ-01/FJ-03).",
+    "reason": "pre-FJ-01 invalid nonlinear reference (div_b_l2=0.0267, div_u_l2=0.0230 > 1e-2 guard). GPU smoke under the corrected FJ-01 contract CONFIRMS the primitive-b path cannot regenerate this solenoidal: div_b drifts past the 1e-2 guard by t=30 even with correct dealiasing (primitive b evolution does not enforce div b=0 at finite MRI amplitude). Must be regenerated through the vector-potential/curl oracle (representation: vector_potential), which is solenoidal by construction. See production/promotions/fj03_gpu_smoke_findings.md.",
     "numerics_contract_version": 1,
     "regression_only": true,
-    "forbidden_from_seeding_production": true
+    "forbidden_from_seeding_production": true,
+    "gpu_smoke_confirmed_2026_07_10": true
   }
 }

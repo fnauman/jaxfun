@@ -84,6 +84,16 @@ def capture_device_record(
         if apply_dtype_to_process
         else _live_production_dtype(jax)
     )
+    # FJ-08/FJ-11: assert the JAX x64 state matches the production dtype after imports,
+    # so a mis-set env fails loudly instead of silently downgrading a float64 claim run.
+    actual_x64 = bool(jax.config.read("jax_enable_x64"))
+    expected_x64 = live_production_dtype == "float64"
+    if actual_x64 != expected_x64:
+        raise RuntimeError(
+            f"JAX x64 state ({actual_x64}) is inconsistent with the production dtype "
+            f"{live_production_dtype!r} after imports; set JAXFUN_ENABLE_X64 / "
+            "JAX_ENABLE_X64 to match (FJ-08)."
+        )
     devices = jax.devices()
     backend = jax.default_backend()
     mode = "gpu" if backend in {"gpu", "cuda"} else "cpu_smoke"

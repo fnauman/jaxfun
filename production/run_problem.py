@@ -1093,7 +1093,13 @@ def _assert_golden_divergence_ok(problem_id: str, scalars: dict[str, Any]) -> No
     divergence guard) must never become a committed reference.
     """
 
-    from .oracles import _DIVERGENCE_GUARD_LIMIT, _is_divergence_key
+    try:
+        from .oracles import _DIVERGENCE_GUARD_LIMIT, _is_divergence_key
+    except ImportError:  # pragma: no cover - direct script mode
+        from production.oracles import (  # type: ignore
+            _DIVERGENCE_GUARD_LIMIT,
+            _is_divergence_key,
+        )
 
     offenders = []
     for key, value in scalars.items():

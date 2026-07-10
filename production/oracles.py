@@ -296,6 +296,22 @@ def run_supported_spec(
             resume_checkpoint=resume_checkpoint,
         )
     if (
+        spec["geometry"] == "pcf"
+        and spec["physics"] in {"mhd", "mri"}
+        and spec.get("representation") == "vector_potential"
+    ):
+        return _run_pcf_vector_potential_mhd_saturation(
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
+            device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
+            quench=quench,
+        )
+    if (
         spec["problem_id"] == "pcf_mhd_divfree"
         and spec["geometry"] == "pcf"
         and spec["physics"] == "mhd"
@@ -1214,6 +1230,159 @@ def _pcf_primitive_summary_row(
         row["transport_alpha"] = scalars["transport_alpha"]
     row.update(extra)
     return row
+
+
+def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
+    """Canonical scalars from the curl/vector-potential MRI solver (FJ-03)."""
+
+    diag = solver.diagnostics(state)
+    scalars = {
+        "kinetic_energy": float(diag["Epert"]),
+        "magnetic_energy": float(diag["Emag"]),
+        "magnetic_energy_total": float(diag["Emag_total"]),
+        "total_energy": float(diag["Epert"]) + float(diag["Emag"]),
+        "divergence_u_l2": float(diag["divL2"]),
+        "divergence_b_l2": float(diag["divB_L2"]),
+        "maxwell_stress_xy": float(diag["maxwell_stress"]),
+        "reynolds_stress": float(diag["reynolds_stress"]),
+        "total_stress": float(diag["total_stress"]),
+        "alpha_Sh": float(diag["alpha_Sh"]),
+    }
+    if "alpha" in diag:  # net-flux alpha only when B0 != 0 (ZNF-safe)
+        scalars["transport_alpha"] = float(diag["alpha"])
+        scalars["alpha_B0"] = float(diag["alpha_B0"])
+    return scalars
+
+
+def _run_pcf_vector_potential_mhd_saturation(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
+    quench: bool = False,
+) -> dict[str, Any]:
+    """FJ-03: curl/vector-potential PCF-MRI DNS (B = curl A, solenoidal by construction).
+
+    A candidate zero-net-flux workhorse cross-checkable against the primitive path.
+    Restart/checkpointing of the MHDState is not yet wired, so resume/quench are
+    rejected here.
+    """
+
+    from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
+    from jaxfun.io import Cadence
+
+    if resume_checkpoint is not None or quench:
+        raise ProductionOracleNotImplementedError(
+            "vector-potential PCF-MRI restart/quench is not yet wired; run from scratch"
+        )
+    _assert_pcf_half_gap_domain(spec)
+    resolution = _selected_resolution(spec)
+    physics = _resolved_physics(spec)
+    initial = spec["initial_condition"]
+    x0, x1 = (float(v) for v in spec["domain"]["x"])
+    solver = PlaneCouetteMRIShearpyJax(
+        N=(
+            int(resolution.get("Nx", resolution.get("N", 17))),
+            int(resolution.get("Ny", 16)),
+            int(resolution.get("Nz", 16)),
+        ),
+        domain=(
+            (x0, x1),
+            (0.0, float(spec["domain"]["y_period"])),
+            (0.0, float(spec["domain"]["z_period"])),
+        ),
+        Re=physics.Re_h,
+        Rm=physics.Rm_h if physics.Rm_h is not None else physics.Re_h,
+        omega=physics.Omega,
+        shear_rate=physics.S,
+        background_b=(0.0, 0.0, physics.B0),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "L"),
+        perturbation_amplitude=float(initial.get("velocity_amplitude", 0.05)),
+        magnetic_amplitude=float(initial.get("magnetic_amplitude", 0.0)),
+    )
+    state = solver.initial_state()
+    first_scalars = _pcf_curl_scalars(solver, state)
+
+    rows: list[dict[str, Any]] = []
+
+    def collect(t: float, _tstep: int, diag: dict[str, Any]) -> None:
+        rows.append(
+            {
+                "t": float(t),
+                "kinetic_energy": float(diag["Epert"]),
+                "magnetic_energy": float(diag["Emag"]),
+                "total_energy": float(diag["Epert"]) + float(diag["Emag"]),
+                "divergence_u_l2": float(diag["divL2"]),
+                "divergence_b_l2": float(diag["divB_L2"]),
+                "reynolds_stress": float(diag["reynolds_stress"]),
+                "maxwell_stress_xy": float(diag["maxwell_stress"]),
+                "total_stress": float(diag["total_stress"]),
+                "alpha_Sh": float(diag["alpha_Sh"]),
+                **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
+            }
+        )
+
+    target_steps, n_steps = _remaining_steps_from_resume(spec, steps=steps, tstep0=0)
+    block_size = diagnostics_every or max(1, int(n_steps))
+    out = solver.solve_with_cadence(
+        state,
+        n_steps,
+        Cadence(diagnostics_every=diagnostics_every),
+        block_size=block_size,
+        on_diagnostics=collect if diagnostics_every is not None else None,
+        t0=0.0,
+        tstep0=0,
+    )
+    final_scalars = _pcf_curl_scalars(solver, out)
+    elapsed = target_steps * float(spec["time"]["dt"])
+    growth_rate = _growth_rate_from_energy(
+        first_scalars["total_energy"], final_scalars["total_energy"], target_steps, solver.dt
+    )
+    magnetic_growth = (
+        final_scalars["magnetic_energy"] / first_scalars["magnetic_energy"]
+        if first_scalars["magnetic_energy"] > 0.0
+        else 0.0
+    )
+    saturation_passed = _saturation_passed(
+        magnetic_growth,
+        threshold=2.0,
+        final_energies=(
+            final_scalars["kinetic_energy"],
+            final_scalars["magnetic_energy"],
+            final_scalars["total_energy"],
+            final_scalars["divergence_u_l2"],
+            final_scalars["divergence_b_l2"],
+        ),
+    )
+    scalars = {
+        **final_scalars,
+        "growth_rate": float(growth_rate),
+        "magnetic_energy_growth_factor": float(magnetic_growth),
+        "saturation_check_passed": bool(saturation_passed),
+        "magnetic_bc": "conducting",
+        "representation": "vector_potential",
+    }
+    first = {"t": 0.0, **{k: v for k, v in first_scalars.items() if _is_number_scalar(v)}}
+    last = {
+        "t": elapsed,
+        **{k: v for k, v in final_scalars.items() if _is_number_scalar(v)},
+        "growth_rate": float(growth_rate),
+        "magnetic_energy_growth_factor": float(magnetic_growth),
+        "saturation_check_passed": bool(saturation_passed),
+    }
+    series = _dedupe_time_rows([first, *rows, last])
+    scalars.update(_stationarity_scalars(series, key="total_energy"))
+    return {"scalars": scalars, "time_series": series}
+
+
+def _is_number_scalar(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:

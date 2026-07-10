@@ -159,14 +159,16 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         maxwell = -integrate(jnp.real(bp[0] * jnp.conj(bp[1])), self.TD) / volume
         transport = reynolds + maxwell
         vA2 = self.background_b[2] ** 2
-        alpha = transport / vA2 if vA2 > 0.0 else jnp.asarray(jnp.nan)
+        # FJ-04: ZNF-safe. Always emit the shear-scale-normalized alpha; emit the
+        # net-flux alpha only when an imposed vertical field exists (never NaN at B0=0).
+        sh2 = (self.shear_rate * self.x_half_width) ** 2
         emag_total = jnp.asarray(0.0, dtype=up[0].real.dtype)
         for bi, space in zip(bp, (self.TD, self.TC, self.TC), strict=True):
             emag_total = emag_total + jnp.real(integrate(jnp.conj(bi) * bi, space))
         b_fluct = self._backward_B(self.update_B_from_A(state.A), padded=False)
         bmax = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in b_fluct]))
         bmax_total = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in bp]))
-        return {
+        out = {
             **diag,
             "Emag_total": emag_total,
             "bmax": bmax,
@@ -176,10 +178,16 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             "reynolds_stress": reynolds,
             "maxwell_stress": maxwell,
             "transport_xy": transport,
-            "alpha": alpha,
+            "total_stress": transport,
+            "alpha_Sh": transport / sh2 if sh2 > 0.0 else jnp.asarray(jnp.nan),
             "q_shear": jnp.asarray(self.q_shear),
             "kappa2": jnp.asarray(self.kappa2),
         }
+        if vA2 > 0.0:
+            alpha = transport / vA2
+            out["alpha"] = alpha
+            out["alpha_B0"] = alpha
+        return out
 
 
 def main() -> None:
