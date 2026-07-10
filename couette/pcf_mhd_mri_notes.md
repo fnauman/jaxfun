@@ -56,11 +56,13 @@ For a net **vertical** field and axisymmetric modes (`k_y = 0`, vertical
 wavenumber `k_z = 2*pi*n / Lz`), the ideal incompressible MRI is unstable when
 
 ```text
-0 < (k_z v_A)^2 < 4*Omega^2*(q - 1)        [= 2*Omega^2 for q = 3/2]
+0 < (k_z v_A)^2 < 2*q*Omega^2               [= 3*Omega^2 for q = 3/2]
 ```
 
+(the Balbus--Hawley vertical-field cutoff `-d Omega^2/d ln r = 2 q Omega^2`, matching
+the Taylor--Couette note's `3 Omega^2`; the earlier `4 Omega^2 (q - 1)` was wrong)
 so the largest field that still leaves the `n = 1` mode unstable is roughly
-`bz < 2*sqrt(q-1)*Omega*Lz/(2*pi)`. The maximum growth rate is
+`bz < sqrt(2*q)*Omega*Lz/(2*pi)`. The maximum growth rate is
 `gamma_max = (q/2)*Omega = 0.75*Omega` for Keplerian, reached near
 `k_z v_A ≈ (sqrt(15)/4)*Omega ≈ 0.97*Omega`, i.e. at wavelength
 

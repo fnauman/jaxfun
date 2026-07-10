@@ -100,6 +100,9 @@ def production_checkpoint_attrs(
         "problem_id": spec["problem_id"],
         "artifact_id": spec["golden"]["artifact_id"],
         "spec_hash": spec["spec_hash"],
+        # FJ-01: stamp the numerics contract so a pre-fix checkpoint cannot seed a
+        # post-fix production continuation (0 == pre-contract / unstamped).
+        "numerics_contract_version": int(spec.get("numerics_contract_version", 0)),
         "state_kind": state_kind,
         "diagnostics_path": "" if diagnostics_path is None else str(diagnostics_path),
         "dtype_metadata_json": _json_attr(dtype_metadata),

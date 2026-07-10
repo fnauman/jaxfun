@@ -30,6 +30,12 @@ INTEGRATORS = {"analytic", "IMEXRK222", "CNAB2", "linear_eigenproblem"}
 MAGNETIC_BCS = {None, "conducting", "insulating", "pseudo_vacuum", "dirichlet"}
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "problem_spec.schema.json"
 
+# FJ-01: first-class numerics contract version. Bump when a change to the padding /
+# axis / dealias contract (or any other numerics contract) invalidates prior
+# checkpoints and goldens. Version 2 is the post-FJ-01 semantic named-axis contract;
+# artifacts without the field (or at a lower version) are pre-FJ-01.
+NUMERICS_CONTRACT_VERSION = 2
+
 JAXFUN_IMPLEMENTED_ORACLES = {
     "channel_poiseuille_hydro_v1": {"plane_poiseuille_laminar"},
     "exp_pcf_mri_shearbox_growth": {"mri_saturation_ladder"},
@@ -163,6 +169,8 @@ def validate_spec(
     _validate_time(data)
     _validate_domain(data)
     _validate_nondimensional_groups(data)
+    _validate_numerics_contract(data)
+    _validate_resolved_physics(data)
     _validate_boundary_conditions(data)
     _validate_oracle_and_golden(data)
     _reject_shenfun_unsupported_subcases(data, allow_unsupported=allow_unsupported)
@@ -328,6 +336,75 @@ def _validate_nondimensional_groups(data: dict[str, Any]) -> None:
             raise ProblemSpecError(
                 "Taylor-Couette radius_ratio must satisfy 0 < eta < 1"
             )
+
+
+def _validate_numerics_contract(data: dict[str, Any]) -> None:
+    """FJ-01: validate the numerics contract version and the dealias padding form.
+
+    A first-class ``numerics_contract_version`` marks post-FJ-01 specs. At the
+    current contract version, ``resolution.dealias`` (and every tier override)
+    must be a *semantic* per-axis map ``{"x": .., "y": .., "z": ..}`` or a scalar;
+    anonymous positional tuples are rejected so a spec cannot silently mis-dealias
+    a solver whose native array order differs from ``(x, y, z)``.
+    """
+
+    version = data.get("numerics_contract_version")
+    if version is None:
+        return  # pre-FJ-01 spec; legacy positional tuples still parse with a warning.
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ProblemSpecError(
+            "numerics_contract_version must be a positive integer"
+        )
+    if version > NUMERICS_CONTRACT_VERSION:
+        raise ProblemSpecError(
+            f"numerics_contract_version {version} is newer than this build's "
+            f"{NUMERICS_CONTRACT_VERSION}; upgrade jaxfun before running it"
+        )
+    if version < NUMERICS_CONTRACT_VERSION:
+        return  # older but recognized contract; legacy dealias forms allowed.
+    resolution = data.get("resolution", {})
+    if not isinstance(resolution, dict):
+        return
+    for block_name, block in _iter_resolution_blocks(resolution):
+        if "dealias" not in block:
+            continue
+        dealias = block["dealias"]
+        if isinstance(dealias, (list, tuple)):
+            raise ProblemSpecError(
+                f"{block_name}.dealias must be a semantic map "
+                "{'x': .., 'y': .., 'z': ..} or a scalar under "
+                f"numerics_contract_version {NUMERICS_CONTRACT_VERSION}; "
+                f"got a positional tuple {list(dealias)}"
+            )
+        if isinstance(dealias, dict) and set(dealias) != {"x", "y", "z"}:
+            raise ProblemSpecError(
+                f"{block_name}.dealias semantic map must state exactly x, y, z"
+            )
+
+
+def _iter_resolution_blocks(resolution: dict[str, Any]):
+    yield "resolution", resolution
+    for tier in ("smoke", "start", "production"):
+        block = resolution.get(tier)
+        if isinstance(block, dict):
+            yield f"resolution.{tier}", block
+
+
+def _validate_resolved_physics(data: dict[str, Any]) -> None:
+    """FJ-00: reject over-specified inconsistent {Re,nu}/{Rm,eta} before compile.
+
+    Only enforced for coefficient-driven plane-Couette/channel specs; Taylor-Couette
+    keeps its own group checks in :func:`_validate_nondimensional_groups`.
+    """
+
+    if data["geometry"] not in {"pcf", "channel"}:
+        return
+    groups = data["nondimensional_groups"]
+    if groups.get("nu") is None and groups.get("Re") is None:
+        return
+    from .physics import resolve_physics  # local import avoids a cycle
+
+    resolve_physics(data)  # raises ProblemSpecError on inconsistency
 
 
 def _validate_boundary_conditions(data: dict[str, Any]) -> None:

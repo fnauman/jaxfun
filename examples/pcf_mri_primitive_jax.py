@@ -47,6 +47,25 @@ from jaxfun.la import TPMatrices, TPMatrix
 type MHDFields = tuple[Array, Array, Array, Array, Array, Array]
 
 
+_MAGNETIC_BC_ALIASES = {
+    "perfect_conductor": "perfect_conductor",
+    "conducting": "perfect_conductor",  # legacy alias for perfect conductor
+    "pseudo_vacuum": "pseudo_vacuum",
+}
+
+
+def _canonical_magnetic_bc(name: str) -> str:
+    """Map a magnetic-BC label to a physical enum (FJ-09)."""
+
+    try:
+        return _MAGNETIC_BC_ALIASES[str(name)]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported magnetic_bc {name!r}; supported: "
+            f"{sorted(set(_MAGNETIC_BC_ALIASES.values()))} (or legacy 'conducting')"
+        ) from exc
+
+
 def _dealias_tuple(value: Any, dimensions: int) -> tuple[float, ...]:
     if isinstance(value, (list, tuple)):
         out = tuple(float(item) for item in value)
@@ -631,6 +650,7 @@ class PCFMRIDNSJax:
         dt: float = 2.0e-3,
         family: str = "C",
         dealias: float | tuple[float, float, float] = (1.5, 1.5, 1.0),
+        magnetic_bc: str = "perfect_conductor",
     ) -> None:
         self.S = float(S)
         self.omega = float(omega)
@@ -642,6 +662,7 @@ class PCFMRIDNSJax:
         self.Nz = int(Nz)
         self.Ly = float(Ly)
         self.Lz = float(Lz)
+        self.h = 1.0  # half-gap; wall-normal domain is fixed at [-1, 1]
         self.dt = float(dt)
         self.family = family.upper()
         self.dealias = _dealias_tuple(dealias, 3)
@@ -671,12 +692,21 @@ class PCFMRIDNSJax:
         self.T0 = TensorProduct(self.Fy, self.Fz, self.S0, name="T0pcf3")
         self.TP = TensorProduct(self.Fy, self.Fz, self.SP, name="TPpcf3")
         self.TN = TensorProduct(self.Fy, self.Fz, self.SN, name="TNpcf3")
+        # FJ-09: magnetic-wall basis selection.
+        #   perfect_conductor: b_x=0 (Dirichlet), d_x b_y=d_x b_z=0 (Neumann);
+        #   pseudo_vacuum:     b_y=b_z=0 (Dirichlet), d_x b_x=0 (Neumann,
+        #                      the compatible normal condition keeping div b=0 at wall).
+        self.magnetic_bc = _canonical_magnetic_bc(magnetic_bc)
+        if self.magnetic_bc == "pseudo_vacuum":
+            self.Tbx, self.Tby, self.Tbz = self.TN, self.TD, self.TD
+        else:
+            self.Tbx, self.Tby, self.Tbz = self.TD, self.TN, self.TN
         self.VQ = CoupledSpace(
-            (self.TD, self.TD, self.TD, self.TP, self.TD, self.TN, self.TN),
+            (self.TD, self.TD, self.TD, self.TP, self.Tbx, self.Tby, self.Tbz),
             name="VQpcf3",
         )
         self.VE = CoupledSpace(
-            (self.TD, self.TD, self.TD, self.TD, self.TN, self.TN),
+            (self.TD, self.TD, self.TD, self.Tbx, self.Tby, self.Tbz),
             name="VEpcf3",
         )
 
@@ -854,16 +884,16 @@ class PCFMRIDNSJax:
         uy = TrialFunction(self.TD, name="uy3")
         uz = TrialFunction(self.TD, name="uz3")
         p = TrialFunction(self.TP, name="p3")
-        bx = TrialFunction(self.TD, name="bx3")
-        by = TrialFunction(self.TN, name="by3")
-        bz = TrialFunction(self.TN, name="bz3")
+        bx = TrialFunction(self.Tbx, name="bx3")
+        by = TrialFunction(self.Tby, name="by3")
+        bz = TrialFunction(self.Tbz, name="bz3")
         vx = TestFunction(self.TD, name="vx3")
         vy = TestFunction(self.TD, name="vy3")
         vz = TestFunction(self.TD, name="vz3")
         q = TestFunction(self.TP, name="q3")
-        cx = TestFunction(self.TD, name="cx3")
-        cy = TestFunction(self.TN, name="cy3")
-        cz = TestFunction(self.TN, name="cz3")
+        cx = TestFunction(self.Tbx, name="cx3")
+        cy = TestFunction(self.Tby, name="cy3")
+        cz = TestFunction(self.Tbz, name="cz3")
         idx_q = {"ux": 0, "uy": 1, "uz": 2, "p": 3, "bx": 4, "by": 5, "bz": 6}
         fields_q = {"ux": ux, "uy": uy, "uz": uz, "bx": bx, "by": by, "bz": bz}
         tests_q = {"ux": vx, "uy": vy, "uz": vz, "bx": cx, "by": cy, "bz": cz}
@@ -891,15 +921,15 @@ class PCFMRIDNSJax:
         eux = TrialFunction(self.TD, name="eux3")
         euy = TrialFunction(self.TD, name="euy3")
         euz = TrialFunction(self.TD, name="euz3")
-        ebx = TrialFunction(self.TD, name="ebx3")
-        eby = TrialFunction(self.TN, name="eby3")
-        ebz = TrialFunction(self.TN, name="ebz3")
+        ebx = TrialFunction(self.Tbx, name="ebx3")
+        eby = TrialFunction(self.Tby, name="eby3")
+        ebz = TrialFunction(self.Tbz, name="ebz3")
         tx = TestFunction(self.TD, name="tx3")
         ty = TestFunction(self.TD, name="ty3")
         tz = TestFunction(self.TD, name="tz3")
-        dx = TestFunction(self.TD, name="dx3")
-        dy = TestFunction(self.TN, name="dy3")
-        dz = TestFunction(self.TN, name="dz3")
+        dx = TestFunction(self.Tbx, name="dx3")
+        dy = TestFunction(self.Tby, name="dy3")
+        dz = TestFunction(self.Tbz, name="dz3")
         idx_e = {"ux": 0, "uy": 1, "uz": 2, "bx": 3, "by": 4, "bz": 5}
         fields_e = {"ux": eux, "uy": euy, "uz": euz, "bx": ebx, "by": eby, "bz": ebz}
         tests_e = {"ux": tx, "uy": ty, "uz": tz, "bx": dx, "by": dy, "bz": dz}
@@ -942,7 +972,7 @@ class PCFMRIDNSJax:
         return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
 
     def state_from_physical(self, values: MHDFields) -> AxisymmetricPCFState:
-        spaces = (self.TD, self.TD, self.TD, self.TD, self.TN, self.TN)
+        spaces = (self.TD, self.TD, self.TD, self.Tbx, self.Tby, self.Tbz)
         x = tuple(
             space.forward(value) for space, value in zip(spaces, values, strict=True)
         )
@@ -973,9 +1003,9 @@ class PCFMRIDNSJax:
         ux, uxx, uxy, uxz = self._phys_mhd(state.x[0], self.TD)
         uy, uyx, uyy, uyz = self._phys_mhd(state.x[1], self.TD)
         uz, uzx, uzy, uzz = self._phys_mhd(state.x[2], self.TD)
-        bx, bxx, bxy, bxz = self._phys_mhd(state.x[3], self.TD)
-        by, byx, byy, byz = self._phys_mhd(state.x[4], self.TN)
-        bz, bzx, bzy, bzz = self._phys_mhd(state.x[5], self.TN)
+        bx, bxx, bxy, bxz = self._phys_mhd(state.x[3], self.Tbx)
+        by, byx, byy, byz = self._phys_mhd(state.x[4], self.Tby)
+        bz, bzx, bzy, bzz = self._phys_mhd(state.x[5], self.Tbz)
         nu_x = self._dealias_to_standard(
             ux * uxx + uy * uxy + uz * uxz - bx * bxx - by * bxy - bz * bxz
         )
@@ -1004,9 +1034,9 @@ class PCFMRIDNSJax:
             self.TD.mask_nyquist(self.TD.scalar_product(nu_x)),
             self.TD.mask_nyquist(self.TD.scalar_product(nu_y)),
             self.TD.mask_nyquist(self.TD.scalar_product(nu_z)),
-            self.TD.mask_nyquist(self.TD.scalar_product(nb_x)),
-            self.TN.mask_nyquist(self.TN.scalar_product(nb_y)),
-            self.TN.mask_nyquist(self.TN.scalar_product(nb_z)),
+            self.Tbx.mask_nyquist(self.Tbx.scalar_product(nb_x)),
+            self.Tby.mask_nyquist(self.Tby.scalar_product(nb_y)),
+            self.Tbz.mask_nyquist(self.Tbz.scalar_product(nb_z)),
         )
 
     def _apply_lexp(self, x: MHDFields) -> MHDFields:
@@ -1103,7 +1133,7 @@ class PCFMRIDNSJax:
         return self.state_from_physical(tuple(values)), complex(w[which])
 
     def fields_physical(self, state: AxisymmetricPCFState) -> MHDFields:
-        spaces = (self.TD, self.TD, self.TD, self.TD, self.TN, self.TN)
+        spaces = (self.TD, self.TD, self.TD, self.Tbx, self.Tby, self.Tbz)
         return tuple(
             space.backward(coeff) for space, coeff in zip(spaces, state.x, strict=True)
         )  # ty: ignore[return-value]
@@ -1128,27 +1158,80 @@ class PCFMRIDNSJax:
 
     def magnetic_divergence(self, state: AxisymmetricPCFState) -> Array:
         return (
-            self.TD.backward_primitive(state.x[3], (0, 0, 1))
-            + self.TN.backward_primitive(state.x[4], (1, 0, 0))
-            + self.TN.backward_primitive(state.x[5], (0, 1, 0))
+            self.Tbx.backward_primitive(state.x[3], (0, 0, 1))
+            + self.Tby.backward_primitive(state.x[4], (1, 0, 0))
+            + self.Tbz.backward_primitive(state.x[5], (0, 1, 0))
         )
 
     def _l2(self, value: Array) -> Array:
         return jnp.sqrt(jnp.real(integrate(jnp.conj(value) * value, self.T0)))
 
+    @property
+    def _volume(self) -> float:
+        # domain is Ly x Lz x [-1, 1]
+        return self.Ly * self.Lz * 2.0
+
     def stresses(self, state: AxisymmetricPCFState) -> tuple[Array, Array]:
         fields = self.fields_physical(state)
         ux, uy = fields[0], fields[1]
         bx, by = fields[3], fields[4]
-        volume = self.Ly * self.Lz * 2.0
+        volume = self._volume
         reynolds = integrate(jnp.real(ux * jnp.conj(uy)), self.T0) / volume
         maxwell = -integrate(jnp.real(bx * jnp.conj(by)), self.T0) / volume
         return reynolds, maxwell
 
+    def magnetic_component_means(
+        self, state: AxisymmetricPCFState
+    ) -> tuple[Array, Array, Array]:
+        """FJ-04: quadrature-weighted volume means of (b_x, b_y, b_z) = mean flux."""
+        fields = self.fields_physical(state)
+        volume = self._volume
+        return tuple(
+            integrate(jnp.real(fields[3 + i]), self.T0) / volume for i in range(3)
+        )  # ty: ignore[return-value]
+
+    def magnetic_energy_split(
+        self, state: AxisymmetricPCFState
+    ) -> tuple[Array, Array, Array]:
+        """FJ-04: (mag_total, mag_mean, mag_fluct) energies.
+
+        The volume-mean field is spatially uniform, so its energy is
+        ``0.5 * volume * |<b>|^2`` and, since the fluctuation is orthogonal to the
+        mean, ``mag_fluct = mag_total - mag_mean`` exactly.
+        """
+        _, mag_total = self.energy_parts(state)
+        mbx, mby, mbz = self.magnetic_component_means(state)
+        mag_mean = 0.5 * self._volume * (mbx * mbx + mby * mby + mbz * mbz)
+        return mag_total, mag_mean, mag_total - mag_mean
+
+    def nonaxisymmetric_energy(
+        self, state: AxisymmetricPCFState
+    ) -> tuple[Array, Array]:
+        """FJ-02: (E_nonaxisymmetric, E_total).
+
+        The streamwise-averaged (``k_y = 0``) field is the arithmetic mean over the
+        uniform Fourier ``y`` grid (native array axis 0). Its energy is the
+        axisymmetric part; the remainder is the non-axisymmetric energy.
+        """
+        fields = self.fields_physical(state)
+        e_total = quadratic_energy(fields[:3], self.T0) + quadratic_energy(
+            fields[3:], self.T0
+        )
+        axi = tuple(
+            jnp.broadcast_to(jnp.mean(f, axis=0, keepdims=True), f.shape)
+            for f in fields
+        )
+        e_axi = quadratic_energy(axi[:3], self.T0) + quadratic_energy(axi[3:], self.T0)
+        return e_total - e_axi, e_total
+
     def diagnostics(self, state: AxisymmetricPCFState) -> dict[str, Array]:
         ek, em = self.energy_parts(state)
         reynolds, maxwell = self.stresses(state)
-        return {
+        total_stress = reynolds + maxwell
+        mbx, mby, mbz = self.magnetic_component_means(state)
+        mag_total, mag_mean, mag_fluct = self.magnetic_energy_split(state)
+        e_nonaxi, e_total = self.nonaxisymmetric_energy(state)
+        out = {
             "Ekin": ek,
             "Emag": em,
             "E": ek + em,
@@ -1156,10 +1239,25 @@ class PCFMRIDNSJax:
             "divb": self._l2(self.magnetic_divergence(state)),
             "reynolds_stress": reynolds,
             "maxwell_stress": maxwell,
-            "transport_alpha": (reynolds + maxwell) / (self.B0 * self.B0)
-            if self.B0 != 0.0
-            else jnp.asarray(jnp.nan),
+            "total_stress": total_stress,
+            # ZNF-safe normalization by the imposed shear scale (S h)^2; always present.
+            "alpha_Sh": total_stress / ((self.S * self.h) ** 2),
+            "mag_energy_total": mag_total,
+            "mag_energy_mean": mag_mean,
+            "mag_energy_fluct": mag_fluct,
+            "mean_bx": mbx,
+            "mean_by": mby,
+            "mean_bz": mbz,
+            "E_nonaxisymmetric": e_nonaxi,
+            "E_total": e_total,
+            "nonaxisymmetric_fraction": e_nonaxi / (e_total + 1.0e-300),
         }
+        # Net-flux normalization only when an imposed field exists (never NaN at B0=0).
+        if self.B0 != 0.0:
+            alpha_b0 = total_stress / (self.B0 * self.B0)
+            out["alpha_B0"] = alpha_b0
+            out["transport_alpha"] = alpha_b0  # back-compat net-flux name
+        return out
 
     def growth_rate(
         self, state: AxisymmetricPCFState, steps: int

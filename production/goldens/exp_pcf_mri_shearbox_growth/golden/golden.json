@@ -94,5 +94,11 @@
       "total_energy": 1e-06,
       "transport_alpha": 4.850302696228027e-06
     }
+  },
+  "quarantined": {
+    "reason": "pre-FJ-01 invalid nonlinear reference: div_b_l2=0.0267 and div_u_l2=0.0230 both exceed the 1e-2 solenoidality guard, and it was generated with the mis-ordered (streamwise-undealiased) padding. Regression-only evidence; forbidden from seeding or validating production (FJ-01/FJ-03).",
+    "numerics_contract_version": 1,
+    "regression_only": true,
+    "forbidden_from_seeding_production": true
   }
 }

@@ -4,6 +4,8 @@
   "geometry": "pcf",
   "physics": "mri",
   "support_state": "experimental",
+  "numerics_contract_version": 2,
+  "representation": "primitive",
   "formulation": {
     "internal": "primitive-b PCF MRI/shearbox DNS with direct magnetic-field evolution",
     "pressure": "primitive velocity pressure with direct magnetic components"
@@ -16,9 +18,9 @@
     "z": "spanwise/vertical-field direction"
   },
   "native_axes": {
-    "axis_0": "x wall-normal",
-    "axis_1": "y streamwise",
-    "axis_2": "z spanwise"
+    "axis_0": "y streamwise (Fourier)",
+    "axis_1": "z spanwise/vertical (Fourier)",
+    "axis_2": "x wall-normal (Chebyshev)"
   },
   "nondimensional_groups": {
     "Re": 1000.0,
@@ -44,21 +46,22 @@
     "z_period": 1.0
   },
   "resolution": {
-    "smoke": {"Nx": 8, "Ny": 4, "Nz": 8, "dealias": [1.0, 1.0, 1.0]},
+    "smoke": {"Nx": 8, "Ny": 4, "Nz": 8, "dealias": 1.0},
     "start": {"Nx": 16, "Ny": 32, "Nz": 16},
     "production": {"Nx": 32, "Ny": 32, "Nz": 32},
-    "dealias": [1.0, 1.5, 1.5],
+    "dealias": {"x": 1.0, "y": 1.5, "z": 1.5},
     "family": "L"
   },
   "time": {
-    "integrator": "IMEXRK222",
+    "integrator": "CNAB2",
     "dt": 0.005,
     "final_time": 60.0
   },
   "initial_condition": {
-    "type": "mri_eigenmode_packet",
+    "type": "net_flux_3d_perturbed",
     "amplitude": 0.001,
-    "seeded_modes": {"ky": 0, "kz": [1, 2, 3]}
+    "seeded_modes": {"ky": 0, "kz": [1, 2, 3]},
+    "nonaxisymmetric_seed": {"ky_mode": 1, "kz_mode": 1, "amplitude": 0.0001}
   },
   "forcing": {
     "type": "rotation_shear_imposed_vertical_field",
@@ -71,9 +74,13 @@
     "growth_rate",
     "maxwell_stress_xy",
     "reynolds_stress",
+    "total_stress",
     "transport_alpha",
+    "alpha_Sh",
     "divergence_b_l2",
-    "butterfly_by_mean"
+    "divergence_u_l2",
+    "mean_by",
+    "nonaxisymmetric_fraction"
   ],
   "expected_oracle": {
     "type": "mri_saturation_ladder",
@@ -86,17 +93,20 @@
     "kind": "dns-production",
     "scalars": {
       "divergence_b_l2": 1e-10,
+      "divergence_u_l2": 1e-10,
       "growth_rate": 0.002,
       "magnetic_energy": 0.000001,
       "maxwell_stress_xy": 0.000001,
-      "butterfly_by_mean": 1e-06,
-      "divergence_u_l2": 1e-06,
+      "total_stress": 1e-06,
+      "alpha_Sh": 1e-06,
+      "mean_by": 1e-06,
+      "nonaxisymmetric_fraction": 1e-06,
       "growth_rate_linear": 1e-06,
       "kinetic_energy": 1e-06,
-      "magnetic_energy_growth_factor": 0.6392551117500747,
+      "magnetic_energy_growth_factor": 1e-06,
       "reynolds_stress": 1e-06,
       "total_energy": 1e-06,
-      "transport_alpha": 4.850302696228027e-06
+      "transport_alpha": 1e-06
     }
   },
   "golden": {

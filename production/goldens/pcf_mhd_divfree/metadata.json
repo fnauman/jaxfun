@@ -27,5 +27,11 @@
   },
   "spec_hash": "55b47fc3e3fe274bc2e971882e7fbc35cd78664cb3fd36cda622d66f135a4e38",
   "support_state": "experimental",
-  "validation_scope": "failed_generated_saturated_candidate"
+  "validation_scope": "failed_generated_saturated_candidate",
+  "quarantined": {
+    "reason": "pre-FJ-01: generated before the FJ-01 named-axis dealias fix (streamwise nonlinearity was undealiased). Solenoidal and correctly classified as decaying, but retained as regression-only evidence; forbidden from seeding post-fix production (FJ-01.6).",
+    "numerics_contract_version": 1,
+    "regression_only": true,
+    "forbidden_from_seeding_production": true
+  }
 }

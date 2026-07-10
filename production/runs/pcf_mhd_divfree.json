@@ -4,8 +4,10 @@
   "geometry": "pcf",
   "physics": "mhd",
   "support_state": "experimental",
+  "numerics_contract_version": 2,
+  "representation": "primitive",
   "formulation": {
-    "internal": "primitive-b PCF MHD DNS target; supersedes the old vector-potential DNS path",
+    "internal": "primitive-b PCF MHD DNS: magnetic field evolved directly (NOT a vector-potential/curl formulation despite the legacy 'divfree' problem_id)",
     "pressure": "primitive velocity pressure with direct magnetic components"
   },
   "evolved_variables": ["u_x", "u_y", "u_z", "p", "b_x", "b_y", "b_z"],
@@ -16,9 +18,9 @@
     "z": "spanwise direction"
   },
   "native_axes": {
-    "axis_0": "x wall-normal",
-    "axis_1": "y streamwise",
-    "axis_2": "z spanwise"
+    "axis_0": "y streamwise (Fourier)",
+    "axis_1": "z spanwise (Fourier)",
+    "axis_2": "x wall-normal (Chebyshev)"
   },
   "nondimensional_groups": {
     "Re": 400.0,
@@ -41,14 +43,14 @@
     "z_period": 6.283185307179586
   },
   "resolution": {
-    "smoke": {"Nx": 8, "Ny": 4, "Nz": 4, "dealias": [1.0, 1.0, 1.0], "family": "C"},
+    "smoke": {"Nx": 8, "Ny": 4, "Nz": 4, "dealias": 1.0, "family": "C"},
     "start": {"Nx": 16, "Ny": 32, "Nz": 16},
     "production": {"Nx": 32, "Ny": 64, "Nz": 32},
-    "dealias": [1.0, 1.5, 1.5],
+    "dealias": {"x": 1.0, "y": 1.5, "z": 1.5},
     "family": "L"
   },
   "time": {
-    "integrator": "IMEXRK222",
+    "integrator": "CNAB2",
     "dt": 0.01,
     "final_time": 10.0
   },
@@ -66,8 +68,12 @@
     "magnetic_energy",
     "total_energy",
     "maxwell_stress_xy",
+    "reynolds_stress",
+    "total_stress",
     "divergence_u_l2",
     "divergence_b_l2",
+    "mean_by",
+    "nonaxisymmetric_fraction",
     "growth_rate"
   ],
   "expected_oracle": {
@@ -83,7 +89,9 @@
       "divergence_b_l2": 1e-10,
       "growth_rate": 0.002,
       "magnetic_energy": 0.000001,
-      "butterfly_by_mean": 1e-06,
+      "mean_by": 1e-06,
+      "nonaxisymmetric_fraction": 1e-06,
+      "total_stress": 1e-06,
       "growth_rate_linear": 1e-06,
       "kinetic_energy": 1e-06,
       "magnetic_energy_growth_factor": 1e-06,

@@ -186,6 +186,10 @@
     "nondimensional_groups": {
       "type": "object"
     },
+    "numerics_contract_version": {
+      "type": "integer",
+      "minimum": 1
+    },
     "physics": {
       "enum": [
         "hydro",

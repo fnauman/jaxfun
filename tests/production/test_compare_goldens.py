@@ -128,7 +128,9 @@ def test_bool_numeric_scalar_mismatch_fails_type_check():
     ("problem_id", "growth_scalar", "minimum_growth"),
     [
         ("pcf_fluct_re400", "energy_growth_factor", 2.0),
-        ("exp_pcf_mri_shearbox_growth", "magnetic_energy_growth_factor", 2.0),
+        # exp_pcf_mri_shearbox_growth is quarantined (FJ-03): its promoted golden is
+        # a guard-violating non-solenoidal state, so it is no longer a valid
+        # reference -- see test_quarantined_mri_golden_is_guard_violating below.
         ("tc_supercritical_saturation", "energy_growth_factor", 2.0),
         ("tc_mri_nonlinear_saturation", "magnetic_energy_growth_factor", 2.0),
     ],
@@ -151,6 +153,27 @@ def test_promoted_saturation_golden_validates_against_run_spec(
         require_all_golden_scalars=True,
     )
     assert result.passed
+
+
+def test_quarantined_mri_golden_is_guard_violating_and_blocked():
+    """FJ-03: the pre-fix MRI golden is quarantined; its state violates the guard
+    and the production comparison path refuses to use it."""
+    from production.compare_goldens import (
+        QuarantinedGoldenError,
+        assert_golden_not_quarantined,
+    )
+
+    golden = load_golden(
+        GOLDENS / "exp_pcf_mri_shearbox_growth" / "golden" / "golden.json"
+    )
+    quarantine = golden.get("quarantined")
+    assert quarantine and quarantine["forbidden_from_seeding_production"] is True
+    scalars = golden["diagnostics"]["scalars"]
+    # The committed state is not solenoidal to the 1e-2 guard.
+    assert scalars["divergence_b_l2"] > 1.0e-2
+    assert scalars["divergence_u_l2"] > 1.0e-2
+    with pytest.raises(QuarantinedGoldenError):
+        assert_golden_not_quarantined(golden, "exp_pcf_mri_shearbox_growth")
 
 
 def test_decaying_pcf_mhd_divfree_candidate_is_not_promoted():

@@ -38,6 +38,7 @@ def validate_resume_checkpoint(
     attrs = record.attrs
     if str(attrs.get("spec_hash")) != str(spec["spec_hash"]):
         raise ValueError("resume checkpoint spec_hash does not match requested spec")
+    _reject_pre_fj01_checkpoint(attrs, spec)
     dtype_json = attrs.get("dtype_metadata_json", "{}")
     if isinstance(dtype_json, bytes):
         dtype_json = dtype_json.decode()
@@ -48,6 +49,27 @@ def validate_resume_checkpoint(
         raise ValueError(
             "resume checkpoint production dtype "
             f"{expected_dtype!r} does not match active dtype {active_dtype!r}"
+        )
+
+
+def _reject_pre_fj01_checkpoint(attrs: Any, spec: dict[str, Any]) -> None:
+    """FJ-01: forbid a pre-numerics-contract checkpoint from seeding a post-fix run."""
+
+    from production.problem_spec import NUMERICS_CONTRACT_VERSION
+
+    spec_version = spec.get("numerics_contract_version")
+    if spec_version is None:
+        return  # the spec itself is pre-contract; legacy resume stays permitted.
+    ckpt_version = attrs.get("numerics_contract_version")
+    try:
+        ckpt_version = int(ckpt_version) if ckpt_version is not None else 0
+    except (TypeError, ValueError):
+        ckpt_version = 0
+    if ckpt_version < int(spec_version):
+        raise ValueError(
+            "resume checkpoint is pre-FJ-01 (numerics_contract_version "
+            f"{ckpt_version} < {NUMERICS_CONTRACT_VERSION}); it must not seed a "
+            "post-fix production continuation. Regenerate under the current contract."
         )
 
 
@@ -902,7 +924,7 @@ def _run_pcf_fluctuation_saturation(
         U_wall=float(groups.get("U_wall", 1.0)),
         dt=float(spec["time"]["dt"]),
         family=resolution.get("family", "L"),
-        padding_factor=_padding_factor(resolution, dimensions=3),
+        padding_factor=_padding_factor(resolution, solver_family="pcf_kmm"),
         perturbation_amplitude=float(spec["initial_condition"].get("amplitude", 0.1)),
     )
     state = solver.initial_state()
@@ -1020,13 +1042,13 @@ def _run_pcf_primitive_mhd_saturation(
         )
     _assert_pcf_half_gap_domain(spec)
     resolution = _selected_resolution(spec)
-    groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     solver = PCFMRIDNSJax(
-        S=float(groups.get("S", 1.0)),
-        omega=float(groups.get("Omega", 0.0)),
-        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
-        nu=float(groups["nu"]),
-        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        S=physics.S,
+        omega=physics.Omega,
+        B0=physics.B0,
+        nu=physics.nu,
+        eta_mag=physics.eta,
         Nx=int(resolution.get("Nx", resolution.get("N", 32))),
         Ny=int(resolution.get("Ny", 8)),
         Nz=int(resolution.get("Nz", 16)),
@@ -1034,27 +1056,41 @@ def _run_pcf_primitive_mhd_saturation(
         Lz=float(spec["domain"]["z_period"]),
         dt=float(spec["time"]["dt"]),
         family=resolution.get("family", "L"),
-        dealias=_padding_factor(resolution, dimensions=3),
+        dealias=_padding_factor(resolution, solver_family="pcf_primitive"),
     )
     if spec["physics"] == "mri":
         state, eigenvalue = _pcf_mri_packet_state(solver, spec)
     else:
         state, eigenvalue = _pcf_mhd_perturbation_state(solver, spec)
 
+    _assert_nonaxisymmetric_seed(solver, state, spec)
     initial = _pcf_primitive_3d_scalars(solver, state)
     diagnostic_rows: list[dict[str, Any]] = []
 
     def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
-        diagnostic_rows.append(
-            {
-                "t": float(t),
-                "kinetic_energy": float(diag["Ekin"]),
-                "magnetic_energy": float(diag["Emag"]),
-                "total_energy": float(diag["E"]),
-                "divergence_u_l2": float(diag["divu"]),
-                "divergence_b_l2": float(diag["divb"]),
-            }
-        )
+        # FJ-06: the cadence row keeps the stresses/mean-flux/non-axisymmetric
+        # signals the solver already computes, not just energies + divergence.
+        row = {
+            "t": float(t),
+            "kinetic_energy": float(diag["Ekin"]),
+            "magnetic_energy": float(diag["Emag"]),
+            "total_energy": float(diag["E"]),
+            "divergence_u_l2": float(diag["divu"]),
+            "divergence_b_l2": float(diag["divb"]),
+            "reynolds_stress": float(diag["reynolds_stress"]),
+            "maxwell_stress_xy": float(diag["maxwell_stress"]),
+            "total_stress": float(diag["total_stress"]),
+            "alpha_Sh": float(diag["alpha_Sh"]),
+            "mag_energy_mean": float(diag["mag_energy_mean"]),
+            "mag_energy_fluct": float(diag["mag_energy_fluct"]),
+            "mean_bx": float(diag["mean_bx"]),
+            "mean_by": float(diag["mean_by"]),
+            "mean_bz": float(diag["mean_bz"]),
+            "nonaxisymmetric_fraction": float(diag["nonaxisymmetric_fraction"]),
+        }
+        if "transport_alpha" in diag:
+            row["transport_alpha"] = float(diag["transport_alpha"])
+        diagnostic_rows.append(row)
 
     state, tstep0, t0 = _resume_or_initial_state(
         resume_checkpoint,
@@ -1101,45 +1137,67 @@ def _run_pcf_primitive_mhd_saturation(
             final["divergence_b_l2"],
         ),
     )
+    # FJ-04: mean magnetic-flux drift from the initial state (net-flux monitor).
+    flux_drift = {
+        f"flux_drift_b{axis}": final[f"mean_b{axis}"] - initial[f"mean_b{axis}"]
+        for axis in ("x", "y", "z")
+    }
     scalars = {
         **final,
+        **flux_drift,
         "growth_rate": float(growth_rate),
         "growth_rate_linear": float(eigenvalue.real),
         "magnetic_energy_growth_factor": float(magnetic_growth),
         "saturation_check_passed": bool(saturation_passed),
         "magnetic_bc": magnetic_bc,
     }
-    first = {
-        "t": 0.0,
-        "kinetic_energy": initial["kinetic_energy"],
-        "magnetic_energy": initial["magnetic_energy"],
-        "total_energy": initial["total_energy"],
-        "growth_rate_linear": float(eigenvalue.real),
-        "divergence_u_l2": initial["divergence_u_l2"],
-        "divergence_b_l2": initial["divergence_b_l2"],
-        "maxwell_stress_xy": initial["maxwell_stress_xy"],
-        "reynolds_stress": initial["reynolds_stress"],
-        "transport_alpha": initial["transport_alpha"],
-        "butterfly_by_mean": initial["butterfly_by_mean"],
-    }
-    last = {
-        "t": elapsed,
-        "kinetic_energy": final["kinetic_energy"],
-        "magnetic_energy": final["magnetic_energy"],
-        "total_energy": final["total_energy"],
-        "growth_rate": float(growth_rate),
-        "magnetic_energy_growth_factor": float(magnetic_growth),
-        "saturation_check_passed": bool(saturation_passed),
-        "divergence_u_l2": final["divergence_u_l2"],
-        "divergence_b_l2": final["divergence_b_l2"],
-        "maxwell_stress_xy": final["maxwell_stress_xy"],
-        "reynolds_stress": final["reynolds_stress"],
-        "transport_alpha": final["transport_alpha"],
-        "butterfly_by_mean": final["butterfly_by_mean"],
-    }
+    first = _pcf_primitive_summary_row(
+        initial, t=0.0, extra={"growth_rate_linear": float(eigenvalue.real)}
+    )
+    last = _pcf_primitive_summary_row(
+        final,
+        t=elapsed,
+        extra={
+            "growth_rate": float(growth_rate),
+            "magnetic_energy_growth_factor": float(magnetic_growth),
+            "saturation_check_passed": bool(saturation_passed),
+        },
+    )
     series = _dedupe_time_rows([first, *diagnostic_rows, last])
     scalars.update(_stationarity_scalars(series, key="total_energy"))
     return {"scalars": scalars, "time_series": series}
+
+
+def _pcf_primitive_summary_row(
+    scalars: dict[str, float], *, t: float, extra: dict[str, Any]
+) -> dict[str, Any]:
+    """Build a first/last time-series row from primitive-DNS scalars (FJ-04-safe)."""
+
+    keys = (
+        "kinetic_energy",
+        "magnetic_energy",
+        "total_energy",
+        "divergence_u_l2",
+        "divergence_b_l2",
+        "maxwell_stress_xy",
+        "reynolds_stress",
+        "total_stress",
+        "alpha_Sh",
+        "mag_energy_mean",
+        "mag_energy_fluct",
+        "mean_bx",
+        "mean_by",
+        "mean_bz",
+        "nonaxisymmetric_fraction",
+    )
+    row: dict[str, Any] = {"t": float(t)}
+    for key in keys:
+        if key in scalars:
+            row[key] = scalars[key]
+    if "transport_alpha" in scalars:
+        row["transport_alpha"] = scalars["transport_alpha"]
+    row.update(extra)
+    return row
 
 
 def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:
@@ -1663,6 +1721,10 @@ def _solve_with_optional_checkpoints(
                 f"nonfinite solver state at tstep={int(tstep)} t={float(t):g}"
             )
         diag = diagnostics_cache.pop(int(tstep), None)
+        # FJ-06: catch a finite-but-runaway energy in addition to non-finite state.
+        _raise_on_energy_runaway(
+            solver, candidate_state, t=t, tstep=tstep, diagnostics=diag
+        )
         _raise_on_divergence_drift(
             solver, candidate_state, t=t, tstep=tstep, diagnostics=diag
         )
@@ -1777,6 +1839,40 @@ def _monitor_every(
 
 
 _DIVERGENCE_GUARD_LIMIT = 1.0e-2
+
+
+_ENERGY_RUNAWAY_LIMIT = 1.0e30
+
+
+def _raise_on_energy_runaway(
+    solver: Any, state: Any, *, t: float, tstep: int, diagnostics: Any
+) -> None:
+    """FJ-06: stop a run whose energy blows up while still finite."""
+
+    energy: float | None = None
+    if isinstance(diagnostics, dict):
+        for key in ("E", "total_energy", "Etot", "Ekin"):
+            value = diagnostics.get(key)
+            if value is not None:
+                try:
+                    energy = float(value)
+                except (TypeError, ValueError):
+                    energy = None
+                if energy is not None:
+                    break
+    if energy is None:
+        energy_fn = getattr(solver, "energy", None)
+        if energy_fn is None:
+            return
+        try:
+            energy = float(energy_fn(state))
+        except Exception:  # pragma: no cover - energy not computable for this solver
+            return
+    if not math.isfinite(energy) or abs(energy) > _ENERGY_RUNAWAY_LIMIT:
+        raise FloatingPointError(
+            f"energy runaway ceiling exceeded at tstep={int(tstep)} "
+            f"t={float(t):g}: E={energy:g} > {_ENERGY_RUNAWAY_LIMIT:g}"
+        )
 
 
 def _raise_on_divergence_drift(
@@ -2016,15 +2112,31 @@ def _selected_resolution(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _padding_factor(
-    resolution: dict[str, Any], *, dimensions: int
+    resolution: dict[str, Any], *, solver_family: str, dimensions: int = 3
 ) -> tuple[float, ...]:
-    dealias = resolution.get("dealias", 1.0)
-    if isinstance(dealias, (list, tuple)):
-        values = tuple(float(value) for value in dealias)
-        if len(values) != dimensions:
-            raise ValueError(f"expected {dimensions} dealias values, got {len(values)}")
-        return values
-    return tuple(float(dealias) for _ in range(dimensions))
+    """Return the native-order 3/2-rule padding for ``solver_family`` (FJ-01).
+
+    The spec's semantic ``resolution.dealias`` (``{x, y, z}`` map or scalar) is
+    remapped to the solver's native array axis order so the same spec dealiases
+    correctly whether the solver is ``(y, z, x)`` (primitive) or ``(x, y, z)`` (KMM).
+    """
+
+    from production.axes import native_padding_for_solver
+
+    return native_padding_for_solver(
+        resolution, solver_family=solver_family, dimensions=dimensions
+    )
+
+
+def _resolved_physics(spec: dict[str, Any]):
+    """Return the single :class:`ResolvedPhysics` object for a spec (FJ-00)."""
+
+    import jax
+
+    from production.physics import resolve_physics
+
+    precision = "float64" if jax.config.read("jax_enable_x64") else "float32"
+    return resolve_physics(spec, precision=precision)
 
 
 def _assert_pcf_half_gap_domain(spec: dict[str, Any]) -> None:
@@ -2069,6 +2181,16 @@ def _pcf_mhd_perturbation_state(
 
 
 def _pcf_mri_packet_state(solver: Any, spec: dict[str, Any]) -> tuple[Any, complex]:
+    """Seed the MRI eigenmode packet (FJ-02: named IC modes + non-axisymmetric seed).
+
+    The base packet superposes axisymmetric (``k_y``-selected) eigenmodes. When the
+    spec requests a 3-D nonlinear IC it must also carry a ``nonaxisymmetric_seed``
+    block ``{ky_mode>=1, kz_mode, amplitude}``; that divergence-free, wall-satisfying
+    ``k_y != 0`` eigenmode is superposed so the run leaves the axisymmetric invariant
+    subspace. Recognized ``initial_condition.type`` values:
+    ``mri_eigenmode_packet`` (axisymmetric), ``net_flux_3d_perturbed``.
+    """
+
     initial = spec["initial_condition"]
     seeded_modes = initial.get("seeded_modes", {})
     ky_mode = int(seeded_modes.get("ky", 0))
@@ -2084,21 +2206,47 @@ def _pcf_mri_packet_state(solver: Any, spec: dict[str, Any]) -> tuple[Any, compl
         )
         states.append(state)
         eigenvalues.append(eigenvalue)
-    x = tuple(
+    components = [
         sum((state.x[i] for state in states[1:]), states[0].x[i])
         for i in range(len(states[0].x))
-    )
+    ]
     eigenvalue = max(eigenvalues, key=lambda value: value.real)
-    return _pcf_state_from_components(states[0], x), eigenvalue
+
+    seed = initial.get("nonaxisymmetric_seed")
+    if seed is not None:
+        na_ky = int(seed.get("ky_mode", 1))
+        if na_ky == 0:
+            raise ValueError("nonaxisymmetric_seed.ky_mode must be nonzero")
+        na_state, _ = solver.seed_linear_eigenmode(
+            ky_mode=na_ky,
+            kz_mode=int(seed.get("kz_mode", 1)),
+            amp=float(seed.get("amplitude", amplitude)),
+        )
+        components = [components[i] + na_state.x[i] for i in range(len(components))]
+
+    return _pcf_state_from_components(states[0], tuple(components)), eigenvalue
+
+
+def _assert_nonaxisymmetric_seed(solver: Any, state: Any, spec: dict[str, Any]) -> None:
+    """FJ-02: a nonlinear 3-D run must not start in the axisymmetric subspace."""
+
+    if int(getattr(solver, "Ny", 1)) <= 1:
+        return  # a genuinely 2-D (k_y=0) run is axisymmetric by construction.
+    e_nonaxi, e_total = solver.nonaxisymmetric_energy(state)
+    e_nonaxi = float(e_nonaxi)
+    e_total = float(e_total)
+    if e_total > 0.0 and e_nonaxi <= 1.0e-24 * e_total:
+        raise ProductionOracleNotImplementedError(
+            "3-D nonlinear PCF spec starts in the exactly axisymmetric (k_y=0) "
+            "subspace: initial non-axisymmetric energy is "
+            f"{e_nonaxi:.3e} of {e_total:.3e}. Add an initial_condition."
+            "nonaxisymmetric_seed {ky_mode>=1, kz_mode, amplitude} (FJ-02)."
+        )
 
 
 def _pcf_primitive_3d_scalars(solver: Any, state: Any) -> dict[str, float]:
-    import jax.numpy as jnp
-
     diag = solver.diagnostics(state)
-    fields = solver.fields_physical(state)
-    butterfly_by_mean = jnp.mean(jnp.real(fields[4]))
-    return {
+    scalars = {
         "kinetic_energy": float(diag["Ekin"]),
         "magnetic_energy": float(diag["Emag"]),
         "total_energy": float(diag["E"]),
@@ -2106,9 +2254,24 @@ def _pcf_primitive_3d_scalars(solver: Any, state: Any) -> dict[str, float]:
         "divergence_b_l2": float(diag["divb"]),
         "maxwell_stress_xy": float(diag["maxwell_stress"]),
         "reynolds_stress": float(diag["reynolds_stress"]),
-        "transport_alpha": float(diag["transport_alpha"]),
-        "butterfly_by_mean": float(butterfly_by_mean),
+        "total_stress": float(diag["total_stress"]),
+        "alpha_Sh": float(diag["alpha_Sh"]),
+        "mag_energy_total": float(diag["mag_energy_total"]),
+        "mag_energy_mean": float(diag["mag_energy_mean"]),
+        "mag_energy_fluct": float(diag["mag_energy_fluct"]),
+        # mean flux components (FJ-04 replaces the mislabelled "butterfly_by_mean").
+        "mean_bx": float(diag["mean_bx"]),
+        "mean_by": float(diag["mean_by"]),
+        "mean_bz": float(diag["mean_bz"]),
+        "E_nonaxisymmetric": float(diag["E_nonaxisymmetric"]),
+        "E_total": float(diag["E_total"]),
+        "nonaxisymmetric_fraction": float(diag["nonaxisymmetric_fraction"]),
     }
+    # Net-flux alpha only when an imposed field exists (ZNF runs never see NaN).
+    if "transport_alpha" in diag:
+        scalars["transport_alpha"] = float(diag["transport_alpha"])
+        scalars["alpha_B0"] = float(diag["alpha_B0"])
+    return scalars
 
 
 def _pcf_fluctuation_scalars(solver: Any, state: Any) -> dict[str, float]:

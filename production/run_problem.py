@@ -23,8 +23,10 @@ from typing import Any
 try:
     from .adapters import ProductionConfig, load_config
     from .compare_goldens import (
+        assert_golden_not_quarantined,
         compare_problem,
         compare_to_golden,
+        load_golden,
         resolve_golden,
         validate_golden,
         scalar_hash,
@@ -37,12 +39,15 @@ try:
         validate_resume_checkpoint,
     )
     from .problem_spec import ProblemSpecError, UnsupportedSpecError
+    from .provenance import ReleaseCleanlinessError
 except ImportError:  # pragma: no cover - direct script mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from production.adapters import ProductionConfig, load_config  # type: ignore
     from production.compare_goldens import (
+        assert_golden_not_quarantined,
         compare_problem,
         compare_to_golden,
+        load_golden,
         resolve_golden,
         validate_golden,
         scalar_hash,
@@ -61,6 +66,7 @@ except ImportError:  # pragma: no cover - direct script mode
         ProblemSpecError,
         UnsupportedSpecError,
     )
+    from production.provenance import ReleaseCleanlinessError  # type: ignore
 
 
 class SolverExecutionNotImplementedError(RuntimeError):
@@ -83,6 +89,8 @@ def run_problem(
     validate_only: bool = False,
     capture_device: bool = True,
     resume: str | Path | None = None,
+    require_clean: bool = False,
+    allow_dirty: bool = False,
 ) -> dict[str, Any]:
     """Validate a config, write metadata, and eventually execute its solver."""
 
@@ -90,6 +98,9 @@ def run_problem(
     resume_record = load_resume_checkpoint(resume) if resume is not None else None
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    release_gate = _enforce_release_gate(
+        out_dir, require_clean=require_clean, allow_dirty=allow_dirty
+    )
     compilation_cache, restore_compilation_cache = _configure_compilation_cache(out_dir)
     try:
         effective_diagnostics_every = _effective_diagnostics_every(
@@ -123,6 +134,8 @@ def run_problem(
             resume=Path(resume) if resume is not None else None,
             compilation_cache=compilation_cache,
         )
+        if release_gate is not None and isinstance(metadata.get("provenance"), dict):
+            metadata["provenance"]["release_gate"] = release_gate
         _write_json(out_dir / "metadata.json", metadata)
 
         if validate_only:
@@ -158,7 +171,8 @@ def run_problem(
                 solver_started_at, solver_start, solver_steps=solver_steps
             )
             metadata["execution"] = {
-                "status": "failed",
+                # FJ-06: distinguish nan_inf / blew_up / walltime from a generic failure.
+                "status": _operational_status(exc),
                 "solver_execution_wired": True,
                 "execution_kind": _execution_kind(config.spec),
                 "failure_reason": _exception_message(exc),
@@ -191,6 +205,7 @@ def run_problem(
         metadata["saturation_checks"] = _saturation_check_metadata(
             diagnostics, validation_scope=metadata["validation_scope"]
         )
+        metadata["classification"] = _classification_metadata(diagnostics)
         metadata["validation_floor"] = _validation_floor_metadata(
             diagnostics, validation_scope=metadata["validation_scope"]
         )
@@ -268,6 +283,10 @@ def build_metadata(
         "config_path": str(config_path),
         "out_dir": str(out_dir),
         "spec_hash": config.spec["spec_hash"],
+        "numerics_contract_version": config.spec.get("numerics_contract_version"),
+        "provenance": _capture_provenance_safe(),
+        "resolved_physics": _resolved_physics_metadata(config.spec),
+        "integrator": _integrator_provenance(config.spec),
         "base_spec_hash": config.metadata.get(
             "base_spec_hash", config.spec["spec_hash"]
         ),
@@ -780,6 +799,7 @@ def _compare_diagnostics(
     }
     if explicit_golden is not None:
         golden = validate_golden(explicit_golden, spec=config.spec)
+        assert_golden_not_quarantined(golden, config.problem_id)
         return compare_to_golden(
             diagnostics["scalars"],
             golden,
@@ -787,6 +807,10 @@ def _compare_diagnostics(
             require_all_golden_scalars=True,
             convention_metadata=convention_metadata,
         )
+    resolution = resolve_golden(config.problem_id)
+    assert_golden_not_quarantined(
+        load_golden(resolution.golden_path), config.problem_id
+    )
     return compare_problem(
         config.problem_id,
         diagnostics["scalars"],
@@ -805,6 +829,7 @@ def _write_golden(
 ) -> Path:
     diagnostics_ready = _json_ready(diagnostics)
     scalars = diagnostics_ready["scalars"]
+    _assert_golden_divergence_ok(config.problem_id, scalars)
     tolerance_model = _golden_tolerance_model(config.spec["tolerance_model"], scalars)
     data = {
         "schema_version": 1,
@@ -816,7 +841,7 @@ def _write_golden(
             "interpreter": sys.executable,
             "jax": device_record,
         },
-        "git": {},
+        "git": _capture_provenance_safe(),
         "source_anchors": config.spec["expected_oracle"].get("source_anchors", []),
         "tolerance_model": tolerance_model,
         "diagnostics": diagnostics_ready,
@@ -831,6 +856,148 @@ def _write_golden(
     }
     _write_json(path, data)
     return path
+
+
+def _enforce_release_gate(
+    out_dir: Path, *, require_clean: bool, allow_dirty: bool
+) -> dict[str, Any] | None:
+    """FJ-13: enforce the clean-worktree gate when a production launch requests it."""
+
+    if not require_clean:
+        return None
+    try:
+        from .provenance import assert_release_clean
+    except ImportError:  # pragma: no cover - direct script mode
+        from production.provenance import assert_release_clean  # type: ignore
+    prov = assert_release_clean(out_dir, allow_dirty=allow_dirty)
+    return prov.get("release_gate")
+
+
+_INTEGRATOR_FORMAL_ORDER = {
+    "CNAB2": 2,
+    "IMEXRK222": 2,
+    "IMEXRK443": 3,
+    "analytic": None,
+    "linear_eigenproblem": None,
+}
+
+# The wired primitive PCF MHD/MRI saturation solver advances the coupled block with
+# hard-coded CNAB2 regardless of the requested-but-inert time.integrator label.
+_PRIMITIVE_SATURATION_ORACLES = {
+    "gpu_generated_saturated_dns",
+    "mri_saturation_ladder",
+}
+
+
+def _integrator_provenance(spec: dict[str, Any]) -> dict[str, Any]:
+    """FJ-08: record the integrator actually used, its formal order, and dt."""
+
+    requested = spec.get("time", {}).get("integrator")
+    oracle = spec.get("expected_oracle", {}).get("type")
+    actual = requested
+    if oracle in _PRIMITIVE_SATURATION_ORACLES and spec.get("physics") in {"mhd", "mri"}:
+        actual = "CNAB2"  # hard-coded in PCFMRIDNSJax
+    return {
+        "requested": requested,
+        "actual": actual,
+        "formal_order": _INTEGRATOR_FORMAL_ORDER.get(actual),
+        "dt": spec.get("time", {}).get("dt"),
+        "order_regression_test": (
+            "tests/couette/test_pcf_mri_cnab2_order_jax.py"
+            if actual == "CNAB2"
+            else None
+        ),
+    }
+
+
+def _operational_status(exc: BaseException) -> str:
+    try:
+        from .classify import operational_status_from_exception
+    except ImportError:  # pragma: no cover - direct script mode
+        from production.classify import operational_status_from_exception  # type: ignore
+    return operational_status_from_exception(exc).value
+
+
+def _classification_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    """FJ-06: separate scientific class from operational status."""
+
+    try:
+        from .classify import classify_scientific
+    except ImportError:  # pragma: no cover - direct script mode
+        from production.classify import classify_scientific  # type: ignore
+
+    series = diagnostics.get("time_series") or []
+    scalars = diagnostics.get("scalars") or {}
+    stationary = scalars.get("stationarity_check_passed")
+    # Noise floor: a tiny fraction of the peak fluctuation energy in the series.
+    peak = 0.0
+    for row in series:
+        for key in ("mag_energy_fluct", "total_energy"):
+            value = row.get(key)
+            if isinstance(value, (int, float)) and math.isfinite(value):
+                peak = max(peak, abs(float(value)))
+    noise_floor = 1.0e-10 * peak
+    return classify_scientific(
+        series,
+        noise_floor=noise_floor,
+        stationary=bool(stationary) if stationary is not None else None,
+    )
+
+
+def _resolved_physics_metadata(spec: dict[str, Any]) -> dict[str, Any] | None:
+    """FJ-00: record the single resolved-physics object in the manifest."""
+
+    if spec.get("geometry") not in {"pcf", "channel"}:
+        return None
+    groups = spec.get("nondimensional_groups", {})
+    if groups.get("nu") is None and groups.get("Re") is None:
+        return None
+    try:
+        from .physics import resolve_physics
+    except ImportError:  # pragma: no cover - direct script mode
+        from production.physics import resolve_physics  # type: ignore
+    try:
+        return resolve_physics(spec).to_metadata()
+    except Exception:  # pragma: no cover - already validated upstream
+        return None
+
+
+def _capture_provenance_safe() -> dict[str, Any]:
+    try:
+        from .provenance import capture_provenance
+    except ImportError:  # pragma: no cover - direct script mode
+        from production.provenance import capture_provenance  # type: ignore
+    try:
+        return capture_provenance()
+    except Exception:  # pragma: no cover - provenance must never break a run
+        return {}
+
+
+def _assert_golden_divergence_ok(problem_id: str, scalars: dict[str, Any]) -> None:
+    """FJ-03: refuse to promote a golden whose solenoidality violates the guard.
+
+    A physically invalid nonlinear state (``div_u``/``div_b`` above the runtime
+    divergence guard) must never become a committed reference.
+    """
+
+    from .oracles import _DIVERGENCE_GUARD_LIMIT, _is_divergence_key
+
+    offenders = []
+    for key, value in scalars.items():
+        if not _is_divergence_key(str(key)):
+            continue
+        try:
+            magnitude = abs(float(value))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(magnitude) or magnitude > _DIVERGENCE_GUARD_LIMIT:
+            offenders.append(f"{key}={value}")
+    if offenders:
+        raise RuntimeError(
+            f"refusing to write golden for {problem_id!r}: solenoidality guard "
+            f"violated ({', '.join(offenders)} > {_DIVERGENCE_GUARD_LIMIT:g}). "
+            "This state is not a valid nonlinear reference (FJ-03)."
+        )
 
 
 def _golden_tolerance_model(
@@ -892,6 +1059,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--resume", help="Resume from a prior run directory.")
+    parser.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="FJ-13: refuse to run from a dirty/untagged/unpushed worktree.",
+    )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Permit a discovery-only run from a dirty tree; archives the diff.",
+    )
     return parser
 
 
@@ -935,10 +1112,15 @@ def main(argv: list[str] | None = None) -> int:
                 resolution_tier=args.resolution_tier,
                 validate_only=args.validate_only,
                 resume=resume_dir,
+                require_clean=args.require_clean,
+                allow_dirty=args.allow_dirty,
             )
         except (ProblemSpecError, UnsupportedSpecError) as exc:
             print(f"spec rejected: {exc}", file=sys.stderr)
             return 1
+        except ReleaseCleanlinessError as exc:
+            print(f"release gate: {exc}", file=sys.stderr)
+            return 3
         except SolverExecutionNotImplementedError as exc:
             print(str(exc), file=sys.stderr)
             return 2

@@ -48,10 +48,11 @@ def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
 
 
 def test_promoted_saturation_goldens_track_run_spec_hashes():
+    # pcf_mhd_divfree and exp_pcf_mri_shearbox_growth were migrated to the FJ-01
+    # numerics contract (v2) and their pre-fix goldens are quarantined, so their
+    # run-spec hash intentionally no longer matches the (stale) golden.
     for problem_id in [
         "pcf_fluct_re400",
-        "pcf_mhd_divfree",
-        "exp_pcf_mri_shearbox_growth",
         "tc_supercritical_saturation",
         "tc_mri_nonlinear_saturation",
     ]:
@@ -62,6 +63,20 @@ def test_promoted_saturation_goldens_track_run_spec_hashes():
 
         assert golden["problem_id"] == spec["problem_id"]
         assert golden["spec_hash"] == spec["spec_hash"]
+
+
+def test_migrated_primitive_goldens_are_quarantined_pending_regeneration():
+    """FJ-01/FJ-03: pre-fix primitive goldens must be quarantined and not tracked."""
+    for problem_id in ["pcf_mhd_divfree", "exp_pcf_mri_shearbox_growth"]:
+        spec = load_spec(RUNS / f"{problem_id}.json")
+        assert spec["numerics_contract_version"] == 2
+        golden = json.loads(
+            (GOLDENS / problem_id / "golden" / "golden.json").read_text()
+        )
+        quarantine = golden.get("quarantined")
+        assert quarantine and quarantine["forbidden_from_seeding_production"] is True
+        # The stale golden must NOT accidentally match the migrated run spec.
+        assert golden["spec_hash"] != spec["spec_hash"]
 
 
 def test_run_specs_smoke_resolution_is_smaller_than_start():

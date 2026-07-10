@@ -129,6 +129,26 @@ def load_golden(path: str | Path) -> dict[str, Any]:
         return json.load(fh)
 
 
+class QuarantinedGoldenError(RuntimeError):
+    """Raised when a quarantined (pre-FJ-01/invalid) golden is used for production."""
+
+
+def assert_golden_not_quarantined(golden: dict[str, Any], problem_id: str) -> None:
+    """FJ-03: refuse to seed/validate production against a quarantined golden.
+
+    Quarantined goldens are retained only as regression evidence; they must never
+    be a live comparison reference. Inspection helpers (load_golden/validate_golden)
+    still read them, but the production comparison path calls this guard.
+    """
+
+    quarantine = golden.get("quarantined")
+    if quarantine and quarantine.get("forbidden_from_seeding_production", True):
+        raise QuarantinedGoldenError(
+            f"golden for {problem_id!r} is quarantined and cannot validate "
+            f"production: {quarantine.get('reason', 'pre-FJ-01 artifact')}"
+        )
+
+
 def validate_golden(
     path: str | Path, spec: dict[str, Any] | None = None
 ) -> dict[str, Any]:

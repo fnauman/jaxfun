@@ -94,5 +94,11 @@
       "total_energy": 1e-06,
       "transport_alpha": 1e-06
     }
+  },
+  "quarantined": {
+    "reason": "pre-FJ-01: generated before the FJ-01 named-axis dealias fix (streamwise nonlinearity was undealiased). Solenoidal and correctly classified as decaying, but retained as regression-only evidence; forbidden from seeding post-fix production (FJ-01.6).",
+    "numerics_contract_version": 1,
+    "regression_only": true,
+    "forbidden_from_seeding_production": true
   }
 }

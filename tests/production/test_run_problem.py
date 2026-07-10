@@ -190,7 +190,7 @@ def test_smoke_resolution_tier_materializes_lightweight_pcf_spec(tmp_path):
         "Nx": 8,
         "Ny": 4,
         "Nz": 4,
-        "dealias": [1.0, 1.0, 1.0],
+        "dealias": 1.0,
         "family": "C",
     }
 
@@ -677,7 +677,7 @@ def test_pcf_mhd_divfree_smoke_runs_from_phase_j5_spec(tmp_path):
     spec["resolution"] = {
         **spec["resolution"],
         "start": {"Nx": 8, "Ny": 4, "Nz": 4},
-        "dealias": [1.0, 1.0, 1.0],
+        "dealias": 1.0,
         "family": "C",
     }
     spec["time"] = {**spec["time"], "dt": 0.001, "final_time": 0.002}
@@ -735,7 +735,7 @@ def test_exp_pcf_mri_shearbox_growth_smoke_runs_from_phase_j5_spec(tmp_path):
     spec["resolution"] = {
         **spec["resolution"],
         "start": {"Nx": 8, "Ny": 4, "Nz": 6},
-        "dealias": [1.0, 1.0, 1.0],
+        "dealias": 1.0,
         "family": "L",
     }
     spec["initial_condition"] = {
@@ -772,7 +772,9 @@ def test_exp_pcf_mri_shearbox_growth_smoke_runs_from_phase_j5_spec(tmp_path):
     assert final["divergence_b_l2"] < 1.0e-6
     assert "maxwell_stress_xy" in final
     assert "transport_alpha" in final
-    assert "butterfly_by_mean" in final
+    # FJ-04: mislabelled "butterfly_by_mean" replaced by the mean-flux components.
+    assert "mean_by" in final
+    assert "nonaxisymmetric_fraction" in final
     assert metadata["diagnostics_path"] == str(out / "diagnostics.jsonl")
 
 

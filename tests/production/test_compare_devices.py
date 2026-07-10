@@ -163,7 +163,7 @@ def test_compare_devices_cli_accepts_production_resolution_tier(tmp_path):
             "Nx": 8,
             "Ny": 4,
             "Nz": 4,
-            "dealias": [1.0, 1.0, 1.0],
+            "dealias": 1.0,
             "family": "C",
         }
     assert {item["key"] for item in report["comparisons"]} >= {
