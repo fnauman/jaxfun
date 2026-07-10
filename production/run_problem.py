@@ -38,8 +38,9 @@ try:
         run_supported_spec,
         validate_resume_checkpoint,
     )
-    from .problem_spec import ProblemSpecError, UnsupportedSpecError
+    from .problem_spec import ProblemSpecError, UnsupportedSpecError, load_spec
     from .provenance import ReleaseCleanlinessError
+    from .quench import QuenchError, burn_in_horizon, validate_quench
 except ImportError:  # pragma: no cover - direct script mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from production.adapters import ProductionConfig, load_config  # type: ignore
@@ -67,6 +68,12 @@ except ImportError:  # pragma: no cover - direct script mode
         UnsupportedSpecError,
     )
     from production.provenance import ReleaseCleanlinessError  # type: ignore
+    from production.problem_spec import load_spec  # type: ignore
+    from production.quench import (  # type: ignore
+        QuenchError,
+        burn_in_horizon,
+        validate_quench,
+    )
 
 
 class SolverExecutionNotImplementedError(RuntimeError):
@@ -94,11 +101,16 @@ def run_problem(
     wandb: bool = False,
     wandb_project: str | None = None,
     wandb_offline: bool = False,
+    quench_from: str | Path | None = None,
+    burn_in_steps: int = 0,
 ) -> dict[str, Any]:
     """Validate a config, write metadata, and eventually execute its solver."""
 
     config = load_config(config_path, resolution_tier=resolution_tier)
-    resume_record = load_resume_checkpoint(resume) if resume is not None else None
+    resume_record, quench_metadata = _resolve_resume_or_quench(
+        config, resume=resume, quench_from=quench_from, burn_in_steps=burn_in_steps
+    )
+    quench_mode = quench_metadata is not None
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     release_gate = _enforce_release_gate(
@@ -117,7 +129,9 @@ def run_problem(
             capture_device_record(device) if capture_device else {"capture_skipped": True}
         )
         if resume_record is not None:
-            validate_resume_checkpoint(resume_record, config.spec, device_record)
+            validate_resume_checkpoint(
+                resume_record, config.spec, device_record, quench=quench_mode
+            )
 
         metadata = build_metadata(
             config,
@@ -139,6 +153,8 @@ def run_problem(
         )
         if release_gate is not None and isinstance(metadata.get("provenance"), dict):
             metadata["provenance"]["release_gate"] = release_gate
+        if quench_metadata is not None:
+            metadata["quench"] = quench_metadata
         _write_json(out_dir / "metadata.json", metadata)
 
         if validate_only:
@@ -159,6 +175,7 @@ def run_problem(
                 diagnostics_every=effective_diagnostics_every,
                 device_record=device_record,
                 resume_checkpoint=resume_record,
+                quench=quench_mode,
             )
         except ProductionOracleNotImplementedError as exc:
             metadata["timing"] = _solver_timing(
@@ -869,6 +886,37 @@ def _write_golden(
     return path
 
 
+def _resolve_resume_or_quench(
+    config: ProductionConfig,
+    *,
+    resume: str | Path | None,
+    quench_from: str | Path | None,
+    burn_in_steps: int,
+) -> tuple[Any | None, dict[str, Any] | None]:
+    """Return ``(resume_record, quench_metadata)`` for resume-exact or quench (FJ-05)."""
+
+    if quench_from is not None and resume is not None:
+        raise ProblemSpecError("--resume and --quench are mutually exclusive")
+    if quench_from is not None:
+        source = Path(quench_from)
+        record = load_resume_checkpoint(source)
+        parent_spec = load_spec(source / "spec.json")
+        diff = validate_quench(parent_spec, config.spec)  # raises on illegal change
+        tstep0 = int(getattr(record, "tstep", 0))
+        meta = {
+            "mode": "quench",
+            "parent_run_dir": str(source),
+            "parent_spec_hash": parent_spec.get("spec_hash"),
+            "child_spec_hash": config.spec["spec_hash"],
+            "mutable_diff": {k: list(v) for k, v in diff["changed"].items()},
+            **burn_in_horizon(tstep0=tstep0, burn_in_steps=burn_in_steps),
+        }
+        return record, meta
+    if resume is not None:
+        return load_resume_checkpoint(resume), None
+    return None, None
+
+
 def _enforce_release_gate(
     out_dir: Path, *, require_clean: bool, allow_dirty: bool
 ) -> dict[str, Any] | None:
@@ -1146,6 +1194,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use WANDB_MODE=offline; sync later with `wandb sync`.",
     )
+    parser.add_argument(
+        "--quench",
+        dest="quench_from",
+        default=None,
+        help="FJ-05: continue from a parent run dir, changing only nu/eta (Re/Rm).",
+    )
+    parser.add_argument("--burn-in-steps", type=int, default=0)
     return parser
 
 
@@ -1194,9 +1249,14 @@ def main(argv: list[str] | None = None) -> int:
                 wandb=args.wandb,
                 wandb_project=args.wandb_project,
                 wandb_offline=args.wandb_offline,
+                quench_from=args.quench_from,
+                burn_in_steps=args.burn_in_steps,
             )
         except (ProblemSpecError, UnsupportedSpecError) as exc:
             print(f"spec rejected: {exc}", file=sys.stderr)
+            return 1
+        except QuenchError as exc:
+            print(f"quench rejected: {exc}", file=sys.stderr)
             return 1
         except ReleaseCleanlinessError as exc:
             print(f"release gate: {exc}", file=sys.stderr)

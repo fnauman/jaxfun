@@ -32,11 +32,21 @@ def load_resume_checkpoint(run_dir: str | Path):
 
 
 def validate_resume_checkpoint(
-    record: Any, spec: dict[str, Any], device_record: dict[str, Any] | None = None
+    record: Any,
+    spec: dict[str, Any],
+    device_record: dict[str, Any] | None = None,
+    *,
+    quench: bool = False,
 ) -> None:
-    """Validate checkpoint metadata against the run being resumed."""
+    """Validate checkpoint metadata against the run being resumed.
+
+    ``quench=True`` (FJ-05 continue-from) skips the strict spec_hash equality -- the
+    caller has already validated via :func:`production.quench.validate_quench` that the
+    child differs from the parent only in the mutable coefficient allowlist -- but the
+    numerics-contract, dtype, and state-layout checks still apply.
+    """
     attrs = record.attrs
-    if str(attrs.get("spec_hash")) != str(spec["spec_hash"]):
+    if not quench and str(attrs.get("spec_hash")) != str(spec["spec_hash"]):
         raise ValueError("resume checkpoint spec_hash does not match requested spec")
     _reject_pre_fj01_checkpoint(attrs, spec)
     dtype_json = attrs.get("dtype_metadata_json", "{}")
@@ -79,10 +89,11 @@ def _resume_or_initial_state(
     *,
     spec: dict[str, Any],
     state_kind: str,
+    quench: bool = False,
 ) -> tuple[Any, int, float]:
     if resume_checkpoint is None:
         return initial_state, 0, 0.0
-    validate_resume_checkpoint(resume_checkpoint, spec)
+    validate_resume_checkpoint(resume_checkpoint, spec, quench=quench)
     checkpoint_kind = str(resume_checkpoint.attrs.get("state_kind"))
     if checkpoint_kind != state_kind:
         raise ValueError(
@@ -174,6 +185,7 @@ def run_supported_spec(
     diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
+    quench: bool = False,
 ) -> dict[str, Any]:
     """Run a supported production spec and return canonical diagnostics."""
 
@@ -298,6 +310,7 @@ def run_supported_spec(
             diagnostics_every=diagnostics_every,
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
+            quench=quench,
         )
     if (
         spec["problem_id"] == "exp_pcf_mri_shearbox_growth"
@@ -314,6 +327,7 @@ def run_supported_spec(
             diagnostics_every=diagnostics_every,
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
+            quench=quench,
         )
     if (
         spec["geometry"] == "pipe"
@@ -1031,6 +1045,7 @@ def _run_pcf_primitive_mhd_saturation(
     diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
+    quench: bool = False,
 ) -> dict[str, Any]:
     from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
 
@@ -1097,6 +1112,7 @@ def _run_pcf_primitive_mhd_saturation(
         state,
         spec=spec,
         state_kind="pcf_primitive_mhd_saturation",
+        quench=quench,
     )
     target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
