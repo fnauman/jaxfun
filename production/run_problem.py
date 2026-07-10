@@ -91,6 +91,9 @@ def run_problem(
     resume: str | Path | None = None,
     require_clean: bool = False,
     allow_dirty: bool = False,
+    wandb: bool = False,
+    wandb_project: str | None = None,
+    wandb_offline: bool = False,
 ) -> dict[str, Any]:
     """Validate a config, write metadata, and eventually execute its solver."""
 
@@ -250,6 +253,14 @@ def run_problem(
             metadata["written_golden"] = str(golden_path)
 
         _write_json(out_dir / "metadata.json", metadata)
+        _mirror_to_wandb(
+            config,
+            diagnostics,
+            metadata,
+            enabled=wandb,
+            project=wandb_project,
+            offline=wandb_offline,
+        )
         return metadata
     finally:
         restore_compilation_cache()
@@ -910,6 +921,60 @@ def _integrator_provenance(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _mirror_to_wandb(
+    config: ProductionConfig,
+    diagnostics: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    enabled: bool,
+    project: str | None,
+    offline: bool,
+) -> None:
+    """FJ-07: mirror the cadence stream + run summary to W&B (host-side, post-solve).
+
+    A no-op when disabled or when wandb is uninstalled. Never invoked inside JAX
+    tracing -- it reads the already-materialized diagnostics.
+    """
+
+    if not enabled:
+        return
+    try:
+        from .wandb_sink import WandbSink
+    except ImportError:  # pragma: no cover - direct script mode
+        from production.wandb_sink import WandbSink  # type: ignore
+
+    resolved = metadata.get("resolved_physics") or {}
+    sink = WandbSink(
+        enabled=True,
+        project=project or "jaxfun-production",
+        group=f"{config.geometry}/{config.physics}",
+        run_id=f"{config.problem_id}-{config.spec['spec_hash'][:12]}",
+        config={
+            "problem_id": config.problem_id,
+            "spec_hash": config.spec["spec_hash"],
+            **{k: resolved.get(k) for k in ("Re_h", "Rm_h", "Pm", "B0", "nu", "eta")},
+        },
+        mode="offline" if offline else None,
+    )
+    with sink:
+        for row in diagnostics.get("time_series") or []:
+            sink.log_cadence(row)
+        classification = metadata.get("classification") or {}
+        execution = metadata.get("execution") or {}
+        scalars = diagnostics.get("scalars") or {}
+        summary = {
+            "operational_status": execution.get("status"),
+            "scientific_class": classification.get("scientific_class"),
+            "final_time": (diagnostics.get("time_series") or [{}])[-1].get("t"),
+        }
+        summary.update({k: v for k, v in scalars.items() if _is_number(v)})
+        sink.log_summary(summary)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _operational_status(exc: BaseException) -> str:
     try:
         from .classify import operational_status_from_exception
@@ -1069,6 +1134,18 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Permit a discovery-only run from a dirty tree; archives the diff.",
     )
+    parser.add_argument(
+        "--wandb",
+        action="store_true",
+        help="FJ-07: mirror diagnostics to Weights & Biases (optional; local files "
+        "stay the source of truth). No-op if wandb is uninstalled.",
+    )
+    parser.add_argument("--wandb-project", default=None)
+    parser.add_argument(
+        "--wandb-offline",
+        action="store_true",
+        help="Use WANDB_MODE=offline; sync later with `wandb sync`.",
+    )
     return parser
 
 
@@ -1114,6 +1191,9 @@ def main(argv: list[str] | None = None) -> int:
                 resume=resume_dir,
                 require_clean=args.require_clean,
                 allow_dirty=args.allow_dirty,
+                wandb=args.wandb,
+                wandb_project=args.wandb_project,
+                wandb_offline=args.wandb_offline,
             )
         except (ProblemSpecError, UnsupportedSpecError) as exc:
             print(f"spec rejected: {exc}", file=sys.stderr)
