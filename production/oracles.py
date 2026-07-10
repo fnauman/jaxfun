@@ -1095,7 +1095,6 @@ def _run_pcf_primitive_mhd_saturation(
         state, eigenvalue = _pcf_mhd_perturbation_state(solver, spec)
 
     _assert_nonaxisymmetric_seed(solver, state, spec)
-    initial = _pcf_primitive_3d_scalars(solver, state)
     diagnostic_rows: list[dict[str, Any]] = []
 
     def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
@@ -1130,6 +1129,10 @@ def _run_pcf_primitive_mhd_saturation(
         state_kind="pcf_primitive_mhd_saturation",
         quench=quench,
     )
+    # FJ-05: baseline scalars must come from the state that is actually evolved (the
+    # loaded parent checkpoint on a quench), not the fresh configured seed, so growth
+    # rate / magnetic-growth / flux drift reference the correct starting point.
+    initial = _pcf_primitive_3d_scalars(solver, state)
     target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
     )
@@ -1247,6 +1250,12 @@ def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
         "reynolds_stress": float(diag["reynolds_stress"]),
         "total_stress": float(diag["total_stress"]),
         "alpha_Sh": float(diag["alpha_Sh"]),
+        # FJ-04 mean-flux / mean-fluctuating split (mean-flux contamination monitor)
+        "mean_bx": float(diag["mean_bx"]),
+        "mean_by": float(diag["mean_by"]),
+        "mean_bz": float(diag["mean_bz"]),
+        "mag_energy_mean": float(diag["mag_energy_mean"]),
+        "mag_energy_fluct": float(diag["mag_energy_fluct"]),
     }
     if "alpha" in diag:  # net-flux alpha only when B0 != 0 (ZNF-safe)
         scalars["transport_alpha"] = float(diag["alpha"])
@@ -1280,6 +1289,13 @@ def _run_pcf_vector_potential_mhd_saturation(
         raise ProductionOracleNotImplementedError(
             "vector-potential PCF-MRI restart/quench is not yet wired; run from scratch"
         )
+    if checkpoint_every is not None or snapshot_every is not None:
+        # Do not silently ignore these flags: MHDState checkpoint/snapshot serialization
+        # is not wired for the curl path yet.
+        raise ProductionOracleNotImplementedError(
+            "vector-potential PCF-MRI checkpoint/snapshot is not yet wired; omit "
+            "--checkpoint-every / --snapshot-every"
+        )
     _assert_pcf_half_gap_domain(spec)
     resolution = _selected_resolution(spec)
     physics = _resolved_physics(spec)
@@ -1303,6 +1319,7 @@ def _run_pcf_vector_potential_mhd_saturation(
         background_b=(0.0, 0.0, physics.B0),
         dt=float(spec["time"]["dt"]),
         family=resolution.get("family", "L"),
+        padding_factor=_padding_factor(resolution, solver_family="pcf_vector_potential"),
         perturbation_amplitude=float(initial.get("velocity_amplitude", 0.05)),
         magnetic_amplitude=float(initial.get("magnetic_amplitude", 0.0)),
     )
@@ -1310,8 +1327,10 @@ def _run_pcf_vector_potential_mhd_saturation(
     first_scalars = _pcf_curl_scalars(solver, state)
 
     rows: list[dict[str, Any]] = []
+    diag_cache: dict[int, Any] = {}
 
-    def collect(t: float, _tstep: int, diag: dict[str, Any]) -> None:
+    def collect(t: float, tstep: int, diag: dict[str, Any]) -> None:
+        diag_cache[int(tstep)] = diag
         rows.append(
             {
                 "t": float(t),
@@ -1324,18 +1343,46 @@ def _run_pcf_vector_potential_mhd_saturation(
                 "maxwell_stress_xy": float(diag["maxwell_stress"]),
                 "total_stress": float(diag["total_stress"]),
                 "alpha_Sh": float(diag["alpha_Sh"]),
+                "mean_bx": float(diag["mean_bx"]),
+                "mean_by": float(diag["mean_by"]),
+                "mean_bz": float(diag["mean_bz"]),
+                "mag_energy_mean": float(diag["mag_energy_mean"]),
+                "mag_energy_fluct": float(diag["mag_energy_fluct"]),
                 **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
             }
         )
 
+    def should_stop(t: float, tstep: int, candidate: Any) -> bool:
+        # FJ-06: run the same per-block health guards as the primitive DNS path.
+        if not _tree_all_finite(candidate):
+            raise FloatingPointError(
+                f"nonfinite curl solver state at tstep={int(tstep)} t={float(t):g}"
+            )
+        cached = diag_cache.pop(int(tstep), None)
+        energy = None
+        if isinstance(cached, dict):
+            ke = cached.get("Epert")
+            me = cached.get("Emag")
+            if ke is not None and me is not None:
+                energy = float(ke) + float(me)
+        if energy is not None and (
+            not math.isfinite(energy) or abs(energy) > _ENERGY_RUNAWAY_LIMIT
+        ):
+            raise FloatingPointError(
+                f"energy runaway ceiling exceeded at tstep={int(tstep)} "
+                f"t={float(t):g}: E={energy:g} > {_ENERGY_RUNAWAY_LIMIT:g}"
+            )
+        return False
+
     target_steps, n_steps = _remaining_steps_from_resume(spec, steps=steps, tstep0=0)
-    block_size = diagnostics_every or max(1, int(n_steps))
+    block_size = min(diagnostics_every or n_steps, _CURL_HEALTH_BLOCK) or 1
     out = solver.solve_with_cadence(
         state,
         n_steps,
         Cadence(diagnostics_every=diagnostics_every),
-        block_size=block_size,
+        block_size=max(1, int(block_size)),
         on_diagnostics=collect if diagnostics_every is not None else None,
+        should_stop=should_stop,
         t0=0.0,
         tstep0=0,
     )
@@ -1360,8 +1407,13 @@ def _run_pcf_vector_potential_mhd_saturation(
             final_scalars["divergence_b_l2"],
         ),
     )
+    flux_drift = {
+        f"flux_drift_b{axis}": final_scalars[f"mean_b{axis}"] - first_scalars[f"mean_b{axis}"]
+        for axis in ("x", "y", "z")
+    }
     scalars = {
         **final_scalars,
+        **flux_drift,
         "growth_rate": float(growth_rate),
         "magnetic_energy_growth_factor": float(magnetic_growth),
         "saturation_check_passed": bool(saturation_passed),
@@ -2027,6 +2079,9 @@ _DIVERGENCE_GUARD_LIMIT = 1.0e-2
 
 
 _ENERGY_RUNAWAY_LIMIT = 1.0e30
+
+# Cap on how many steps the curl path advances between per-block health checks.
+_CURL_HEALTH_BLOCK = 50
 
 
 def _raise_on_energy_runaway(

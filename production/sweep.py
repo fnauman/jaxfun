@@ -20,8 +20,12 @@ from .physics import resolve_physics
 from .problem_spec import ProblemSpecError, load_spec, spec_hash, validate_spec
 
 # Semantic override -> how it maps onto the spec.
+# NOTE: "seed" is intentionally excluded -- the wired PCF saturation IC builders use
+# fixed analytic eigenmodes and never read initial_condition.random_seed, so a seed
+# override would only change the run id/hash without changing the trajectory (a
+# silent relabel). Re-add it only once a solver actually consumes the seed.
 _SUPPORTED_OVERRIDES = {
-    "Re_h", "Rm_h", "B0", "Ly", "Lz", "horizon", "dt", "seed", "bc",
+    "Re_h", "Rm_h", "B0", "Ly", "Lz", "horizon", "dt", "bc",
     "precision", "resolution",
 }
 
@@ -61,11 +65,17 @@ def apply_overrides(base_spec: dict[str, Any], overrides: dict[str, Any]) -> dic
     if "B0" in overrides:
         b0 = float(overrides["B0"])
         groups["B0"] = b0
+        # Some specs (e.g. the ideal-MRI shearbox) express the imposed field via the
+        # vertical component Bz that the linear oracle reads directly; keep it in sync
+        # so a B0 sweep cannot silently run the unchanged field.
+        if "Bz" in groups:
+            groups["Bz"] = b0
         forcing = spec.get("forcing")
-        if isinstance(forcing, dict) and "B0" in forcing and not isinstance(
-            forcing["B0"], (list, tuple)
-        ):
-            forcing["B0"] = b0
+        if isinstance(forcing, dict):
+            if "B0" in forcing and not isinstance(forcing["B0"], (list, tuple)):
+                forcing["B0"] = b0
+            if "bz" in forcing and not isinstance(forcing["bz"], (list, tuple)):
+                forcing["bz"] = b0
     if "Ly" in overrides:
         spec["domain"]["y_period"] = float(overrides["Ly"])
     if "Lz" in overrides:
@@ -74,8 +84,6 @@ def apply_overrides(base_spec: dict[str, Any], overrides: dict[str, Any]) -> dic
         spec["time"]["final_time"] = float(overrides["horizon"])
     if "dt" in overrides:
         spec["time"]["dt"] = float(overrides["dt"])
-    if "seed" in overrides:
-        spec.setdefault("initial_condition", {})["random_seed"] = overrides["seed"]
     if "bc" in overrides:
         magnetic = spec.setdefault("boundary_conditions", {}).setdefault("magnetic", {})
         if isinstance(magnetic, dict):

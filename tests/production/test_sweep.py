@@ -62,6 +62,25 @@ def test_unknown_override_rejected():
         apply_overrides(_base(), {"not_a_field": 1.0})
 
 
+def test_seed_override_rejected_as_inert():
+    # No wired PCF saturation path consumes random_seed, so a seed override would
+    # relabel identical physics -> it must be rejected, not silently accepted.
+    with pytest.raises(SweepOverrideError, match="unknown"):
+        apply_overrides(_base(), {"seed": 42})
+
+
+def test_B0_override_syncs_Bz_for_specs_that_use_it():
+    # The ideal-MRI shearbox spec expresses the imposed field via Bz (not B0); the
+    # oracle reads groups["Bz"], so a B0 sweep must move Bz too.
+    shearbox = json.loads(
+        (ROOT / "production" / "examples" / "pcf_mri_shearbox_v1.json").read_text()
+    )
+    assert "Bz" in shearbox["nondimensional_groups"]
+    out = apply_overrides(shearbox, {"B0": 0.05})
+    assert out["nondimensional_groups"]["Bz"] == 0.05
+    assert out["nondimensional_groups"]["B0"] == 0.05
+
+
 def test_inconsistent_manual_spec_still_validates_pathway():
     # An override that produces an inconsistent Pm cannot slip through: overriding
     # only Re_h re-derives nu, so Pm stays consistent (no error), but a hand-broken

@@ -117,6 +117,8 @@ def run_problem(
         out_dir, require_clean=require_clean, allow_dirty=allow_dirty
     )
     compilation_cache, restore_compilation_cache = _configure_compilation_cache(out_dir)
+    metadata: dict[str, Any] = {}
+    diagnostics: dict[str, Any] = {}
     try:
         effective_diagnostics_every = _effective_diagnostics_every(
             config.spec,
@@ -128,6 +130,7 @@ def run_problem(
         device_record = (
             capture_device_record(device) if capture_device else {"capture_skipped": True}
         )
+        _assert_precision_matches_spec(config.spec, device_record)
         if resume_record is not None:
             validate_resume_checkpoint(
                 resume_record, config.spec, device_record, quench=quench_mode
@@ -270,17 +273,22 @@ def run_problem(
             metadata["written_golden"] = str(golden_path)
 
         _write_json(out_dir / "metadata.json", metadata)
-        _mirror_to_wandb(
-            config,
-            diagnostics,
-            metadata,
-            enabled=wandb,
-            project=wandb_project,
-            offline=wandb_offline,
-        )
         return metadata
     finally:
         restore_compilation_cache()
+        # FJ-07: mirror to W&B exactly once on every path that executed a solver --
+        # success, early stop, comparison failure, or crash -- so the failed run and
+        # its operational status are recorded. `diagnostics` is {} if the solver never
+        # produced any (the sink degrades gracefully); skipped for validate-only.
+        if wandb and not validate_only and metadata:
+            _mirror_to_wandb(
+                config,
+                diagnostics,
+                metadata,
+                enabled=wandb,
+                project=wandb_project,
+                offline=wandb_offline,
+            )
 
 
 def build_metadata(
@@ -313,7 +321,9 @@ def build_metadata(
         "spec_hash": config.spec["spec_hash"],
         "numerics_contract_version": config.spec.get("numerics_contract_version"),
         "provenance": _capture_provenance_safe(),
-        "resolved_physics": _resolved_physics_metadata(config.spec),
+        "resolved_physics": _resolved_physics_metadata(
+            config.spec, precision=device_record.get("production_run_dtype")
+        ),
         "integrator": _integrator_provenance(config.spec),
         "base_spec_hash": config.metadata.get(
             "base_spec_hash", config.spec["spec_hash"]
@@ -953,8 +963,15 @@ def _integrator_provenance(spec: dict[str, Any]) -> dict[str, Any]:
 
     requested = spec.get("time", {}).get("integrator")
     oracle = spec.get("expected_oracle", {}).get("type")
+    representation = spec.get("representation")
     actual = requested
-    if oracle in _PRIMITIVE_SATURATION_ORACLES and spec.get("physics") in {"mhd", "mri"}:
+    if representation == "vector_potential":
+        # curl family dispatches to PlaneCouetteMRIShearpyJax, which runs IMEXRK222.
+        actual = "IMEXRK222"
+    elif (
+        oracle in _PRIMITIVE_SATURATION_ORACLES
+        and spec.get("physics") in {"mhd", "mri"}
+    ):
         actual = "CNAB2"  # hard-coded in PCFMRIDNSJax
     return {
         "requested": requested,
@@ -1023,6 +1040,32 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _assert_precision_matches_spec(
+    spec: dict[str, Any], device_record: dict[str, Any]
+) -> None:
+    """FJ-07/FJ-08: a spec's declared precision must match the active run dtype.
+
+    A sweep can set ``spec['precision']`` (float32/float64); the process dtype is set
+    from ``JAXFUN_PRODUCTION_DTYPE``. If they disagree the run would be archived under a
+    mislabeled precision, so fail loudly instead of silently downgrading.
+    """
+
+    declared = spec.get("precision")
+    if declared is None:
+        return
+    active = device_record.get("production_run_dtype")
+    if active is None:
+        return
+    alias = {"single": "float32", "fp32": "float32", "double": "float64", "fp64": "float64"}
+    declared_norm = alias.get(str(declared).lower(), str(declared).lower())
+    if declared_norm != str(active).lower():
+        raise ProblemSpecError(
+            f"spec precision {declared!r} does not match the active production dtype "
+            f"{active!r}; set JAXFUN_PRODUCTION_DTYPE={declared_norm} before running "
+            "so the materialized precision is actually honored."
+        )
+
+
 def _operational_status(exc: BaseException) -> str:
     try:
         from .classify import operational_status_from_exception
@@ -1057,8 +1100,14 @@ def _classification_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _resolved_physics_metadata(spec: dict[str, Any]) -> dict[str, Any] | None:
-    """FJ-00: record the single resolved-physics object in the manifest."""
+def _resolved_physics_metadata(
+    spec: dict[str, Any], precision: str | None = None
+) -> dict[str, Any] | None:
+    """FJ-00: record the single resolved-physics object in the manifest.
+
+    ``precision`` should be the *actual* run dtype (from the device record) so the
+    canonical physics block agrees with ``metadata.device.production_run_dtype``.
+    """
 
     if spec.get("geometry") not in {"pcf", "channel"}:
         return None
@@ -1070,6 +1119,8 @@ def _resolved_physics_metadata(spec: dict[str, Any]) -> dict[str, Any] | None:
     except ImportError:  # pragma: no cover - direct script mode
         from production.physics import resolve_physics  # type: ignore
     try:
+        if precision is not None:
+            return resolve_physics(spec, precision=str(precision)).to_metadata()
         return resolve_physics(spec).to_metadata()
     except Exception:  # pragma: no cover - already validated upstream
         return None
@@ -1210,6 +1261,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _peek_spec_precision(config_path: Path) -> str | None:
+    """Read a materialized spec's `precision` field before configuring JAX."""
+
+    try:
+        data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    precision = data.get("precision")
+    return str(precision) if precision is not None else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -1233,7 +1295,14 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         jax_module = None
 
-    configure_production_dtype(apply_to_process=True)
+    # FJ-07/FJ-08: honor a materialized spec's `precision` field by driving the process
+    # dtype from it (a swept float64 spec then actually runs at float64). An explicit
+    # JAXFUN_PRODUCTION_DTYPE in the environment still wins.
+    spec_precision = _peek_spec_precision(config_path)
+    dtype_override = (
+        spec_precision if os.environ.get("JAXFUN_PRODUCTION_DTYPE") is None else None
+    )
+    configure_production_dtype(dtype=dtype_override, apply_to_process=True)
     try:
         try:
             run_problem(
@@ -1250,7 +1319,10 @@ def main(argv: list[str] | None = None) -> int:
                 resolution_tier=args.resolution_tier,
                 validate_only=args.validate_only,
                 resume=resume_dir,
-                require_clean=args.require_clean,
+                # FJ-13: promoting a committed golden from the CLI is a production
+                # action -> require a clean/pushed/immutable-ref tree (unless the run
+                # is an explicit --allow-dirty discovery run).
+                require_clean=args.require_clean or args.write_golden,
                 allow_dirty=args.allow_dirty,
                 wandb=args.wandb,
                 wandb_project=args.wandb_project,

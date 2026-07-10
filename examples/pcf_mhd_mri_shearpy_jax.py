@@ -45,6 +45,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         background_b: tuple[float, float, float] = (0.0, 0.0, 0.025),
         dt: float = 0.01,
         family: str = "L",
+        padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         perturbation_amplitude: float = 0.05,
         magnetic_amplitude: float = 0.0,
     ) -> None:
@@ -64,6 +65,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             U_wall=1.0,
             dt=dt,
             family=family,
+            padding_factor=padding_factor,
             perturbation_amplitude=perturbation_amplitude,
             magnetic_amplitude=magnetic_amplitude,
         )
@@ -168,6 +170,19 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         b_fluct = self._backward_B(self.update_B_from_A(state.A), padded=False)
         bmax = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in b_fluct]))
         bmax_total = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in bp]))
+        # FJ-04: mean magnetic flux + mean/fluctuating energy split of the evolved
+        # (fluctuation) field, so a ZNF run through the curl workhorse can detect
+        # mean-flux contamination and the FJ-04 tolerance can be generated here.
+        b_spaces = (self.TD, self.TC, self.TC)
+        mean_b = tuple(
+            integrate(jnp.real(bi), sp) / volume
+            for bi, sp in zip(b_fluct, b_spaces, strict=True)
+        )
+        emag_fluct = 0.5 * sum(
+            jnp.real(integrate(jnp.conj(bi) * bi, sp))
+            for bi, sp in zip(b_fluct, b_spaces, strict=True)
+        )
+        mag_energy_mean = 0.5 * volume * sum(mb * mb for mb in mean_b)
         out = {
             **diag,
             "Emag_total": emag_total,
@@ -180,6 +195,12 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             "transport_xy": transport,
             "total_stress": transport,
             "alpha_Sh": transport / sh2 if sh2 > 0.0 else jnp.asarray(jnp.nan),
+            "mean_bx": mean_b[0],
+            "mean_by": mean_b[1],
+            "mean_bz": mean_b[2],
+            "mag_energy_fluct_total": emag_fluct,
+            "mag_energy_mean": mag_energy_mean,
+            "mag_energy_fluct": emag_fluct - mag_energy_mean,
             "q_shear": jnp.asarray(self.q_shear),
             "kappa2": jnp.asarray(self.kappa2),
         }

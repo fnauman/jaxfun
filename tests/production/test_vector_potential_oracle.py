@@ -54,6 +54,19 @@ def test_vector_potential_oracle_is_znf_safe():
     assert math.isfinite(sc["alpha_Sh"])
 
 
+def test_vector_potential_emits_flux_diagnostics():
+    """FJ-04: the ZNF curl workhorse must expose mean flux + mean/fluct split."""
+    jax.config.update("jax_enable_x64", True)
+    out = run_supported_spec(_vp_spec(), steps=3)
+    sc = out["scalars"]
+    for key in (
+        "mean_bx", "mean_by", "mean_bz",
+        "mag_energy_mean", "mag_energy_fluct",
+        "flux_drift_bx", "flux_drift_by", "flux_drift_bz",
+    ):
+        assert key in sc
+
+
 def test_vector_potential_rejects_resume():
     jax.config.update("jax_enable_x64", True)
     from production.oracles import ProductionOracleNotImplementedError
@@ -64,3 +77,12 @@ def test_vector_potential_rejects_resume():
 
     with pytest.raises(ProductionOracleNotImplementedError):
         run_supported_spec(_vp_spec(), steps=3, resume_checkpoint=_FakeCkpt())
+
+
+def test_vector_potential_rejects_checkpoint_flags():
+    """F12: checkpoint/snapshot must not be silently ignored on the curl path."""
+    jax.config.update("jax_enable_x64", True)
+    from production.oracles import ProductionOracleNotImplementedError
+
+    with pytest.raises(ProductionOracleNotImplementedError, match="checkpoint"):
+        run_supported_spec(_vp_spec(), steps=3, checkpoint_every=1)

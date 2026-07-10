@@ -39,6 +39,40 @@ def _git(*args: str) -> str | None:
     return out.stdout.strip()
 
 
+def _git_rc(*args: str) -> int:
+    """Return the exit code of a git command (127 if git is unavailable)."""
+
+    try:
+        out = subprocess.run(
+            ["git", *args],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 127
+    return out.returncode
+
+
+def _head_release_ref() -> dict[str, Any]:
+    """Whether HEAD is an immutable release ref: an exact tag or merged to main."""
+
+    exact_tag = _git("describe", "--exact-match", "--tags", "HEAD")
+    on_main = _git_rc("merge-base", "--is-ancestor", "HEAD", "origin/main") == 0
+    return {
+        "exact_tag": exact_tag,
+        "merged_to_origin_main": on_main,
+        "is_immutable_ref": bool(exact_tag) or on_main,
+    }
+
+
+def _untracked_files() -> list[str]:
+    listing = _git("ls-files", "--others", "--exclude-standard")
+    return [line for line in (listing or "").splitlines() if line.strip()]
+
+
 def _lockfile_sha256() -> dict[str, str]:
     hashes: dict[str, str] = {}
     for name in ("uv.lock", "pyproject.toml"):
@@ -125,6 +159,8 @@ def assert_release_clean(
     """
 
     prov = capture_provenance()
+    release_ref = _head_release_ref()
+    prov["release_ref"] = release_ref
     problems: list[str] = []
     if prov["commit"] is None:
         problems.append("not a git worktree (no commit)")
@@ -134,13 +170,18 @@ def assert_release_clean(
         problems.append(f"{len(prov['unpushed_commits'])} unpushed commit(s)")
     if prov.get("upstream") is None:
         problems.append("no upstream/remote-tracking branch (commit not pushed)")
+    if not release_ref["is_immutable_ref"]:
+        problems.append(
+            "HEAD is not an immutable release ref: no exact tag and not merged to "
+            "origin/main (a movable branch ref is not sufficient provenance, FJ-13)"
+        )
 
     if problems and not allow_dirty:
         raise ReleaseCleanlinessError(
             "production run refused: "
             + "; ".join(problems)
-            + ". Run from a clean, pushed, tagged commit, or pass --allow-dirty "
-            "for a discovery-only run (its diff will be archived)."
+            + ". Run from a clean, pushed commit that is tagged or merged to main, or "
+            "pass --allow-dirty for a discovery-only run (its diff will be archived)."
         )
 
     prov["release_gate"] = {
@@ -149,12 +190,39 @@ def assert_release_clean(
         "discovery_only": bool(problems and allow_dirty),
     }
     if problems and allow_dirty:
-        diff = _git("diff", "HEAD") or ""
-        out_dir.mkdir(parents=True, exist_ok=True)
-        diff_path = out_dir / "worktree_diff.patch"
-        diff_path.write_text(diff, encoding="utf-8")
-        prov["release_gate"]["diff_archive"] = str(diff_path)
-        prov["release_gate"]["diff_sha256"] = hashlib.sha256(
-            diff.encode("utf-8")
-        ).hexdigest()
+        prov["release_gate"].update(_archive_worktree(out_dir))
     return prov
+
+
+def _archive_worktree(out_dir: Path) -> dict[str, Any]:
+    """Archive the exact tracked diff AND untracked files for a discovery-only run."""
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    diff = _git("diff", "HEAD") or ""
+    diff_path = out_dir / "worktree_diff.patch"
+    diff_path.write_text(diff, encoding="utf-8")
+
+    # git diff HEAD omits untracked files even when they made the run dirty; capture
+    # them explicitly so the archive can reproduce the executed checkout.
+    hasher = hashlib.sha256()
+    hasher.update(diff.encode("utf-8"))
+    untracked = _untracked_files()
+    archived_untracked: list[str] = []
+    if untracked:
+        archive_dir = out_dir / "worktree_untracked"
+        for rel in sorted(untracked):
+            src = _REPO_ROOT / rel
+            if not src.is_file():
+                continue
+            data = src.read_bytes()
+            dst = archive_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+            hasher.update(f"\0untracked:{rel}\0".encode("utf-8"))
+            hasher.update(data)
+            archived_untracked.append(rel)
+    return {
+        "diff_archive": str(diff_path),
+        "untracked_archived": archived_untracked,
+        "diff_sha256": hasher.hexdigest(),
+    }
