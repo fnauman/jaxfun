@@ -4,12 +4,12 @@ import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_mhd_jax import PlaneCouetteMHDJax
+from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
 from examples.pcf_mri_primitive_jax import (
     AxisymmetricPCFMRIDNSJax,
     AxisymmetricPCFState,
     PCFMRIDNSJax,
 )
-from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
 from examples.taylor_couette_dns_jax import (
     AxisymmetricMRIDNSJax,
     AxisymmetricTCDNSJax,
@@ -25,9 +25,9 @@ from jaxfun.galerkin.Legendre import Legendre
 from tests._parity import (
     pcf_fluctuation_reference,
     pcf_mhd_reference,
+    pcf_mhd_shearpy_reference,
     pcf_primitive_3d_reference,
     pcf_primitive_axisymmetric_reference,
-    pcf_mhd_shearpy_reference,
     run_shenfun_json,
     tc_3d_dns_reference,
     tc_3d_mri_dns_reference,
@@ -335,7 +335,6 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
             )
 
 
-
 def test_pcf_primitive_axisymmetric_finite_amplitude_matches_live_shenfun():
     solver = AxisymmetricPCFMRIDNSJax(
         S=1.0,
@@ -417,11 +416,10 @@ def test_pcf_primitive_3d_finite_amplitude_matches_live_shenfun(magnetic_bc):
         )
         _assert_active_coefficients_close(
             got_layout,
-            _tc_3d_reference_layout(
-                expected, axial_n=solver.Nz, azimuthal_n=solver.Ny
-            ),
+            _tc_3d_reference_layout(expected, axial_n=solver.Nz, azimuthal_n=solver.Ny),
             floor=1.0e-10,
         )
+
 
 def _pcf_axisymmetric_coeff_from_reference(rows, template, *, axial_n: int):
     layout = _nested_complex(rows)
@@ -432,9 +430,7 @@ def _pcf_axisymmetric_coeff_from_reference(rows, template, *, axial_n: int):
     return jnp.asarray(out)
 
 
-def _pcf_3d_coeff_from_reference(
-    rows, template, *, azimuthal_n: int, axial_n: int
-):
+def _pcf_3d_coeff_from_reference(rows, template, *, azimuthal_n: int, axial_n: int):
     layout = _nested_complex(rows)
     out = np.zeros(np.asarray(template).shape, dtype=np.asarray(template).dtype)
     out[:, : axial_n // 2 + 1, : layout.shape[2]] = layout[:, :, : out.shape[2]]
@@ -512,9 +508,7 @@ def test_tc_axisymmetric_dns_matches_live_shenfun_diagnostics_and_coeffs():
             expected_layout = _tc_axisymmetric_reference_layout(
                 expected, axial_n=solver.Nz
             )
-            assert np.allclose(
-                got_layout, expected_layout, rtol=1.0e-8, atol=1.0e-10
-            )
+            assert np.allclose(got_layout, expected_layout, rtol=1.0e-8, atol=1.0e-10)
         p_layout = _shenfun_tc_rfft_coeff_layout(
             state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )

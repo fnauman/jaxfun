@@ -38,7 +38,11 @@ def test_lattice_wavenumbers_cover_grid():
 def test_critical_Rm_bisects_a_monotone_growth():
     res = critical_Rm(
         lambda Rm: _SyntheticOp(Rm, rm_c=lambda ky, kz: 415.0),
-        ky=0.0, kz=12.566, Rm_lo=350.0, Rm_hi=500.0, tol=1e-4,
+        ky=0.0,
+        kz=12.566,
+        Rm_lo=350.0,
+        Rm_hi=500.0,
+        tol=1e-4,
     )
     assert res.critical_Rm == pytest.approx(415.0, abs=0.1)
 
@@ -46,7 +50,11 @@ def test_critical_Rm_bisects_a_monotone_growth():
 def test_critical_Rm_expands_bracket_when_needed():
     res = critical_Rm(
         lambda Rm: _SyntheticOp(Rm, rm_c=lambda ky, kz: 3000.0),
-        ky=0.0, kz=25.0, Rm_lo=350.0, Rm_hi=500.0, tol=1e-3,
+        ky=0.0,
+        kz=25.0,
+        Rm_lo=350.0,
+        Rm_hi=500.0,
+        tol=1e-3,
     )
     assert res.critical_Rm == pytest.approx(3000.0, rel=1e-2)
 

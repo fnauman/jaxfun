@@ -180,9 +180,7 @@ def validate_golden(
             "golden numeric scalar(s) have invalid tolerance: "
             + ", ".join(invalid_tolerances)
         )
-    stored_tolerance_hash = data["comparison_fields"].get(
-        "tolerance_model_sha256"
-    )
+    stored_tolerance_hash = data["comparison_fields"].get("tolerance_model_sha256")
     if stored_tolerance_hash is not None and stored_tolerance_hash != scalar_hash(
         data["tolerance_model"]
     ):

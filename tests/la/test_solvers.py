@@ -1,4 +1,3 @@
-
 import sympy as sp
 
 from jaxfun import Domain

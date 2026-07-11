@@ -654,10 +654,7 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
     def _lap(self, u: sp.Expr) -> sp.Expr:
         r = self.r
         return (
-            Dx(u, 2, 2)
-            + (1 / r) * Dx(u, 2, 1)
-            + (1 / r**2) * Dx(u, 0, 2)
-            + Dx(u, 1, 2)
+            Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
         )
 
     def _add_avv_terms(
@@ -1079,8 +1076,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
     def state_from_physical(self, values: MHDFields) -> AxisymmetricMRIState:
         spaces = (self.TD, self.TD, self.TD, self.TD, self.Tbt, self.Tbz)
         x = tuple(
-            space.forward(value)
-            for space, value in zip(spaces, values, strict=True)
+            space.forward(value) for space, value in zip(spaces, values, strict=True)
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=x[0].dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
@@ -1351,10 +1347,7 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
     def _lap(self, u: sp.Expr) -> sp.Expr:
         r = self.r
         return (
-            Dx(u, 2, 2)
-            + (1 / r) * Dx(u, 2, 1)
-            + (1 / r**2) * Dx(u, 0, 2)
-            + Dx(u, 1, 2)
+            Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
         )
 
     def _add_mhd_terms(
@@ -1623,9 +1616,7 @@ def main() -> None:
     if args.mhd:
         mhd_common = dict(B0=args.B0, eta_mag=args.eta_mag)
         if args.Ntheta > 0:
-            solver = TaylorCouetteMRIDNSJax(
-                **common, Ntheta=args.Ntheta, **mhd_common
-            )
+            solver = TaylorCouetteMRIDNSJax(**common, Ntheta=args.Ntheta, **mhd_common)
             state = (
                 solver.seed_linear_eigenmode(
                     m=args.m, kz_mode=args.kz_mode, amp=args.amp
@@ -1643,9 +1634,9 @@ def main() -> None:
     elif args.Ntheta > 0:
         solver = TaylorCouetteDNSJax(**common, Ntheta=args.Ntheta)
         state = (
-            solver.seed_linear_eigenmode(
-                m=args.m, kz_mode=args.kz_mode, amp=args.amp
-            )[0]
+            solver.seed_linear_eigenmode(m=args.m, kz_mode=args.kz_mode, amp=args.amp)[
+                0
+            ]
             if args.seed_linear
             else solver.initial_state(amp=1.0e-3, m=args.m, kz_mode=args.kz_mode)
         )
@@ -1658,6 +1649,7 @@ def main() -> None:
         )
 
     if args.moderror > 0:
+
         def print_diagnostics(t, tstep, diag):
             values = " ".join(
                 f"{key}={float(value):.6e}" for key, value in diag.items()

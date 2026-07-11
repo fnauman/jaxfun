@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: ["main"]
   push:
-    branches: ["**"]
+    branches: ["main"]
 
 jobs:
   lint:
@@ -18,7 +18,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen --all-groups
 
       - name: Ruff lint
         run: |

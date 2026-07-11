@@ -10,7 +10,6 @@ from production.compare_goldens import validate_golden
 from production.oracles import _channel_poiseuille_kmm_state, _saturation_passed
 from production.problem_spec import UnsupportedSpecError
 from production.run_problem import (
-    SolverExecutionNotImplementedError,
     _assert_required_saturation_checks,
     _assert_validation_floor_checks,
     _saturation_check_metadata,
@@ -404,7 +403,10 @@ def test_full_saturation_oracle_collects_stationarity_rows_and_writes_golden(
                 tstep = int(tstep0) + local_step
                 t = float(t0) + local_step * self.dt
                 out = FakeState(tstep)
-                if on_diagnostics is not None and tstep % cadence.diagnostics_every == 0:
+                if (
+                    on_diagnostics is not None
+                    and tstep % cadence.diagnostics_every == 0
+                ):
                     on_diagnostics(t, tstep, self.diagnostics(out))
                 if should_stop is not None:
                     should_stop(t, tstep, out)

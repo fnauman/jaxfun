@@ -47,7 +47,9 @@ SOLVER_NATIVE_AXES: dict[str, tuple[str, ...]] = {
 }
 
 
-def native_axis_order(solver_family: str, *, dimensions: int | None = None) -> tuple[str, ...]:
+def native_axis_order(
+    solver_family: str, *, dimensions: int | None = None
+) -> tuple[str, ...]:
     """Return the native canonical-axis-letter order for ``solver_family``."""
 
     try:
@@ -93,7 +95,9 @@ def to_native_padding(
                 f"{context}: semantic padding is missing axis/axes {missing}; "
                 f"native order is {native_order}"
             )
-        return tuple(_finite_padding(dealias[axis], f"{context}.{axis}") for axis in native_order)
+        return tuple(
+            _finite_padding(dealias[axis], f"{context}.{axis}") for axis in native_order
+        )
     if isinstance(dealias, (list, tuple)):
         values = tuple(_finite_padding(item, context) for item in dealias)
         if len(values) != n:

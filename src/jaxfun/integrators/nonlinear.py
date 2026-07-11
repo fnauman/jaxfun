@@ -10,7 +10,7 @@ from sympy.core.function import AppliedUndef
 
 from jaxfun.galerkin import TestFunction, TrialFunction
 from jaxfun.galerkin.arguments import ArgumentTag, get_arg
-from jaxfun.typing import Array, FunctionSpaceType, Padding
+from jaxfun.typing import Array, Padding, ScalarSpaceType
 from jaxfun.utils import lambdify
 
 
@@ -40,7 +40,7 @@ class NonlinearCompileContext:
     """Static data required to compile nonlinear SymPy expressions."""
 
     spatial_symbols: tuple[sp.Symbol, ...]
-    functionspace: FunctionSpaceType
+    functionspace: ScalarSpaceType
     jaxfunction: AppliedUndef
 
 
@@ -129,7 +129,7 @@ class NonlinearCompiler:
             def evaluate_leaf(
                 cache: NodeValueCache,
                 N: Padding = None,
-                space: FunctionSpaceType = space,
+                space: ScalarSpaceType = space,
             ) -> Array:
                 return space.backward(cache[_CURRENT_COEFFS], N=N)  # ty: ignore[invalid-argument-type]
 
@@ -157,7 +157,7 @@ class NonlinearCompiler:
         def evaluate_derivative(
             cache: NodeValueCache,
             N: Padding = None,
-            space: FunctionSpaceType = space,
+            space: ScalarSpaceType = space,
             derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
             return space.backward_primitive(  # ty: ignore[invalid-argument-type]
@@ -327,7 +327,7 @@ def _is_jaxfunction_primitive(expr: sp.Basic) -> bool:
 
 def compile_nonlinear_evaluator(
     expr: sp.Expr,
-    functionspace: FunctionSpaceType,
+    functionspace: ScalarSpaceType,
     jaxfunction: AppliedUndef,
 ) -> Callable[[Array, Padding], Array]:
     """Compile a nonlinear physical-space evaluator for coefficient states."""

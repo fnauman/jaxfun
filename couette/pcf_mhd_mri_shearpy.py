@@ -24,6 +24,7 @@ This is not a shearing-periodic box: the radial/shear direction is replaced by
 no-slip Plane Couette walls.  The script is intended for testing the closest
 wall-bounded PCF analogue of the shearpy MRI source terms and parameters.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,9 +32,8 @@ import math
 import sys
 
 import numpy as np
-from shenfun import *  # noqa: F401,F403
-
 from pcf_mhd_divfree import PlaneCouetteMHDDivFree, _positive_int, shenfun_cleanup
+from shenfun import *  # noqa: F401,F403
 
 
 class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
@@ -115,8 +115,8 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
             )
             print(
                 "  base flow: U_b(x)=-S*x*e_y; "
-                f"wall speeds y(top,bottom)=({-self.shear_rate*self.x_bounds[1]:+g}, "
-                f"{-self.shear_rate*self.x_bounds[0]:+g})"
+                f"wall speeds y(top,bottom)=({-self.shear_rate * self.x_bounds[1]:+g}, "
+                f"{-self.shear_rate * self.x_bounds[0]:+g})"
             )
             print(
                 f"  imposed mean field B0=(0, {self.background_b[1]:g}, "
@@ -198,7 +198,7 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
         the k_y=0 velocity projected onto the dominant vertical channel mode.
         Returns (A, n) with n the vertical Fourier index used."""
         ub = self.u_.backward(self.ub)
-        ux0 = np.asarray(ub[0]).mean(axis=1)        # k_y=0 part: (Nx, Nz)
+        ux0 = np.asarray(ub[0]).mean(axis=1)  # k_y=0 part: (Nx, Nz)
         uy0 = np.asarray(ub[1]).mean(axis=1)
         nz = self.F2.N
         fx = np.fft.rfft(ux0, axis=1) / nz
@@ -228,7 +228,7 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
             E += (np.abs(f) ** 2).sum(axis=0)
         Etot = float(E.sum())
         Ena = E.copy()
-        Ena[0, :] = 0.0                              # remove axisymmetric k_y=0 row
+        Ena[0, :] = 0.0  # remove axisymmetric k_y=0 row
         i, j = np.unravel_index(int(np.argmax(Ena)), Ena.shape)
         ly, lz = self.domain_lengths[1], self.domain_lengths[2]
         ky = 2.0 * math.pi * (i if i <= ny // 2 else i - ny) / ly
@@ -266,7 +266,9 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
         U[...] = 0.0
         if self.perturbation_amplitude > 0:
             if comm.Get_rank() == 0:
-                print(f"Adding velocity perturbations amp={self.perturbation_amplitude}")
+                print(
+                    f"Adding velocity perturbations amp={self.perturbation_amplitude}"
+                )
             amp = self.perturbation_amplitude
             ly = self.F1.domain[1]
             lz = self.F2.domain[1]
@@ -294,7 +296,9 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
         A[...] = 0.0
         if self.magnetic_amplitude > 0:
             if comm.Get_rank() == 0:
-                print(f"Adding magnetic perturbations through A amp={self.magnetic_amplitude}")
+                print(
+                    f"Adding magnetic perturbations through A amp={self.magnetic_amplitude}"
+                )
             ky = 2 * np.pi / self.F1.domain[1]
             kz = 2 * np.pi / self.F2.domain[1]
             amp = self.magnetic_amplitude
@@ -306,7 +310,9 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
         if comm.Get_rank() == 0:
             diag = self.compute_diagnostics(0.0, 0)
             print("Initial fields ready")
-            print(f"Initial divB: L2={diag['divb_l2']:.3e} Linf={diag['divb_linf']:.3e}")
+            print(
+                f"Initial divB: L2={diag['divb_l2']:.3e} Linf={diag['divb_linf']:.3e}"
+            )
             print()
         return 0.0, 0
 
@@ -379,8 +385,12 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
         diag = super().compute_diagnostics(t, tstep)
         bp = self.b_.backward(self.bb)
         bt0, bt1, bt2 = self._total_b_components(bp)
-        Emag_total = float(inner(1, bt0 * bt0) + inner(1, bt1 * bt1) + inner(1, bt2 * bt2))
-        bmax_total = float(max(np.max(np.abs(bt0)), np.max(np.abs(bt1)), np.max(np.abs(bt2))))
+        Emag_total = float(
+            inner(1, bt0 * bt0) + inner(1, bt1 * bt1) + inner(1, bt2 * bt2)
+        )
+        bmax_total = float(
+            max(np.max(np.abs(bt0)), np.max(np.abs(bt1)), np.max(np.abs(bt2)))
+        )
 
         # Volume-averaged Reynolds/Maxwell stress and MRI transport alpha.
         ub = self.u_.backward(self.ub)
@@ -395,7 +405,9 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
         core = np.abs(xi) <= 0.6
         seff_core = float(np.mean(prof["Seff"][core])) if np.any(core) else float("nan")
         # dUb_dx = -S, so no modification -> ratio 1, full cancellation -> 0.
-        shear_reduction = 1.0 - seff_core / self.dUb_dx if self.dUb_dx != 0 else float("nan")
+        shear_reduction = (
+            1.0 - seff_core / self.dUb_dx if self.dUb_dx != 0 else float("nan")
+        )
 
         diag.update(
             Emag_total=Emag_total,
@@ -419,7 +431,11 @@ class PlaneCouetteMRIShearpy(PlaneCouetteMHDDivFree):
             diag.update(channel_amp=A, channel_kz_n=int(nK), **par)
 
         self.last_diagnostics = diag
-        if self.store_history and self.history and self.history[-1]["tstep"] == int(tstep):
+        if (
+            self.store_history
+            and self.history
+            and self.history[-1]["tstep"] == int(tstep)
+        ):
             self.history[-1] = diag.copy()
         return diag
 
@@ -445,9 +461,15 @@ def _parse_args(defaults):
     p.add_argument("--nx", type=int, default=defaults["N"][0])
     p.add_argument("--ny", type=int, default=defaults["N"][1])
     p.add_argument("--nz", type=int, default=defaults["N"][2])
-    p.add_argument("--lx", type=float, default=defaults["domain"][0][1] - defaults["domain"][0][0])
-    p.add_argument("--ly", type=float, default=defaults["domain"][1][1] - defaults["domain"][1][0])
-    p.add_argument("--lz", type=float, default=defaults["domain"][2][1] - defaults["domain"][2][0])
+    p.add_argument(
+        "--lx", type=float, default=defaults["domain"][0][1] - defaults["domain"][0][0]
+    )
+    p.add_argument(
+        "--ly", type=float, default=defaults["domain"][1][1] - defaults["domain"][1][0]
+    )
+    p.add_argument(
+        "--lz", type=float, default=defaults["domain"][2][1] - defaults["domain"][2][0]
+    )
     p.add_argument("--Re", type=float, default=defaults["Re"])
     p.add_argument("--Rm", type=float, default=defaults["Rm"])
     p.add_argument("--shear", type=float, default=defaults["shear_rate"])
@@ -462,36 +484,89 @@ def _parse_args(defaults):
     p.add_argument("--checkpoint", type=int, default=defaults["checkpoint"])
     p.add_argument("--family", choices=["C", "L"], default=defaults["family"])
     p.add_argument("--timestepper", type=str, default=defaults["timestepper"])
-    p.add_argument("--perturbation-amplitude", type=float, default=defaults["perturbation_amplitude"])
-    p.add_argument("--magnetic-amplitude", type=float, default=defaults["magnetic_amplitude"])
+    p.add_argument(
+        "--perturbation-amplitude",
+        type=float,
+        default=defaults["perturbation_amplitude"],
+    )
+    p.add_argument(
+        "--magnetic-amplitude", type=float, default=defaults["magnetic_amplitude"]
+    )
     p.add_argument("--filename", type=str, default=defaults["filename"])
-    p.add_argument("--prefer-numba", action="store_true", default=defaults["prefer_numba"])
-    p.add_argument("--store-history", action="store_true", default=defaults["store_history"])
+    p.add_argument(
+        "--prefer-numba", action="store_true", default=defaults["prefer_numba"]
+    )
+    p.add_argument(
+        "--store-history", action="store_true", default=defaults["store_history"]
+    )
     p.add_argument("--max-divb-l2", type=float, default=None)
     p.add_argument("--max-divu-l2", type=float, default=None)
     p.add_argument("--assert-every-step", action="store_true")
-    p.add_argument("--save-profiles", type=str, default=None,
-                   help="path to write x-resolved mean/stress profiles (.npz) at end")
-    p.add_argument("--linear", choices=["dns", "eigs", "nonmodal"], default="dns",
-                   help="run a linear eigenvalue or non-modal analysis instead of DNS")
-    p.add_argument("--linear-nx", type=int, default=defaults["N"][0],
-                   help="wall-normal collocation points for linear analysis")
-    p.add_argument("--ky", type=float, default=0.0, help="azimuthal/streamwise linear-analysis wavenumber")
-    p.add_argument("--kz", type=float, default=2.0 * math.pi / defaults["domain"][2][1],
-                   help="vertical/spanwise linear-analysis wavenumber")
-    p.add_argument("--linear-times", type=str, default="1,5,10,20",
-                   help="comma-separated times for non-modal transient growth")
-    p.add_argument("--linear-n-return", type=int, default=8,
-                   help="number of leading eigenvalues to print")
-    p.add_argument("--linear-n-modes", type=int, default=None,
-                   help="number of finite modes retained for non-modal analysis")
-    p.add_argument("--linear-finite-cap", type=float, default=1.0e8,
-                   help="discard generalized eigenvalues above this magnitude")
-    p.add_argument("--linear-magnetic-bc", choices=["conducting", "dirichlet"],
-                   default="conducting")
-    p.add_argument("--linear-energy", choices=["total", "kinetic", "magnetic"],
-                   default="total",
-                   help="energy norm for --linear nonmodal (kinetic+magnetic by default)")
+    p.add_argument(
+        "--save-profiles",
+        type=str,
+        default=None,
+        help="path to write x-resolved mean/stress profiles (.npz) at end",
+    )
+    p.add_argument(
+        "--linear",
+        choices=["dns", "eigs", "nonmodal"],
+        default="dns",
+        help="run a linear eigenvalue or non-modal analysis instead of DNS",
+    )
+    p.add_argument(
+        "--linear-nx",
+        type=int,
+        default=defaults["N"][0],
+        help="wall-normal collocation points for linear analysis",
+    )
+    p.add_argument(
+        "--ky",
+        type=float,
+        default=0.0,
+        help="azimuthal/streamwise linear-analysis wavenumber",
+    )
+    p.add_argument(
+        "--kz",
+        type=float,
+        default=2.0 * math.pi / defaults["domain"][2][1],
+        help="vertical/spanwise linear-analysis wavenumber",
+    )
+    p.add_argument(
+        "--linear-times",
+        type=str,
+        default="1,5,10,20",
+        help="comma-separated times for non-modal transient growth",
+    )
+    p.add_argument(
+        "--linear-n-return",
+        type=int,
+        default=8,
+        help="number of leading eigenvalues to print",
+    )
+    p.add_argument(
+        "--linear-n-modes",
+        type=int,
+        default=None,
+        help="number of finite modes retained for non-modal analysis",
+    )
+    p.add_argument(
+        "--linear-finite-cap",
+        type=float,
+        default=1.0e8,
+        help="discard generalized eigenvalues above this magnitude",
+    )
+    p.add_argument(
+        "--linear-magnetic-bc",
+        choices=["conducting", "dirichlet"],
+        default="conducting",
+    )
+    p.add_argument(
+        "--linear-energy",
+        choices=["total", "kinetic", "magnetic"],
+        default="total",
+        help="energy norm for --linear nonmodal (kinetic+magnetic by default)",
+    )
     return p.parse_args()
 
 
@@ -511,8 +586,12 @@ def _run_linear_variant(args, params):
         magnetic_bc=args.linear_magnetic_bc,
     )
     if args.linear == "eigs":
-        w, _ = lin.eigs(args.ky, args.kz, n_return=args.linear_n_return,
-                        finite_cap=args.linear_finite_cap)
+        w, _ = lin.eigs(
+            args.ky,
+            args.kz,
+            n_return=args.linear_n_return,
+            finite_cap=args.linear_finite_cap,
+        )
         if comm.Get_rank() == 0:
             print(
                 f"Plane Couette MRI linear eigenvalues: S={params['shear_rate']:g}, "
@@ -666,7 +745,11 @@ def run(argv=None):
             "kappa2",
         )
         for key in keys:
-            print(f"  {key}: {final[key]:.16e}" if isinstance(final[key], float) else f"  {key}: {final[key]}")
+            print(
+                f"  {key}: {final[key]:.16e}"
+                if isinstance(final[key], float)
+                else f"  {key}: {final[key]}"
+            )
     return final
 
 

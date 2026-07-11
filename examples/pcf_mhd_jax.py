@@ -257,9 +257,7 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
                         for i in range(3)
                     ]
 
-            u0_new = self._solve_prefactor(
-                self.Su_factor, self.TB.mask_nyquist(rhs_u)
-            )
+            u0_new = self._solve_prefactor(self.Su_factor, self.TB.mask_nyquist(rhs_u))
             g_new = self._solve_prefactor(self.Sg_factor, self.TD.mask_nyquist(rhs_g))
             v00_new = self._solve_prefactor(self.S00_factor, rhs_v)
             w00_new = self._solve_prefactor(self.S00_factor, rhs_w)

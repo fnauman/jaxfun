@@ -9,6 +9,7 @@ claiming parity.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -829,10 +830,8 @@ def _restore_compilation_cache_config(
     jax_module: Any, restore_state: dict[str, Any]
 ) -> None:
     for key, value in restore_state.items():
-        try:
+        with contextlib.suppress(Exception):
             jax_module.config.update(key, value)
-        except Exception:
-            pass
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -875,10 +874,8 @@ def _partial_diagnostics_writer(out_dir: Path):
         handle.flush()
 
     def close(*, keep: bool) -> None:
-        try:
+        with contextlib.suppress(Exception):
             handle.close()
-        except Exception:  # pragma: no cover - close is best-effort
-            pass
         if not keep:
             path.unlink(missing_ok=True)
 

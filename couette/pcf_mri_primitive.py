@@ -57,13 +57,25 @@ and ``d_x b_y = d_x b_z = 0`` (Neumann tangential).
 
 Author: built for the fn_shenfun project (companion to taylor_couette_dns.py).
 """
+
 import math
 
 import numpy as np
-
-from shenfun import (FunctionSpace, TensorProductSpace, CompositeSpace,
-                     TrialFunction, TestFunction, inner, Dx, Function, Array,
-                     Project, comm, la, BlockMatrix)
+from shenfun import (
+    Array,
+    BlockMatrix,
+    CompositeSpace,
+    Dx,
+    Function,
+    FunctionSpace,
+    Project,
+    TensorProductSpace,
+    TestFunction,
+    TrialFunction,
+    comm,
+    inner,
+    la,
+)
 
 
 def _as_list(res):
@@ -122,8 +134,20 @@ class AxisymmetricPCFMRIDNS:
         3/2-rule padding factor (1.0 disables).
     """
 
-    def __init__(self, S=1.0, omega=2.0 / 3.0, B0=0.1, nu=1.0e-3, eta_mag=1.0e-3,
-                 Nx=48, Nz=16, Lz=1.0, dt=2.0e-3, family="C", dealias=1.0):
+    def __init__(
+        self,
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=1.0e-3,
+        eta_mag=1.0e-3,
+        Nx=48,
+        Nz=16,
+        Lz=1.0,
+        dt=2.0e-3,
+        family="C",
+        dealias=1.0,
+    ):
         self.S = float(S)
         self.omega = float(omega)
         self.B0 = float(B0)
@@ -135,29 +159,34 @@ class AxisymmetricPCFMRIDNS:
         self.dt = float(dt)
         self.family = family
         self.dealias = float(dealias)
-        dom = (-1.0, 1.0)   # half-gap h=1: modes coincide with _pcf_linear
+        dom = (-1.0, 1.0)  # half-gap h=1: modes coincide with _pcf_linear
 
         # ---- spaces: axis 0 = z (Fourier), axis 1 = x (Chebyshev) -----------
         self.F = FunctionSpace(self.Nz, "Fourier", dtype="d", domain=(0, self.Lz))
-        self.SD = FunctionSpace(self.Nx, family, bc=(0, 0), domain=dom)   # u, b_x
-        self.S0 = FunctionSpace(self.Nx, family, domain=dom)             # orthogonal
-        self.SP = FunctionSpace(self.Nx, family, domain=dom)             # pressures
+        self.SD = FunctionSpace(self.Nx, family, bc=(0, 0), domain=dom)  # u, b_x
+        self.S0 = FunctionSpace(self.Nx, family, domain=dom)  # orthogonal
+        self.SP = FunctionSpace(self.Nx, family, domain=dom)  # pressures
         self.SP.slice = lambda: slice(0, self.Nx - 2)
-        self.SN = FunctionSpace(self.Nx, family, domain=dom,             # b_y, b_z Neumann
-                                bc={"left": {"N": 0}, "right": {"N": 0}})
+        self.SN = FunctionSpace(
+            self.Nx,
+            family,
+            domain=dom,  # b_y, b_z Neumann
+            bc={"left": {"N": 0}, "right": {"N": 0}},
+        )
 
         ax = (1, 0)
         self.TD = TensorProductSpace(comm, (self.F, self.SD), axes=ax)
         self.T0 = TensorProductSpace(comm, (self.F, self.S0), axes=ax)
-        self.TP = TensorProductSpace(comm, (self.F, self.SP), axes=ax,
-                                     modify_spaces_inplace=True)
+        self.TP = TensorProductSpace(
+            comm, (self.F, self.SP), axes=ax, modify_spaces_inplace=True
+        )
         self.TN = TensorProductSpace(comm, (self.F, self.SN), axes=ax)
 
         # u_x,u_y,u_z, Pi, b_x,b_y,b_z   and the 6 evolving fields (no pressure)
-        self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP,
-                                  self.TD, self.TN, self.TN])
-        self.VE = CompositeSpace([self.TD, self.TD, self.TD,
-                                  self.TD, self.TN, self.TN])
+        self.VQ = CompositeSpace(
+            [self.TD, self.TD, self.TD, self.TP, self.TD, self.TN, self.TN]
+        )
+        self.VE = CompositeSpace([self.TD, self.TD, self.TD, self.TD, self.TN, self.TN])
 
         X = self.T0.local_mesh(True)
         self.zphys = X[0]
@@ -169,7 +198,7 @@ class AxisymmetricPCFMRIDNS:
 
         self._build_operators()
 
-        self.x = Function(self.VE)            # (u_x,u_y,u_z, b_x,b_y,b_z)
+        self.x = Function(self.VE)  # (u_x,u_y,u_z, b_x,b_y,b_z)
         self.p_hat = Function(self.TP)
         self.rhs = Function(self.VQ)
         self.sol = Function(self.VQ)
@@ -185,19 +214,21 @@ class AxisymmetricPCFMRIDNS:
         # in-place-update invariant documented in AxisymmetricMRIDNS).
         self._Pdx = [Project(Dx(self.x[i], 1, 1), self.T0) for i in range(6)]
         self._Pdz = [Project(Dx(self.x[i], 0, 1), self.T0) for i in range(6)]
-        self._eps = [Function(self.T0) for _ in range(3)]   # EMF eps_x, eps_y, eps_z
-        self._Pezx = Project(Dx(self._eps[2], 1, 1), self.T0)   # d eps_z / dx
-        self._Pexz = Project(Dx(self._eps[0], 0, 1), self.T0)   # d eps_x / dz
-        self._Peyz = Project(Dx(self._eps[1], 0, 1), self.T0)   # d eps_y / dz
-        self._Peyx = Project(Dx(self._eps[1], 1, 1), self.T0)   # d eps_y / dx
+        self._eps = [Function(self.T0) for _ in range(3)]  # EMF eps_x, eps_y, eps_z
+        self._Pezx = Project(Dx(self._eps[2], 1, 1), self.T0)  # d eps_z / dx
+        self._Pexz = Project(Dx(self._eps[0], 0, 1), self.T0)  # d eps_x / dz
+        self._Peyz = Project(Dx(self._eps[1], 0, 1), self.T0)  # d eps_y / dz
+        self._Peyx = Project(Dx(self._eps[1], 1, 1), self.T0)  # d eps_y / dx
 
         if comm.Get_rank() == 0:
             self.Re = abs(self.S) / self.nu if self.nu else float("inf")
             self.Rm = abs(self.S) / self.eta_mag if self.eta_mag else float("inf")
-            print(f"AxisymmetricPCFMRIDNS: S={self.S:g} Omega={self.omega:g} "
-                  f"B0={self.B0:g} nu={self.nu:g} eta={self.eta_mag:g} "
-                  f"Nx={self.Nx} Nz={self.Nz} Lz={self.Lz:.4f} dt={self.dt:g} "
-                  f"dealias={self.dealias:g}")
+            print(
+                f"AxisymmetricPCFMRIDNS: S={self.S:g} Omega={self.omega:g} "
+                f"B0={self.B0:g} nu={self.nu:g} eta={self.eta_mag:g} "
+                f"Nx={self.Nx} Nz={self.Nz} Lz={self.Lz:.4f} dt={self.dt:g} "
+                f"dealias={self.dealias:g}"
+            )
 
     # ------------------------------------------------------------------
     def _lap(self, u):
@@ -246,9 +277,9 @@ class AxisymmetricPCFMRIDNS:
         for vv, uu in ((vx, ux), (vy, uy), (vz, uz), (cx, bx), (cy, by), (cz, bz)):
             imp += _as_list(inner(vv, uu * (1.0 / dt)))
         imp += self._Lxx(ux, uy, uz, bx, by, bz, vx, vy, vz, cx, cy, cz, sign=-0.5)
-        imp += _as_list(inner(vx, Dx(p, 1, 1)))         # +dPi/dx
-        imp += _as_list(inner(vz, Dx(p, 0, 1)))         # +dPi/dz
-        imp += _as_list(inner(q, Dx(ux, 1, 1)))         # continuity div u = 0
+        imp += _as_list(inner(vx, Dx(p, 1, 1)))  # +dPi/dx
+        imp += _as_list(inner(vz, Dx(p, 0, 1)))  # +dPi/dz
+        imp += _as_list(inner(q, Dx(ux, 1, 1)))  # continuity div u = 0
         imp += _as_list(inner(q, Dx(uz, 0, 1)))
         self.Limp = la.BlockMatrixSolver(imp)
 
@@ -257,11 +288,18 @@ class AxisymmetricPCFMRIDNS:
         eux, euy, euz, ebx, eby, ebz = ue
         tux, tuy, tuz, tbx, tby, tbz = ve
         exp = []
-        for vv, uu in ((tux, eux), (tuy, euy), (tuz, euz),
-                       (tbx, ebx), (tby, eby), (tbz, ebz)):
+        for vv, uu in (
+            (tux, eux),
+            (tuy, euy),
+            (tuz, euz),
+            (tbx, ebx),
+            (tby, eby),
+            (tbz, ebz),
+        ):
             exp += _as_list(inner(vv, uu * (1.0 / dt)))
-        exp += self._Lxx(eux, euy, euz, ebx, eby, ebz,
-                         tux, tuy, tuz, tbx, tby, tbz, sign=0.5)
+        exp += self._Lxx(
+            eux, euy, euz, ebx, eby, ebz, tux, tuy, tuz, tbx, tby, tbz, sign=0.5
+        )
         self.Lexp = BlockMatrix(exp)
 
     # ------------------------------------------------------------------
@@ -270,14 +308,17 @@ class AxisymmetricPCFMRIDNS:
 
         def bw(f):
             return np.asarray(f.backward(padding_factor=pf) if pf else f.backward())
+
         return bw(self.x[i]), bw(self._Pdx[i]()), bw(self._Pdz[i]())
 
     def _set_hat(self, k, padded_values):
         if self.dealias > 1.0:
-            ap = Array(self.T0p); ap[:] = padded_values
+            ap = Array(self.T0p)
+            ap[:] = padded_values
             self._eps[k][:] = ap.forward()
         else:
-            ar = Array(self.T0); ar[:] = padded_values
+            ar = Array(self.T0)
+            ar[:] = padded_values
             self._eps[k][:] = ar.forward(Function(self.T0))
 
     def nonlinear(self, out):
@@ -297,13 +338,15 @@ class AxisymmetricPCFMRIDNS:
         nu_x, nu_y, nu_z = au_x - lb_x, au_y - lb_y, au_z - lb_z
         # induction EMF eps = u x b -> buffers _eps[0,1,2]; materialise the curl
         # terms BEFORE reusing _eps for momentum dealiasing.
-        self._set_hat(0, uy * bz - uz * by)       # eps_x
-        self._set_hat(1, uz * bx - ux * bz)       # eps_y
-        self._set_hat(2, ux * by - uy * bx)       # eps_z
+        self._set_hat(0, uy * bz - uz * by)  # eps_x
+        self._set_hat(1, uz * bx - ux * bz)  # eps_y
+        self._set_hat(2, ux * by - uy * bx)  # eps_z
         # N_b = -curl(eps):  (curl)_x = -d_z eps_y, _y = d_z eps_x - d_x eps_z,
         #                    _z = d_x eps_y    (ky=0)
-        nb_x = np.asarray(self._Peyz().backward())                            # +d_z eps_y
-        nb_y = -np.asarray(self._Pexz().backward()) + np.asarray(self._Pezx().backward())
+        nb_x = np.asarray(self._Peyz().backward())  # +d_z eps_y
+        nb_y = -np.asarray(self._Pexz().backward()) + np.asarray(
+            self._Pezx().backward()
+        )
         nb_z = -np.asarray(self._Peyx().backward())
         if self.dealias > 1.0:
             for vals, k in ((nu_x, 0), (nu_y, 1), (nu_z, 2)):
@@ -316,6 +359,7 @@ class AxisymmetricPCFMRIDNS:
         def proj(test, vals):
             ar[:] = vals
             return inner(test, ar)
+
         out[0] = proj(self.vu, nu_x)
         out[1] = proj(self.vu, nu_y)
         out[2] = proj(self.vu, nu_z)
@@ -334,7 +378,9 @@ class AxisymmetricPCFMRIDNS:
                 e = rhs_e[i] - (1.5 * self.N_hat[i] - 0.5 * self.N_old[i])
             else:
                 e = rhs_e[i] - self.N_hat[i]
-            self.rhs[i if i < 3 else i + 1] = e    # VE (u,u,u,b,b,b) -> VQ (u,u,u,Pi,b,b,b)
+            self.rhs[i if i < 3 else i + 1] = (
+                e  # VE (u,u,u,b,b,b) -> VQ (u,u,u,Pi,b,b,b)
+            )
         self.rhs[3] = 0.0
         self.sol = self.Limp(self.rhs, u=self.sol, constraints=((3, 0, 0),))
         for i in range(6):
@@ -373,8 +419,15 @@ class AxisymmetricPCFMRIDNS:
     def diagnostics(self, t, tstep):
         ek, em = self.energy()
         du, db = self.divergences()
-        return {"t": float(t), "tstep": int(tstep), "Ekin": ek, "Emag": em,
-                "E": ek + em, "divu": du, "divb": db}
+        return {
+            "t": float(t),
+            "tstep": int(tstep),
+            "Ekin": ek,
+            "Emag": em,
+            "E": ek + em,
+            "divu": du,
+            "divb": db,
+        }
 
     def run(self, end_time, moderror=0, on_diag=None, assert_finite=True):
         if not hasattr(self, "_t"):
@@ -389,8 +442,10 @@ class AxisymmetricPCFMRIDNS:
                 if on_diag is not None:
                     on_diag(d)
                 elif moderror and comm.Get_rank() == 0:
-                    print(f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
-                          f"divu={d['divu']:.1e} divb={d['divb']:.1e}")
+                    print(
+                        f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
+                        f"divu={d['divu']:.1e} divb={d['divb']:.1e}"
+                    )
         return self.diagnostics(self._t, self._tstep)
 
     # ------------------------------------------------------------------
@@ -398,10 +453,18 @@ class AxisymmetricPCFMRIDNS:
     # ------------------------------------------------------------------
     def _linear_operator(self):
         from _pcf_linear import PlaneCouetteLinear
+
         return PlaneCouetteLinear.shearpy(
-            nx=self.Nx, Re=abs(self.S) / self.nu, Rm=abs(self.S) / self.eta_mag,
-            shear_rate=self.S, omega=self.omega, by=0.0, bz=self.B0,
-            velocity_scale=abs(self.S), magnetic_bc="conducting")
+            nx=self.Nx,
+            Re=abs(self.S) / self.nu,
+            Rm=abs(self.S) / self.eta_mag,
+            shear_rate=self.S,
+            omega=self.omega,
+            by=0.0,
+            bz=self.B0,
+            velocity_scale=abs(self.S),
+            magnetic_bc="conducting",
+        )
 
     def seed_linear_eigenmode(self, kz_mode=1, amp=1e-6, which=0):
         """Inject the leading linear MRI eigenmode at axial mode ``kz_mode``.
@@ -427,8 +490,8 @@ class AxisymmetricPCFMRIDNS:
         spaces = (self.TD, self.TD, self.TD, self.TD, self.TN, self.TN)
         self.x[:] = 0.0
         for i, (name, space) in enumerate(zip(names, spaces)):
-            prof = vec[blk[name] * n:(blk[name] + 1) * n]
-            prof_dns = Interp @ prof                      # complex profile on x_dns
+            prof = vec[blk[name] * n : (blk[name] + 1) * n]
+            prof_dns = Interp @ prof  # complex profile on x_dns
             re = prof_dns.real
             im = prof_dns.imag
             # physical real field Re[prof e^{i kz z}] = prof_re cos - prof_im sin
@@ -443,13 +506,16 @@ class AxisymmetricPCFMRIDNS:
         """Deterministic small channel-mode perturbation (no eigenmode), for
         restart/robustness tests that need a non-trivial nonlinear history."""
         kz = 2.0 * math.pi * kz_mode / self.Lz
-        wall = (1.0 - self.xphys ** 2)
+        wall = 1.0 - self.xphys**2
         self.x[:] = 0.0
-        ax = Array(self.TD); ax[:] = amp * wall * np.cos(kz * self.zphys)
+        ax = Array(self.TD)
+        ax[:] = amp * wall * np.cos(kz * self.zphys)
         self.x[0] = ax.forward(Function(self.TD))
-        ay = Array(self.TD); ay[:] = amp * wall * np.sin(kz * self.zphys)
+        ay = Array(self.TD)
+        ay[:] = amp * wall * np.sin(kz * self.zphys)
         self.x[1] = ay.forward(Function(self.TD))
-        bt = Array(self.TN); bt[:] = amp * np.cos(kz * self.zphys)
+        bt = Array(self.TN)
+        bt[:] = amp * np.cos(kz * self.zphys)
         self.x[4] = bt.forward(Function(self.TN))
         self._have_old = False
         return self
@@ -486,8 +552,15 @@ class AxisymmetricPCFMRIDNS:
     # ------------------------------------------------------------------
     def _hydro_linear_operator(self):
         from _pcf_linear import PlaneCouetteLinear
-        return PlaneCouetteLinear(nx=self.Nx, nu=self.nu, eta=self.eta_mag,
-                                  Uprime=-self.S, omega=self.omega, mhd=False)
+
+        return PlaneCouetteLinear(
+            nx=self.Nx,
+            nu=self.nu,
+            eta=self.eta_mag,
+            Uprime=-self.S,
+            omega=self.omega,
+            mhd=False,
+        )
 
     def seed_hydro_eigenmode(self, kz_mode=1, amp=1e-6, which=0):
         """Seed the leading HYDRO (B0=0) eigenmode (velocity only; b stays 0).
@@ -509,7 +582,7 @@ class AxisymmetricPCFMRIDNS:
         zs = np.sin(kz * self.zphys)
         self.x[:] = 0.0
         for i, name in enumerate(("ux", "uy", "uz")):
-            prof = vec[blk[name] * n:(blk[name] + 1) * n]
+            prof = vec[blk[name] * n : (blk[name] + 1) * n]
             re = (Interp @ prof).real
             im = (Interp @ prof).imag
             a = Array(self.TD)
@@ -552,9 +625,23 @@ class PCFMRIDNS:
     saturation runs.
     """
 
-    def __init__(self, S=1.0, omega=2.0 / 3.0, B0=0.1, nu=1.0e-3, eta_mag=1.0e-3,
-                 Nx=40, Ny=8, Nz=16, Ly=2.0 * math.pi, Lz=1.0, dt=2.0e-3,
-                 family="C", dealias=1.0, magnetic_bc="conducting"):
+    def __init__(
+        self,
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=1.0e-3,
+        eta_mag=1.0e-3,
+        Nx=40,
+        Ny=8,
+        Nz=16,
+        Ly=2.0 * math.pi,
+        Lz=1.0,
+        dt=2.0e-3,
+        family="C",
+        dealias=1.0,
+        magnetic_bc="conducting",
+    ):
         self.S = float(S)
         self.omega = float(omega)
         self.B0 = float(B0)
@@ -573,18 +660,20 @@ class PCFMRIDNS:
         # y streamwise (complex Fourier), z vertical (real Fourier), x Chebyshev.
         self.Fy = FunctionSpace(self.Ny, "Fourier", dtype="D", domain=(0, self.Ly))
         self.Fz = FunctionSpace(self.Nz, "Fourier", dtype="d", domain=(0, self.Lz))
-        self.SD = FunctionSpace(self.Nx, family, bc=(0, 0), domain=dom)   # u, b_x
+        self.SD = FunctionSpace(self.Nx, family, bc=(0, 0), domain=dom)  # u, b_x
         self.S0 = FunctionSpace(self.Nx, family, domain=dom)
         self.SP = FunctionSpace(self.Nx, family, domain=dom)
         self.SP.slice = lambda: slice(0, self.Nx - 2)
-        self.SN = FunctionSpace(self.Nx, family, domain=dom,
-                                bc={"left": {"N": 0}, "right": {"N": 0}})
+        self.SN = FunctionSpace(
+            self.Nx, family, domain=dom, bc={"left": {"N": 0}, "right": {"N": 0}}
+        )
 
-        ax = (2, 0, 1)                          # wall-normal x (axis 2) is the solve axis
+        ax = (2, 0, 1)  # wall-normal x (axis 2) is the solve axis
         self.TD = TensorProductSpace(comm, (self.Fy, self.Fz, self.SD), axes=ax)
         self.T0 = TensorProductSpace(comm, (self.Fy, self.Fz, self.S0), axes=ax)
-        self.TP = TensorProductSpace(comm, (self.Fy, self.Fz, self.SP), axes=ax,
-                                     modify_spaces_inplace=True)
+        self.TP = TensorProductSpace(
+            comm, (self.Fy, self.Fz, self.SP), axes=ax, modify_spaces_inplace=True
+        )
         self.TN = TensorProductSpace(comm, (self.Fy, self.Fz, self.SN), axes=ax)
 
         # FJ-09: conducting walls -> b_x Dirichlet + b_y/b_z Neumann;
@@ -592,15 +681,16 @@ class PCFMRIDNS:
         self.magnetic_bc = str(magnetic_bc)
         if self.magnetic_bc not in ("conducting", "pseudo_vacuum"):
             raise ValueError("magnetic_bc must be 'conducting' or 'pseudo_vacuum'")
-        Tbx, Tbt = ((self.TN, self.TD) if self.magnetic_bc == "pseudo_vacuum"
-                    else (self.TD, self.TN))
+        Tbx, Tbt = (
+            (self.TN, self.TD)
+            if self.magnetic_bc == "pseudo_vacuum"
+            else (self.TD, self.TN)
+        )
         self._b_spaces = (Tbx, Tbt, Tbt)
-        self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP,
-                                  Tbx, Tbt, Tbt])
-        self.VE = CompositeSpace([self.TD, self.TD, self.TD,
-                                  Tbx, Tbt, Tbt])
+        self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP, Tbx, Tbt, Tbt])
+        self.VE = CompositeSpace([self.TD, self.TD, self.TD, Tbx, Tbt, Tbt])
 
-        self.x_sym = self.TD.coors.psi[2]       # wall-normal coordinate symbol
+        self.x_sym = self.TD.coors.psi[2]  # wall-normal coordinate symbol
         X = self.T0.local_mesh(True)
         self.yphys, self.zphys, self.xphys = X[0], X[1], X[2]
         if self.dealias > 1.0:
@@ -626,29 +716,31 @@ class PCFMRIDNS:
         self._Pdx = [Project(Dx(self.x[i], 2, 1), self.T0) for i in range(6)]
         self._Pdy = [Project(Dx(self.x[i], 0, 1), self.T0) for i in range(6)]
         self._Pdz = [Project(Dx(self.x[i], 1, 1), self.T0) for i in range(6)]
-        self._eps = [Function(self.T0) for _ in range(3)]   # eps_x, eps_y, eps_z
-        self._Peyz = Project(Dx(self._eps[1], 1, 1), self.T0)   # d eps_y / dz
-        self._Pezy = Project(Dx(self._eps[2], 0, 1), self.T0)   # d eps_z / dy
-        self._Pezx = Project(Dx(self._eps[2], 2, 1), self.T0)   # d eps_z / dx
-        self._Pexz = Project(Dx(self._eps[0], 1, 1), self.T0)   # d eps_x / dz
-        self._Pexy = Project(Dx(self._eps[0], 0, 1), self.T0)   # d eps_x / dy
-        self._Peyx = Project(Dx(self._eps[1], 2, 1), self.T0)   # d eps_y / dx
+        self._eps = [Function(self.T0) for _ in range(3)]  # eps_x, eps_y, eps_z
+        self._Peyz = Project(Dx(self._eps[1], 1, 1), self.T0)  # d eps_y / dz
+        self._Pezy = Project(Dx(self._eps[2], 0, 1), self.T0)  # d eps_z / dy
+        self._Pezx = Project(Dx(self._eps[2], 2, 1), self.T0)  # d eps_z / dx
+        self._Pexz = Project(Dx(self._eps[0], 1, 1), self.T0)  # d eps_x / dz
+        self._Pexy = Project(Dx(self._eps[0], 0, 1), self.T0)  # d eps_x / dy
+        self._Peyx = Project(Dx(self._eps[1], 2, 1), self.T0)  # d eps_y / dx
 
         if comm.Get_rank() == 0:
-            print(f"PCFMRIDNS(3D): S={self.S:g} Omega={self.omega:g} B0={self.B0:g} "
-                  f"nu={self.nu:g} eta={self.eta_mag:g} Nx={self.Nx} Ny={self.Ny} "
-                  f"Nz={self.Nz} Ly={self.Ly:.4f} Lz={self.Lz:.4f} dt={self.dt:g} "
-                  f"dealias={self.dealias:g}")
+            print(
+                f"PCFMRIDNS(3D): S={self.S:g} Omega={self.omega:g} B0={self.B0:g} "
+                f"nu={self.nu:g} eta={self.eta_mag:g} Nx={self.Nx} Ny={self.Ny} "
+                f"Nz={self.Nz} Ly={self.Ly:.4f} Lz={self.Lz:.4f} dt={self.dt:g} "
+                f"dealias={self.dealias:g}"
+            )
 
     # ------------------------------------------------------------------
     def _lap(self, u):
-        return Dx(u, 2, 2) + Dx(u, 0, 2) + Dx(u, 1, 2)      # d_xx + d_yy + d_zz
+        return Dx(u, 2, 2) + Dx(u, 0, 2) + Dx(u, 1, 2)  # d_xx + d_yy + d_zz
 
     def _Lxx(self, ux, uy, uz, bx, by, bz, vx, vy, vz, cx, cy, cz, sign):
         nu, eta, B0, S, Om = self.nu, self.eta_mag, self.B0, self.S, self.omega
         dy = lambda f: Dx(f, 0, 1)
         dz = lambda f: Dx(f, 1, 1)
-        adv = lambda f: S * self.x_sym * Dx(f, 0, 1)        # -U d/dy = +S x d/dy
+        adv = lambda f: S * self.x_sym * Dx(f, 0, 1)  # -U d/dy = +S x d/dy
         out = []
         # x-momentum
         out += _as_list(inner(vx, sign * nu * self._lap(ux)))
@@ -689,12 +781,12 @@ class PCFMRIDNS:
         for vv, uu in ((vx, ux), (vy, uy), (vz, uz), (cx, bx), (cy, by), (cz, bz)):
             imp += _as_list(inner(vv, uu * (1.0 / dt)))
         imp += self._Lxx(ux, uy, uz, bx, by, bz, vx, vy, vz, cx, cy, cz, sign=-0.5)
-        imp += _as_list(inner(vx, Dx(p, 2, 1)))         # +dPi/dx
-        imp += _as_list(inner(vy, Dx(p, 0, 1)))         # +dPi/dy
-        imp += _as_list(inner(vz, Dx(p, 1, 1)))         # +dPi/dz
-        imp += _as_list(inner(q, Dx(ux, 2, 1)))         # continuity d_x u_x
-        imp += _as_list(inner(q, Dx(uy, 0, 1)))         #          + d_y u_y
-        imp += _as_list(inner(q, Dx(uz, 1, 1)))         #          + d_z u_z
+        imp += _as_list(inner(vx, Dx(p, 2, 1)))  # +dPi/dx
+        imp += _as_list(inner(vy, Dx(p, 0, 1)))  # +dPi/dy
+        imp += _as_list(inner(vz, Dx(p, 1, 1)))  # +dPi/dz
+        imp += _as_list(inner(q, Dx(ux, 2, 1)))  # continuity d_x u_x
+        imp += _as_list(inner(q, Dx(uy, 0, 1)))  #          + d_y u_y
+        imp += _as_list(inner(q, Dx(uz, 1, 1)))  #          + d_z u_z
         self.Limp = la.BlockMatrixSolver(imp)
 
         ue = TrialFunction(self.VE)
@@ -702,11 +794,18 @@ class PCFMRIDNS:
         eux, euy, euz, ebx, eby, ebz = ue
         tux, tuy, tuz, tbx, tby, tbz = ve
         exp = []
-        for vv, uu in ((tux, eux), (tuy, euy), (tuz, euz),
-                       (tbx, ebx), (tby, eby), (tbz, ebz)):
+        for vv, uu in (
+            (tux, eux),
+            (tuy, euy),
+            (tuz, euz),
+            (tbx, ebx),
+            (tby, eby),
+            (tbz, ebz),
+        ):
             exp += _as_list(inner(vv, uu * (1.0 / dt)))
-        exp += self._Lxx(eux, euy, euz, ebx, eby, ebz,
-                         tux, tuy, tuz, tbx, tby, tbz, sign=0.5)
+        exp += self._Lxx(
+            eux, euy, euz, ebx, eby, ebz, tux, tuy, tuz, tbx, tby, tbz, sign=0.5
+        )
         self.Lexp = BlockMatrix(exp)
 
     # ------------------------------------------------------------------
@@ -715,14 +814,22 @@ class PCFMRIDNS:
 
         def bw(f):
             return np.asarray(f.backward(padding_factor=pf) if pf else f.backward())
-        return (bw(self.x[i]), bw(self._Pdx[i]()), bw(self._Pdy[i]()), bw(self._Pdz[i]()))
+
+        return (
+            bw(self.x[i]),
+            bw(self._Pdx[i]()),
+            bw(self._Pdy[i]()),
+            bw(self._Pdz[i]()),
+        )
 
     def _set_hat(self, k, vals):
         if self.dealias > 1.0:
-            ap = Array(self.T0p); ap[:] = vals
+            ap = Array(self.T0p)
+            ap[:] = vals
             self._eps[k][:] = ap.forward()
         else:
-            ar = Array(self.T0); ar[:] = vals
+            ar = Array(self.T0)
+            ar[:] = vals
             self._eps[k][:] = ar.forward(Function(self.T0))
 
     def nonlinear(self, out):
@@ -741,9 +848,9 @@ class PCFMRIDNS:
         lb_z = bx * bzx + by * bzy + bz * bzz
         nu_x, nu_y, nu_z = au_x - lb_x, au_y - lb_y, au_z - lb_z
         # EMF eps = u x b ; materialise curl terms before reusing _eps for momentum
-        self._set_hat(0, uy * bz - uz * by)       # eps_x
-        self._set_hat(1, uz * bx - ux * bz)       # eps_y
-        self._set_hat(2, ux * by - uy * bx)       # eps_z
+        self._set_hat(0, uy * bz - uz * by)  # eps_x
+        self._set_hat(1, uz * bx - ux * bz)  # eps_y
+        self._set_hat(2, ux * by - uy * bx)  # eps_z
         # N_b = -curl(eps):
         #   _x = d_z eps_y - d_y eps_z ; _y = d_x eps_z - d_z eps_x ; _z = d_y eps_x - d_x eps_y
         nb_x = np.asarray(self._Peyz().backward()) - np.asarray(self._Pezy().backward())
@@ -760,6 +867,7 @@ class PCFMRIDNS:
         def proj(test, vals):
             ar[:] = vals
             return inner(test, ar)
+
         out[0] = proj(self.vu, nu_x)
         out[1] = proj(self.vu, nu_y)
         out[2] = proj(self.vu, nu_z)
@@ -804,18 +912,28 @@ class PCFMRIDNS:
         dfx = np.asarray(Project(Dx(fx, 2, 1), self.T0)().backward())
         dfy = np.asarray(Project(Dx(fy, 0, 1), self.T0)().backward())
         dfz = np.asarray(Project(Dx(fz, 1, 1), self.T0)().backward())
-        dd = Array(self.T0); dd[:] = dfx + dfy + dfz
+        dd = Array(self.T0)
+        dd[:] = dfx + dfy + dfz
         return float(np.sqrt(inner(1, dd * dd)))
 
     def divergences(self):
-        return (self._div(self.x[0], self.x[1], self.x[2]),
-                self._div(self.x[3], self.x[4], self.x[5]))
+        return (
+            self._div(self.x[0], self.x[1], self.x[2]),
+            self._div(self.x[3], self.x[4], self.x[5]),
+        )
 
     def diagnostics(self, t, tstep):
         ek, em = self.energy()
         du, db = self.divergences()
-        return {"t": float(t), "tstep": int(tstep), "Ekin": ek, "Emag": em,
-                "E": ek + em, "divu": du, "divb": db}
+        return {
+            "t": float(t),
+            "tstep": int(tstep),
+            "Ekin": ek,
+            "Emag": em,
+            "E": ek + em,
+            "divu": du,
+            "divb": db,
+        }
 
     def run(self, end_time, moderror=0, on_diag=None, assert_finite=True):
         if not hasattr(self, "_t"):
@@ -830,17 +948,27 @@ class PCFMRIDNS:
                 if on_diag is not None:
                     on_diag(d)
                 elif moderror and comm.Get_rank() == 0:
-                    print(f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
-                          f"divu={d['divu']:.1e} divb={d['divb']:.1e}")
+                    print(
+                        f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
+                        f"divu={d['divu']:.1e} divb={d['divb']:.1e}"
+                    )
         return self.diagnostics(self._t, self._tstep)
 
     # ------------------------------------------------------------------
     def _linear_operator(self):
         from _pcf_linear import PlaneCouetteLinear
+
         return PlaneCouetteLinear.shearpy(
-            nx=self.Nx, Re=abs(self.S) / self.nu, Rm=abs(self.S) / self.eta_mag,
-            shear_rate=self.S, omega=self.omega, by=0.0, bz=self.B0,
-            velocity_scale=abs(self.S), magnetic_bc=self.magnetic_bc)
+            nx=self.Nx,
+            Re=abs(self.S) / self.nu,
+            Rm=abs(self.S) / self.eta_mag,
+            shear_rate=self.S,
+            omega=self.omega,
+            by=0.0,
+            bz=self.B0,
+            velocity_scale=abs(self.S),
+            magnetic_bc=self.magnetic_bc,
+        )
 
     def seed_linear_eigenmode(self, ky_mode=1, kz_mode=1, amp=1e-6, which=0):
         """Inject the leading linear MRI eigenmode at ``(ky, kz)`` as the real field
@@ -862,12 +990,13 @@ class PCFMRIDNS:
         spaces = (self.TD, self.TD, self.TD) + self._b_spaces
         self.x[:] = 0.0
         for i, (name, space) in enumerate(zip(names, spaces)):
-            prof = vec[blk[name] * n:(blk[name] + 1) * n]
+            prof = vec[blk[name] * n : (blk[name] + 1) * n]
             re = (Interp @ prof).real
             im = (Interp @ prof).imag
             # Re[prof e^{i(ky y + kz z)}] = re cos - im sin, broadcast over (y,z); re/im over x
             field = amp * (re[None, None, :] * cc - im[None, None, :] * ss)
-            a = Array(space); a[:] = field
+            a = Array(space)
+            a[:] = field
             self.x[i] = a.forward(Function(space))
         self._have_old = False
         return complex(w[which])

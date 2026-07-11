@@ -4,22 +4,24 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import sympy as sp
+from jax import Array
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from jaxfun.galerkin import (
+    CartesianProduct,
     Chebyshev,
     FunctionSpace,
     Legendre,
     TensorProduct,
     TestFunction,
     TrialFunction,
-    VectorTensorProductSpace,
 )
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import inner
 from jaxfun.la import (
     BaseMatrix,
-    BlockTPMatrix,
+    BlockArray,
+    BlockMatrix,
     TPMatrices,
     TPMatrix,
     tpmats_to_kron,
@@ -396,7 +398,7 @@ def test_tpmatrices_solve_fourier_fourier_legendre_3d():
     assert isinstance(lu, TPMatricesWavenumberSolver)
 
     uh = A.solve(b)
-    assert uh.shape == b.shape
+    assert uh.shape == cast(Array, b).shape
 
     M = 20
     uj = T.backward(uh, N=(M, M, M))
@@ -407,7 +409,7 @@ def test_tpmatrices_solve_fourier_fourier_legendre_3d():
 
 
 # ---------------------------------------------------------------------------
-# BlockTPMatrix
+# BlockMatrix
 # ---------------------------------------------------------------------------
 
 BCS_VEC = {"left": {"D": 0}, "right": {"D": 0}}
@@ -423,20 +425,20 @@ def _vector_block_system(N: int, poly):
     F0 = FunctionSpace(N, poly, BCS_VEC)
     F1 = FunctionSpace(N, poly, BCS_VEC)
     T = TensorProduct(F0, F1)
-    V = VectorTensorProductSpace(T, name="V")
+    V = CartesianProduct(T, T, name="V", rank=1)
     u = TrialFunction(V)
     v = TestFunction(V)
     A = inner(Dot(v, u), sparse=True)
-    assert isinstance(A, BlockTPMatrix)
+    assert isinstance(A, BlockMatrix)
     assert isinstance(A, BaseMatrix)
     rng = np.random.default_rng(0)
-    x_true = jnp.array(rng.standard_normal(A.shape[1]), dtype=jnp.float32)
+    x_true = jnp.array(rng.standard_normal(A.shape[1]))
     b = A.to_matrix().matvec(x_true)
-    return A, b, x_true
+    return A, BlockArray(V, flat_array=b), x_true
 
 
 @POLY_SPACES
-def test_blocktpmatrix_tosparse_returns_diamatrix(poly):
+def test_blockmatrix_tosparse_returns_diamatrix(poly):
     A, b, _ = _vector_block_system(8, poly)
     sparse = A.tosparse()
     assert A.ndim == 2
@@ -445,18 +447,18 @@ def test_blocktpmatrix_tosparse_returns_diamatrix(poly):
 
 
 @POLY_SPACES
-def test_blocktpmatrix_solve_sparse_matches_dense(poly):
+def test_blockmatrix_solve_sparse_matches_dense(poly):
     A, b, x_true = _vector_block_system(8, poly)
     # Dense reference
-    x_dense = A.to_matrix().solve(b.ravel()).reshape(b.shape)
+    x_dense = A.to_matrix().solve(b.flatten())
     # Sparse / RCM path
     x_sparse = A.solve(b)
     assert x_sparse.shape == b.shape
-    assert jnp.allclose(x_sparse.ravel(), x_dense.ravel(), atol=ulp(1000))
+    assert jnp.allclose(x_sparse.flatten(), x_dense.ravel(), atol=ulp(1000))
 
 
 @POLY_SPACES
-def test_blocktpmatrix_rcm_reduces_bandwidth(poly):
+def test_blockmatrix_rcm_reduces_bandwidth(poly):
     A, _, _ = _vector_block_system(8, poly)
     sparse = A.tosparse()
     A_perm, _, _ = sparse.rcm()
@@ -466,19 +468,19 @@ def test_blocktpmatrix_rcm_reduces_bandwidth(poly):
 
 
 @POLY_SPACES
-def test_blocktpmatrix_call_matches_dense_matvec(poly):
+def test_blockmatrix_call_matches_dense_matvec(poly):
     A, b, x_true = _vector_block_system(8, poly)
     # Warm the RCM cache via solve
     _ = A.solve(b)
-    y_block = A(x_true)
+    y_block = A(BlockArray(A.test_space, flat_array=x_true))
     y_dense = A.to_matrix().matvec(x_true.ravel()).reshape(x_true.shape)
-    assert jnp.allclose(y_block.ravel(), y_dense.ravel(), atol=ulp(1000))
+    assert jnp.allclose(y_block.flatten(), y_dense.ravel(), atol=ulp(1000))
 
 
 @POLY_SPACES
-def test_blocktpmatrix_solve_cached_rcm(poly):
+def test_blockmatrix_solve_cached_rcm(poly):
     """Second solve reuses cached RCM without reassembly."""
     A, b, _ = _vector_block_system(8, poly)
     x1 = A.solve(b)
     x2 = A.solve(b)
-    assert jnp.allclose(x1.ravel(), x2.ravel(), atol=ulp(10))
+    assert jnp.allclose(x1.flatten(), x2.flatten(), atol=ulp(10))

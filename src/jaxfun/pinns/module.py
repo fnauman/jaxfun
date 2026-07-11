@@ -21,14 +21,15 @@ from sympy.printing.pretty.stringpict import prettyForm
 from sympy.vector import VectorAdd
 
 from jaxfun.coordinates import BaseTime, CoordSys
-from jaxfun.galerkin import Chebyshev, DirectSum
-from jaxfun.galerkin.arguments import ArgumentTag
-from jaxfun.galerkin.orthogonal import OrthogonalSpace
-from jaxfun.galerkin.tensorproductspace import (
+from jaxfun.galerkin import (
+    Chebyshev,
+    DirectSum,
     TensorProductSpace,
     VectorTensorProductSpace,
 )
-from jaxfun.typing import Activation
+from jaxfun.galerkin.arguments import ArgumentTag
+from jaxfun.galerkin.orthogonal import OrthogonalSpace
+from jaxfun.typing import Activation, RankTag
 from jaxfun.utils.common import Domain, lambdify
 
 from .embeddings import Embedding
@@ -627,17 +628,19 @@ class SpectralModule(BaseModule):
             self.kernel: nnx.Param[Array] = nnx.Param(w * x[None, :])
 
         elif basespace.dims == 2:
-            w = kernel_init(rngs(), basespace.num_dofs)
             if isinstance(basespace, TensorProductSpace):
+                w = kernel_init(rngs(), basespace.num_dofs)
                 x = jnp.logspace(0, -6, basespace.num_dofs[0])
                 y = jnp.logspace(0, -6, basespace.num_dofs[1])
                 self.kernel = nnx.Param(x[:, None] * y[None, :] * w)
             elif isinstance(basespace, VectorTensorProductSpace):
-                x = jnp.logspace(0, -6, basespace.num_dofs[1])
-                y = jnp.logspace(0, -6, basespace.num_dofs[2])
-                self.kernel: nnx.Param[Array] = nnx.Param(
-                    (x[None, :, None] * y[None, None, :]) * w
-                )
+                c = []
+                for b in basespace:
+                    w = kernel_init(rngs(), b.num_dofs)
+                    x = jnp.logspace(0, -6, b.num_dofs[0])
+                    y = jnp.logspace(0, -6, b.num_dofs[1])
+                    c.append((x[:, None] * y[None, :]) * w)
+                self.kernel: nnx.Param[tuple[Array, ...]] = nnx.Param(tuple(c))
 
         self.space = basespace
         self.name = name
@@ -652,9 +655,9 @@ class SpectralModule(BaseModule):
         """Return spatial dimensionality of the basespace."""
         return self.space.dims
 
-    def set_kernel(self, kernel: Array) -> None:
+    def set_kernel(self, kernel: Array | tuple[Array, ...]) -> None:
         """Set kernel parameters directly."""
-        self.kernel = nnx.Param(kernel)
+        self.kernel: nnx.Param[Array | tuple[Array, ...]] = nnx.Param(kernel)
 
     def __call__(self, x: Array) -> Array:
         """Evaluate spectral expansion at coordinates.
@@ -668,8 +671,12 @@ class SpectralModule(BaseModule):
         if isinstance(self.space, OrthogonalSpace | DirectSum):
             return self.space.evaluate(x, self.kernel[0])
 
-        z = self.space.evaluate(x, self.kernel[...])
-        if self.space.rank == 0:
+        if isinstance(self.space, TensorProductSpace):
+            z = self.space.evaluate(x, cast(Array, self.kernel))
+        elif isinstance(self.space, VectorTensorProductSpace):
+            z = self.space.evaluate(x, cast(tuple[Array, ...], self.kernel))
+
+        if self.space.rank == RankTag.SCALAR:
             return jnp.expand_dims(z, -1)
         return z
 
@@ -965,7 +972,7 @@ class FlaxFunction(Function):
         return obj
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> RankTag:
         """Return tensor rank of the represented field."""
         return self.functionspace.rank
 
@@ -996,7 +1003,7 @@ class FlaxFunction(Function):
         V = self.functionspace
         args = self.get_args(Cartesian=False)
 
-        if V.rank == 0:
+        if V.rank == RankTag.SCALAR:
             function = cast(
                 Callable[..., AppliedUndef],
                 Function(
@@ -1010,7 +1017,7 @@ class FlaxFunction(Function):
             )
             return function(*args)
 
-        if V.rank == 1:
+        if V.rank == RankTag.VECTOR:
             b = V.system.base_vectors()
             return VectorAdd.fromiter(
                 Function(
@@ -1050,11 +1057,19 @@ class FlaxFunction(Function):
         return ", ".join([i.name for i in self.args[:-1]])
 
     def __str__(self) -> str:
-        name = "\033[1m%s\033[0m" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
+        name = (
+            "\033[1m%s\033[0m" % (self.name,)  # noqa: UP031
+            if self.rank == RankTag.VECTOR
+            else self.name
+        )
         return f"{name}({self.c_names}; {self.module.name})"
 
     def _latex(self, printer: Any = None) -> str:
-        name = r"\mathbf{ {%s} }" % (self.name,) if self.rank == 1 else self.name  # noqa: UP031
+        name = (
+            r"\mathbf{ {%s} }" % (self.name,)  # noqa: UP031
+            if self.rank == RankTag.VECTOR
+            else self.name
+        )
         return f"{name}({self.c_names}; {self.module.name})"
 
     def _pretty(self, printer: Any = None) -> prettyForm:
@@ -1066,7 +1081,7 @@ class FlaxFunction(Function):
     def __call__(self, x: Array) -> Array:
         """Evaluate underlying module; flatten scalar output if rank 0."""
         y = self.module(x)
-        if self.rank == 0 and y.shape[-1] == 1:
+        if self.rank == RankTag.SCALAR and y.shape[-1] == 1:
             return y[:, 0]
         return y
 

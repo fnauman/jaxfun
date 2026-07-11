@@ -275,9 +275,10 @@ class KMM:
         d1_rows = self.C0.evaluate_basis_derivative(ref_bounds, 1) * float(
             self.C0.domain_factor
         )
-        b0_d2_rows = self.B0.evaluate_basis_derivative(
-            self.B0.map_reference_domain(bounds), 2
-        ) * float(self.B0.domain_factor) ** 2
+        b0_d2_rows = (
+            self.B0.evaluate_basis_derivative(self.B0.map_reference_domain(bounds), 2)
+            * float(self.B0.domain_factor) ** 2
+        )
         k2 = jnp.squeeze(self.K[1] * self.K[1] + self.K[2] * self.K[2], axis=0)
         return {
             "tests": tests,
@@ -524,9 +525,7 @@ class KMM:
             rhs_u, rhs_g, rhs_v, rhs_w = ars_stage_rhs(
                 base_rhs, nonlinear_history, linear_history, a, b, self.dt, rk
             )
-            u0_new = self._solve_prefactor(
-                self.Su_factor, self.TB.mask_nyquist(rhs_u)
-            )
+            u0_new = self._solve_prefactor(self.Su_factor, self.TB.mask_nyquist(rhs_u))
             g_new = self.TD.mask_nyquist(
                 self._solve_prefactor(self.Sg_factor, self.TD.mask_nyquist(rhs_g))
             )

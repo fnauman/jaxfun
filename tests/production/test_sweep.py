@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from production.problem_spec import ProblemSpecError
 from production.sweep import (
     SweepOverrideError,
     apply_overrides,

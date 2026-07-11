@@ -43,7 +43,7 @@ def test_resolves_consistent_mri_spec():
     assert rp.Re_h == pytest.approx(1000.0)  # |S| h^2 / nu
     assert rp.Rm_h == pytest.approx(1000.0)
     assert rp.Pm == pytest.approx(1.0)
-    assert rp.B0 == pytest.approx(0.025)
+    assert pytest.approx(0.025) == rp.B0
     assert rp.velocity_scale == "shear"
 
 
@@ -110,7 +110,7 @@ def test_plain_pcf_mhd_wall_convention():
     }
     rp = resolve_physics(spec)
     assert rp.velocity_scale == "wall"
-    assert rp.U0 == pytest.approx(1.0)  # Re*nu/h = 400*0.0025/1
+    assert pytest.approx(1.0) == rp.U0  # Re*nu/h = 400*0.0025/1
     assert rp.Re_h == pytest.approx(400.0)
     assert rp.Pm == pytest.approx(1.0)
 

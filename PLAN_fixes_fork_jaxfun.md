@@ -1,8 +1,8 @@
 # Production-sweep remediation plan for `fork_jaxfun`
 
-**Status:** implementation plan; production sweeps are not yet authorized  
-**Audit basis:** `fork_jaxfun` at commit `2506864` on the unmerged branch `review-validation-hardening`, reviewed 2026-07-10  
-**Target repository:** `/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun`  
+**Status:** implementation plan; production sweeps are not yet authorized
+**Audit basis:** `fork_jaxfun` at commit `2506864` on the unmerged branch `review-validation-hardening`, reviewed 2026-07-10
+**Target repository:** `/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun`
 **Companion documents:** `PLAN_fixes_shearpy_jimenez.md`, `PLAN_comparison_design.md`
 
 ## Executive decision
@@ -610,4 +610,3 @@ This plan is complete when a dry-run campaign can:
 8. reproduce the run from an immutable, clean, remotely preserved release commit; and
 9. repeat one scientifically interesting point at higher resolution, half timestep, and
    a second magnetic wall condition.
-

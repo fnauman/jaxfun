@@ -28,14 +28,13 @@ dependencies = [
   "sympy>=1.14",
 ]
 
-[project.optional-dependencies]
-cuda13 = [
+optional-dependencies.cuda13 = [
   "jax[cuda13]>=0.10.1",
 ]
-io = [
-  "h5py>=3.16.0",
+optional-dependencies.io = [
+  "h5py>=3.16",
 ]
-wandb = [
+optional-dependencies.wandb = [
   "wandb>=0.17",
 ]
 

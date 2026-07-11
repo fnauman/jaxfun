@@ -65,14 +65,25 @@ def test_measure_spec_holdout_validation(monkeypatch):
     def fake_builders(spec):
         return (lambda: None), (lambda solver: None)
 
-    def fake_benchmark_step(build_solver, *, label, warmup_steps, timed_steps, seed_state):
+    def fake_benchmark_step(
+        build_solver, *, label, warmup_steps, timed_steps, seed_state
+    ):
         tier = label.split("@")[1]
-        dof = {"smoke": 9 * 8 * 8 * 6, "start": 17 * 16 * 16 * 6,
-               "production": 33 * 32 * 32 * 6}[tier]
+        dof = {
+            "smoke": 9 * 8 * 8 * 6,
+            "start": 17 * 16 * 16 * 6,
+            "production": 33 * 32 * 32 * 6,
+        }[tier]
         warm = 1e-8 * dof**1.2  # exact power law -> holdout error ~ 0
         return bm.StepTiming(
-            label=label, compile_s=1.0, warm_step_s=warm, warm_step_p50_s=warm,
-            warm_step_p90_s=warm, timed_steps=timed_steps, dt=0.005, peak_bytes=None,
+            label=label,
+            compile_s=1.0,
+            warm_step_s=warm,
+            warm_step_p50_s=warm,
+            warm_step_p90_s=warm,
+            timed_steps=timed_steps,
+            dt=0.005,
+            peak_bytes=None,
         )
 
     monkeypatch.setattr(bm, "_solver_and_seed_builders", fake_builders)

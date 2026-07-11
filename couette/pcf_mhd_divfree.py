@@ -23,6 +23,7 @@ The default command-line resolution is meant for a real PCF run.  The
 ``--family L`` option is useful for small smoke tests because Chebyshev
 biharmonic assembly in shenfun needs enough wall-normal modes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,9 +31,9 @@ import math
 import sys
 
 import numpy as np
+from ChannelFlow import KMM
 from shenfun import *  # noqa: F401,F403
 from shenfun import config
-from ChannelFlow import KMM
 
 # NumPy 2 compatibility for older shenfun kernels.
 if not hasattr(np, "asscalar"):
@@ -157,7 +158,11 @@ class PlaneCouetteMHDDivFree(KMM):
         self.Ub_pad = self.U_wall * self.Xp[0]
 
         h = TestFunction(self.TD)
-        solA = chebyshev.la.Helmholtz if self.B0.family() == "chebyshev" else la.SolverGeneric1ND
+        solA = (
+            chebyshev.la.Helmholtz
+            if self.B0.family() == "chebyshev"
+            else la.SolverGeneric1ND
+        )
         self.pdesA = (
             self.PDE(
                 h,
@@ -192,13 +197,19 @@ class PlaneCouetteMHDDivFree(KMM):
         )
 
         self.checkpoint.data["0"]["A"] = [self.a_]
-        self.file_a = ShenfunFile("_".join((filename, "A")), self.CD, backend="hdf5", mode="w", mesh="uniform")
-        self.file_b = ShenfunFile("_".join((filename, "B")), self.CC, backend="hdf5", mode="w", mesh="uniform")
+        self.file_a = ShenfunFile(
+            "_".join((filename, "A")), self.CD, backend="hdf5", mode="w", mesh="uniform"
+        )
+        self.file_b = ShenfunFile(
+            "_".join((filename, "B")), self.CC, backend="hdf5", mode="w", mesh="uniform"
+        )
 
         if comm.Get_rank() == 0:
             print("Plane Couette MHD initialized (divergence-free vector potential)")
             print(f"  Re={self.Re:g}, Rm={self.Rm:g}, nu={nu:.6g}, eta={self.eta:.6g}")
-            print(f"  N={N}, domain={domain}, dt={dt}, stepper={timestepper}, family={family}")
+            print(
+                f"  N={N}, domain={domain}, dt={dt}, stepper={timestepper}, family={family}"
+            )
             if mode != original_mode:
                 print(f"  optimization: {original_mode} -> {mode}")
             else:
@@ -255,14 +266,31 @@ class PlaneCouetteMHDDivFree(KMM):
         U[...] = 0.0
         if self.perturbation_amplitude > 0:
             if comm.Get_rank() == 0:
-                print(f"Adding velocity perturbations amp={self.perturbation_amplitude}")
+                print(
+                    f"Adding velocity perturbations amp={self.perturbation_amplitude}"
+                )
             wall = 1 - X[0] ** 2
             amp = self.perturbation_amplitude
             ly = self.F1.domain[1]
             lz = self.F2.domain[1]
-            U[0] += amp * wall * np.sin(2 * np.pi * X[1] / ly) * np.cos(2 * np.pi * X[2] / lz)
-            U[1] += amp * wall * np.cos(2 * np.pi * X[1] / ly) * np.sin(2 * np.pi * X[2] / lz)
-            U[2] += amp * wall * np.sin(4 * np.pi * X[1] / ly) * np.cos(4 * np.pi * X[2] / lz)
+            U[0] += (
+                amp
+                * wall
+                * np.sin(2 * np.pi * X[1] / ly)
+                * np.cos(2 * np.pi * X[2] / lz)
+            )
+            U[1] += (
+                amp
+                * wall
+                * np.cos(2 * np.pi * X[1] / ly)
+                * np.sin(2 * np.pi * X[2] / lz)
+            )
+            U[2] += (
+                amp
+                * wall
+                * np.sin(4 * np.pi * X[1] / ly)
+                * np.cos(4 * np.pi * X[2] / lz)
+            )
         U.forward(self.u_)
         self.u_.mask_nyquist(self.mask)
         self.g_[:] = 1j * self.K[1] * self.u_[2] - 1j * self.K[2] * self.u_[1]
@@ -271,7 +299,9 @@ class PlaneCouetteMHDDivFree(KMM):
         A[...] = 0.0
         if self.magnetic_amplitude > 0:
             if comm.Get_rank() == 0:
-                print(f"Adding magnetic perturbations through A amp={self.magnetic_amplitude}")
+                print(
+                    f"Adding magnetic perturbations through A amp={self.magnetic_amplitude}"
+                )
             wall = 1 - X[0] ** 2
             ky = 2 * np.pi / self.F1.domain[1]
             kz = 2 * np.pi / self.F2.domain[1]
@@ -285,7 +315,9 @@ class PlaneCouetteMHDDivFree(KMM):
         if comm.Get_rank() == 0:
             diag = self.compute_diagnostics(0.0, 0)
             print("Initial fields ready")
-            print(f"Initial divB: L2={diag['divb_l2']:.3e} Linf={diag['divb_linf']:.3e}")
+            print(
+                f"Initial divB: L2={diag['divb_l2']:.3e} Linf={diag['divb_linf']:.3e}"
+            )
             print()
         return 0.0, 0
 
@@ -365,9 +397,19 @@ class PlaneCouetteMHDDivFree(KMM):
         bp = self.b_.backward(self.bb)
         ubt = self.total_velocity_physical_from(ubp)
 
-        Epert = float(inner(1, ubp[0] * ubp[0]) + inner(1, ubp[1] * ubp[1]) + inner(1, ubp[2] * ubp[2]))
-        Etot = float(inner(1, ubt[0] * ubt[0]) + inner(1, ubt[1] * ubt[1]) + inner(1, ubt[2] * ubt[2]))
-        Emag = float(inner(1, bp[0] * bp[0]) + inner(1, bp[1] * bp[1]) + inner(1, bp[2] * bp[2]))
+        Epert = float(
+            inner(1, ubp[0] * ubp[0])
+            + inner(1, ubp[1] * ubp[1])
+            + inner(1, ubp[2] * ubp[2])
+        )
+        Etot = float(
+            inner(1, ubt[0] * ubt[0])
+            + inner(1, ubt[1] * ubt[1])
+            + inner(1, ubt[2] * ubt[2])
+        )
+        Emag = float(
+            inner(1, bp[0] * bp[0]) + inner(1, bp[1] * bp[1]) + inner(1, bp[2] * bp[2])
+        )
 
         divu = self.divu().backward()
         divb = self.divb().backward()
@@ -433,13 +475,24 @@ class PlaneCouetteMHDDivFree(KMM):
         self.print_diagnostics(t, tstep)
 
     def assert_diagnostics(self, diag, max_divb_l2=None, max_divu_l2=None):
-        values = [diag["Epert"], diag["Etot"], diag["Emag"], diag["divu_l2"], diag["divb_l2"], diag["bmax"]]
+        values = [
+            diag["Epert"],
+            diag["Etot"],
+            diag["Emag"],
+            diag["divu_l2"],
+            diag["divb_l2"],
+            diag["bmax"],
+        ]
         if not np.all(np.isfinite(values)):
             raise RuntimeError(f"Non-finite diagnostic values: {diag}")
         if max_divb_l2 is not None and diag["divb_l2"] > max_divb_l2:
-            raise RuntimeError(f"divB L2 {diag['divb_l2']:.6e} exceeds {max_divb_l2:.6e}")
+            raise RuntimeError(
+                f"divB L2 {diag['divb_l2']:.6e} exceeds {max_divb_l2:.6e}"
+            )
         if max_divu_l2 is not None and diag["divu_l2"] > max_divu_l2:
-            raise RuntimeError(f"divU L2 {diag['divu_l2']:.6e} exceeds {max_divu_l2:.6e}")
+            raise RuntimeError(
+                f"divU L2 {diag['divu_l2']:.6e} exceeds {max_divu_l2:.6e}"
+            )
 
     # ------------------------------------------------------------------
     # Time integration and output
@@ -450,10 +503,16 @@ class PlaneCouetteMHDDivFree(KMM):
             eq.assemble()
 
     def tofile(self, tstep):
-        self.file_u.write(tstep, {"u": [self.u_.backward(mesh="uniform")]}, as_scalar=True)
-        self.file_a.write(tstep, {"a": [self.a_.backward(mesh="uniform")]}, as_scalar=True)
+        self.file_u.write(
+            tstep, {"u": [self.u_.backward(mesh="uniform")]}, as_scalar=True
+        )
+        self.file_a.write(
+            tstep, {"a": [self.a_.backward(mesh="uniform")]}, as_scalar=True
+        )
         self.update_B_from_A()
-        self.file_b.write(tstep, {"b": [self.b_.backward(mesh="uniform")]}, as_scalar=True)
+        self.file_b.write(
+            tstep, {"b": [self.b_.backward(mesh="uniform")]}, as_scalar=True
+        )
 
     def solve(
         self,
@@ -485,7 +544,9 @@ class PlaneCouetteMHDDivFree(KMM):
             tstep += 1
             self.update(t, tstep)
             if assert_every_step:
-                self.assert_diagnostics(self.compute_diagnostics(t, tstep), max_divb_l2, max_divu_l2)
+                self.assert_diagnostics(
+                    self.compute_diagnostics(t, tstep), max_divb_l2, max_divu_l2
+                )
             self.checkpoint.update(t, tstep)
             if self.modsave > 0 and tstep % self.modsave == 0:
                 self.tofile(tstep)
@@ -510,38 +571,90 @@ def _parse_args(defaults):
     p.add_argument("--checkpoint", type=int, default=defaults["checkpoint"])
     p.add_argument("--family", choices=["C", "L"], default=defaults["family"])
     p.add_argument("--timestepper", type=str, default=defaults["timestepper"])
-    p.add_argument("--perturbation-amplitude", type=float, default=defaults["perturbation_amplitude"])
-    p.add_argument("--magnetic-amplitude", type=float, default=defaults["magnetic_amplitude"])
+    p.add_argument(
+        "--perturbation-amplitude",
+        type=float,
+        default=defaults["perturbation_amplitude"],
+    )
+    p.add_argument(
+        "--magnetic-amplitude", type=float, default=defaults["magnetic_amplitude"]
+    )
     p.add_argument("--filename", type=str, default=defaults["filename"])
-    p.add_argument("--prefer-numba", action="store_true", default=defaults["prefer_numba"])
-    p.add_argument("--store-history", action="store_true", default=defaults["store_history"])
+    p.add_argument(
+        "--prefer-numba", action="store_true", default=defaults["prefer_numba"]
+    )
+    p.add_argument(
+        "--store-history", action="store_true", default=defaults["store_history"]
+    )
     p.add_argument("--max-divb-l2", type=float, default=None)
     p.add_argument("--max-divu-l2", type=float, default=None)
     p.add_argument("--assert-every-step", action="store_true")
-    p.add_argument("--linear", choices=["dns", "eigs", "nonmodal"], default="dns",
-                   help="run a linear eigenvalue or non-modal analysis instead of DNS")
-    p.add_argument("--linear-nx", type=int, default=defaults["N"][0],
-                   help="wall-normal collocation points for linear analysis")
-    p.add_argument("--ky", type=float, default=1.0, help="streamwise linear-analysis wavenumber")
-    p.add_argument("--kz", type=float, default=1.0, help="spanwise linear-analysis wavenumber")
-    p.add_argument("--linear-times", type=str, default="1,5,10,20",
-                   help="comma-separated times for non-modal transient growth")
-    p.add_argument("--linear-n-return", type=int, default=8,
-                   help="number of leading eigenvalues to print")
-    p.add_argument("--linear-n-modes", type=int, default=None,
-                   help="number of finite modes retained for non-modal analysis")
-    p.add_argument("--linear-finite-cap", type=float, default=1.0e8,
-                   help="discard generalized eigenvalues above this magnitude")
-    p.add_argument("--linear-by", type=float, default=0.0,
-                   help="uniform streamwise imposed field for linear analysis")
-    p.add_argument("--linear-bz", type=float, default=0.0,
-                   help="uniform spanwise imposed field for linear analysis")
-    p.add_argument("--linear-magnetic-bc", choices=["conducting", "dirichlet"],
-                   default="conducting")
-    p.add_argument("--linear-energy", choices=["total", "kinetic", "magnetic"],
-                   default="total",
-                   help="energy norm for --linear nonmodal (kinetic+magnetic by "
-                        "default; 'kinetic' reduces to the hydro result at B0=0)")
+    p.add_argument(
+        "--linear",
+        choices=["dns", "eigs", "nonmodal"],
+        default="dns",
+        help="run a linear eigenvalue or non-modal analysis instead of DNS",
+    )
+    p.add_argument(
+        "--linear-nx",
+        type=int,
+        default=defaults["N"][0],
+        help="wall-normal collocation points for linear analysis",
+    )
+    p.add_argument(
+        "--ky", type=float, default=1.0, help="streamwise linear-analysis wavenumber"
+    )
+    p.add_argument(
+        "--kz", type=float, default=1.0, help="spanwise linear-analysis wavenumber"
+    )
+    p.add_argument(
+        "--linear-times",
+        type=str,
+        default="1,5,10,20",
+        help="comma-separated times for non-modal transient growth",
+    )
+    p.add_argument(
+        "--linear-n-return",
+        type=int,
+        default=8,
+        help="number of leading eigenvalues to print",
+    )
+    p.add_argument(
+        "--linear-n-modes",
+        type=int,
+        default=None,
+        help="number of finite modes retained for non-modal analysis",
+    )
+    p.add_argument(
+        "--linear-finite-cap",
+        type=float,
+        default=1.0e8,
+        help="discard generalized eigenvalues above this magnitude",
+    )
+    p.add_argument(
+        "--linear-by",
+        type=float,
+        default=0.0,
+        help="uniform streamwise imposed field for linear analysis",
+    )
+    p.add_argument(
+        "--linear-bz",
+        type=float,
+        default=0.0,
+        help="uniform spanwise imposed field for linear analysis",
+    )
+    p.add_argument(
+        "--linear-magnetic-bc",
+        choices=["conducting", "dirichlet"],
+        default="conducting",
+    )
+    p.add_argument(
+        "--linear-energy",
+        choices=["total", "kinetic", "magnetic"],
+        default="total",
+        help="energy norm for --linear nonmodal (kinetic+magnetic by "
+        "default; 'kinetic' reduces to the hydro result at B0=0)",
+    )
     return p.parse_args()
 
 
@@ -560,8 +673,12 @@ def _run_linear_variant(args, params):
         magnetic_bc=args.linear_magnetic_bc,
     )
     if args.linear == "eigs":
-        w, _ = lin.eigs(args.ky, args.kz, n_return=args.linear_n_return,
-                        finite_cap=args.linear_finite_cap)
+        w, _ = lin.eigs(
+            args.ky,
+            args.kz,
+            n_return=args.linear_n_return,
+            finite_cap=args.linear_finite_cap,
+        )
         if comm.Get_rank() == 0:
             print(
                 f"Plane Couette MHD linear eigenvalues: Re={params['Re']:g}, Rm={params['Rm']:g}, "
@@ -673,8 +790,23 @@ def run(argv=None):
 
     if comm.Get_rank() == 0:
         print("Final diagnostics:")
-        for key in ("t", "tstep", "Epert", "Etot", "Emag", "divu_l2", "divb_l2", "divu_rel", "divb_rel", "bmax"):
-            print(f"  {key}: {final[key]:.16e}" if isinstance(final[key], float) else f"  {key}: {final[key]}")
+        for key in (
+            "t",
+            "tstep",
+            "Epert",
+            "Etot",
+            "Emag",
+            "divu_l2",
+            "divb_l2",
+            "divu_rel",
+            "divb_rel",
+            "bmax",
+        ):
+            print(
+                f"  {key}: {final[key]:.16e}"
+                if isinstance(final[key], float)
+                else f"  {key}: {final[key]}"
+            )
     return final
 
 

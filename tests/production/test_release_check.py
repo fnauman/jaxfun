@@ -23,9 +23,10 @@ def test_release_manifest_has_provenance_and_conventions():
     manifest = release_manifest()
     assert "provenance" in manifest and "commit" in manifest["provenance"]
     assert "conventions" in manifest
-    assert manifest["reference_interpreter"].endswith("python") or "python" in manifest[
-        "reference_interpreter"
-    ]
+    assert (
+        manifest["reference_interpreter"].endswith("python")
+        or "python" in manifest["reference_interpreter"]
+    )
 
 
 def test_skipped_live_parity_is_not_a_pass():
@@ -112,9 +113,7 @@ def test_release_gate_default_covers_production_scale_runs(tmp_path):
         is False
     )
     assert (
-        _requires_release_gate(
-            parser.parse_args([*base, "--require-clean"]), exp_spec
-        )
+        _requires_release_gate(parser.parse_args([*base, "--require-clean"]), exp_spec)
         is True
     )
     # golden promotion always gates, even on bounded runs

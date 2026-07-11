@@ -201,7 +201,9 @@ def _validate_against_json_schema(data: dict[str, Any]) -> None:
     if errors:
         error = errors[0]
         location = ".".join(str(part) for part in error.path) or "spec"
-        raise ProblemSpecError(f"schema validation failed at {location}: {error.message}")
+        raise ProblemSpecError(
+            f"schema validation failed at {location}: {error.message}"
+        )
 
 
 def _require_keys(data: dict[str, Any], keys: list[str], context: str) -> None:
@@ -354,9 +356,7 @@ def _validate_numerics_contract(data: dict[str, Any]) -> None:
     if version is None:
         return  # pre-FJ-01 spec; legacy positional tuples still parse with a warning.
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-        raise ProblemSpecError(
-            "numerics_contract_version must be a positive integer"
-        )
+        raise ProblemSpecError("numerics_contract_version must be a positive integer")
     if version > NUMERICS_CONTRACT_VERSION:
         raise ProblemSpecError(
             f"numerics_contract_version {version} is newer than this build's "

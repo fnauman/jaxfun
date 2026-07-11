@@ -159,7 +159,7 @@ class TPMatrix(BaseMatrix):  # noqa: B903
     def __call__(self, u: Array | JAXFunction) -> Array:
         """Apply matrix to rank-2 coefficient array u."""
         w = self._as_array(u)
-        return self._matmul_array(w)
+        return self._matmul_array(cast(Array, w))
 
     def __matmul__(self, u: Array | JAXFunction) -> Array:
         """Alias to __call__ for @ operator."""
@@ -173,7 +173,7 @@ class TPMatrix(BaseMatrix):  # noqa: B903
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        w = self._as_array(u)
+        w = cast(Array, self._as_array(u))
         return self._rmatmul_array(w)
 
     def solve(self, rhs: Array) -> Array:
@@ -317,7 +317,7 @@ class TPMatrices(BaseMatrix):
 
     def __rmatmul__(self, u: Array | JAXFunction) -> Array:
         """Right matmul (u @ A) treating u as left factor."""
-        w = self._as_array(u)
+        w = cast(Array, self._as_array(u))
         return jnp.sum(
             jnp.array([mat._rmatmul_array(w) for mat in self.tpmats]), axis=0
         )
@@ -433,6 +433,7 @@ class TPMatrices(BaseMatrix):
         *,
         method: TPSolveMethod | str = TPSolveMethod.AUTO,
         kron_method: DiaMatrixSolveMethod | str = DiaMatrixSolveMethod.AUTO,
+        auto_threshold: int = 100,
     ) -> Array:
         """Solve the summed tensor-product system.
 
@@ -457,6 +458,11 @@ class TPMatrices(BaseMatrix):
                 sparse).  One of ``"auto"``, ``"banded"``, ``"rcm"``,
                 ``"dense"``.  Ignored when the assembled matrix is a dense
                 :class:`~jaxfun.la.Matrix`.
+                auto_threshold: Threshold for the ``"auto"`` method, trading off
+                    banded/RCM solvers against dense.  The banded solver is usually
+                    faster for small bandwidth, but compile time grows with bandwidth.
+                    RCM can reduce bandwidth and enable the banded solver, but adds
+                    overhead and is not guaranteed to help.  Default is 100.
 
         Returns:
             Solution array with the same shape as *rhs*.
@@ -476,9 +482,9 @@ class TPMatrices(BaseMatrix):
             # DiaMatrix path: shared cache with tosparse()
             sparse_box: _SparseMatrixCache | None = getattr(self, "_sparse_cache", None)
             if sparse_box is not None:
-                return sparse_box.value.lu_solve(flat, method=kron_method).reshape(
-                    r.shape
-                )
+                return sparse_box.value.lu_solve(
+                    flat, method=kron_method, auto_threshold=auto_threshold
+                ).reshape(r.shape)
             # Dense Matrix path
             dense_box: _DenseMatrixCache | None = getattr(self, "_dense_cache", None)
             if dense_box is not None:
@@ -487,7 +493,9 @@ class TPMatrices(BaseMatrix):
             kron = tpmats_to_kron(list(self.tpmats))
             if isinstance(kron, DiaMatrix):
                 object.__setattr__(self, "_sparse_cache", _CacheBox(kron))
-                return kron.lu_solve(flat, method=kron_method).reshape(r.shape)
+                return kron.lu_solve(
+                    flat, method=kron_method, auto_threshold=auto_threshold
+                ).reshape(r.shape)
             object.__setattr__(self, "_dense_cache", _CacheBox(kron))
             return kron.solve(flat).reshape(r.shape)
 
@@ -686,9 +694,7 @@ def _normalise_wavenumber_constraints(
         mode_i = int(mode)
         row_i = int(row)
         if not 0 <= mode_i < n_fourier:
-            raise ValueError(
-                f"constraint mode index {mode_i} outside [0, {n_fourier})"
-            )
+            raise ValueError(f"constraint mode index {mode_i} outside [0, {n_fourier})")
         if not 0 <= row_i < n_poly:
             raise ValueError(f"constraint row index {row_i} outside [0, {n_poly})")
         value_c = complex(value)
@@ -709,9 +715,7 @@ def _constraints_for_wavenumber_range(
     )
 
 
-def _dia_batch_to_dense(
-    data: Array, offsets: tuple[int, ...], n_poly: int
-) -> Array:
+def _dia_batch_to_dense(data: Array, offsets: tuple[int, ...], n_poly: int) -> Array:
     dense = jnp.zeros((data.shape[0], n_poly, n_poly), dtype=data.dtype)
     col = jnp.arange(n_poly)
     for diag_index, offset in enumerate(offsets):
@@ -792,12 +796,8 @@ class TPMatricesWavenumberSolver:
                 constraints, n_F, n_P_local
             )
             if pivot or norm_constraints:
-                dense_batch = _dia_batch_to_dense(
-                    B_data_batch, poly_offsets, n_P_local
-                )
-                dense_batch = _pin_dense_wavenumber_rows(
-                    dense_batch, norm_constraints
-                )
+                dense_batch = _dia_batch_to_dense(B_data_batch, poly_offsets, n_P_local)
+                dense_batch = _pin_dense_wavenumber_rows(dense_batch, norm_constraints)
                 self._init_dense_wavenumber_solver(
                     dense_batch, norm_constraints, n_P_local
                 )
@@ -925,9 +925,7 @@ class TPMatricesWavenumberSolver:
             )
             if pivot or norm_constraints:
                 dense_batch = jnp.stack([B.todense() for B in B_matrices])
-                dense_batch = _pin_dense_wavenumber_rows(
-                    dense_batch, norm_constraints
-                )
+                dense_batch = _pin_dense_wavenumber_rows(dense_batch, norm_constraints)
                 self._init_dense_wavenumber_solver(
                     dense_batch, norm_constraints, n_P_local
                 )
@@ -1090,17 +1088,13 @@ class TPMatricesWavenumberSolver:
 
             @jax.jit
             def _solve_dense_jit(lu_arg: Array, piv_arg: Array, rhs: Array) -> Array:
-                rhs_2d = jnp.transpose(rhs, axes_order).reshape(
-                    local_n_fourier, n_poly
-                )
+                rhs_2d = jnp.transpose(rhs, axes_order).reshape(local_n_fourier, n_poly)
                 if constraint_modes:
                     rhs_2d = rhs_2d.at[
                         jnp.asarray(constraint_modes), jnp.asarray(constraint_rows)
                     ].set(jnp.asarray(constraint_values, dtype=rhs_2d.dtype))
                 sol_2d = jax.vmap(
-                    lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve(
-                        (lu_i, piv_i), b_i
-                    )
+                    lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve((lu_i, piv_i), b_i)
                 )(lu_arg, piv_arg, rhs_2d)
                 sol_perm = sol_2d.reshape(local_fourier_shape + (n_poly,))
                 return jnp.transpose(sol_perm, inv_perm)

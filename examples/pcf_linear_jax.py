@@ -210,8 +210,10 @@ class PlaneCouetteLinear:
             bx, by, bz = b["bx"], b["by"], b["bz"]
             for wall in (0, n - 1):
                 self._set_row(
-                    L, M, bx * n + wall,
-                    [(slice(bx * n, (bx + 1) * n), self.D[wall, :])]
+                    L,
+                    M,
+                    bx * n + wall,
+                    [(slice(bx * n, (bx + 1) * n), self.D[wall, :])],
                 )
                 self._set_row(L, M, by * n + wall, [(by * n + wall, 1.0)])
                 self._set_row(L, M, bz * n + wall, [(bz * n + wall, 1.0)])

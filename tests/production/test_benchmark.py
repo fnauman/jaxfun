@@ -39,7 +39,9 @@ def test_predicted_gpu_hours():
     hours = predicted_gpu_hours(1e-3, shear_times=300.0, dt=0.005)
     assert hours == pytest.approx(60.0 / 3600.0, rel=1e-6)
     # 20% I/O overhead
-    hours_io = predicted_gpu_hours(1e-3, shear_times=300.0, dt=0.005, io_overhead_frac=0.2)
+    hours_io = predicted_gpu_hours(
+        1e-3, shear_times=300.0, dt=0.005, io_overhead_frac=0.2
+    )
     assert hours_io == pytest.approx(hours * 1.2, rel=1e-6)
 
 
@@ -54,9 +56,7 @@ class _MockSolver:
 
 
 def test_benchmark_step_separates_compile_and_warm():
-    timing = benchmark_step(
-        _MockSolver, label="mock", warmup_steps=1, timed_steps=5
-    )
+    timing = benchmark_step(_MockSolver, label="mock", warmup_steps=1, timed_steps=5)
     assert timing.label == "mock"
     assert timing.timed_steps == 5
     assert timing.dt == 0.01

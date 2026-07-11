@@ -23,9 +23,7 @@ def parse_times(value) -> np.ndarray:
     """Parse comma/semicolon-separated non-modal times into a 1D array."""
     if isinstance(value, str):
         times = [
-            float(item)
-            for item in value.replace(";", ",").split(",")
-            if item.strip()
+            float(item) for item in value.replace(";", ",").split(",") if item.strip()
         ]
     else:
         times = list(value)

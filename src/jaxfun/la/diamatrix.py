@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
     from jaxfun.la import Matrix
     from jaxfun.la.matrix import LUFactors as DenseLUFactors
-    from jaxfun.la.pinned import PinnedSystem
+    from jaxfun.la.pinned import PinnedDiaMatrix
 
 Array = jax.Array
 
@@ -458,11 +458,16 @@ class DiaMatrix(BaseMatrix):
 
             band_lu = _lu_banded_no_pivot_kernel(band, p, q, center)
 
-            if float(jnp.min(jnp.abs(band_lu[center]))) == 0.0:
+            diag_u = band_lu[center]
+            if (
+                not bool(jnp.all(jnp.isfinite(diag_u)))
+                or float(jnp.min(jnp.abs(diag_u))) == 0.0
+            ):
                 raise ValueError(
-                    "Matrix is singular: zero pivot in LU factorisation. "
-                    "Consider pinning (:meth:`DiaMatrix.pin`) additional DOFs or "
-                    "enabling pivoting for this matrix."
+                    "Matrix is singular or has a zero/non-finite pivot in LU "
+                    "factorisation without pivoting. Saddle-point systems (e.g. "
+                    "Stokes) have zero diagonal entries and require pivoting — "
+                    "use pivot=True."
                 )
 
             _lu_tol = (
@@ -527,7 +532,11 @@ class DiaMatrix(BaseMatrix):
         band_lu, perm_arr = _lu_banded_kernel(band, p, q_eff, center)
 
         # Singularity check: the main diagonal of U lives at band row `center`.
-        if float(jnp.min(jnp.abs(band_lu[center]))) == 0.0:
+        diag_u = band_lu[center]
+        if (
+            not bool(jnp.all(jnp.isfinite(diag_u)))
+            or float(jnp.min(jnp.abs(diag_u))) == 0.0
+        ):
             raise ValueError(
                 "Matrix is singular: zero pivot in LU factorisation. "
                 "Consider pinning (:meth:`DiaMatrix.pin`) additional DOFs "
@@ -650,10 +659,25 @@ class DiaMatrix(BaseMatrix):
         # "banded" path (and cache hit for banded)
         # ------------------------------------------------------------------
         _box: _CacheBox[_LUCache] | None = getattr(self, "_lu_cache", None)
-        if method == DiaMatrixSolveMethod.BANDED or (
-            method == DiaMatrixSolveMethod.AUTO
-            and _box is not None
-            and pivot in _box.value["banded"]
+        if method == DiaMatrixSolveMethod.BANDED:
+            if pivot not in (_box.value["banded"] if _box is not None else {}):
+                offsets_bw = self.offsets
+                p_bw = max((-k for k in offsets_bw if k < 0), default=0)
+                q_bw = max((k for k in offsets_bw if k > 0), default=0)
+                q_eff_bw = q_bw + p_bw if pivot else q_bw
+                bw_metric = p_bw * (q_eff_bw + 1)
+                if bw_metric > auto_threshold:
+                    warnings.warn(
+                        f"DiaMatrix.lu_solve(method='banded'): bandwidth metric "
+                        f"p*(q_eff+1)={bw_metric} (p={p_bw}, q_eff={q_eff_bw}) "
+                        f"exceeds {auto_threshold}. XLA compile and run time may "
+                        f"be very long. Consider method='rcm' or method='dense'.",
+                        stacklevel=2,
+                    )
+            return self.lu_factor(pivot=pivot).solve(b, axis=axis)
+
+        if method == DiaMatrixSolveMethod.AUTO and (
+            _box is not None and pivot in _box.value["banded"]
         ):
             return self.lu_factor(pivot=pivot).solve(b, axis=axis)
 
@@ -1189,7 +1213,11 @@ class DiaMatrix(BaseMatrix):
         )
         return DiaMatrix(data=result_data, offsets=all_offsets, shape=(n, m))
 
-    def __add__(self, other):
+    @overload
+    def __add__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __add__(self, other: Matrix) -> Matrix: ...
+    def __add__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
         from jaxfun.la import Matrix
 
         if isinstance(other, DiaMatrix):
@@ -1198,13 +1226,30 @@ class DiaMatrix(BaseMatrix):
             return other + self
         return NotImplemented
 
-    def __sub__(self, other):
+    @overload
+    def __sub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __sub__(self, other: Matrix) -> Matrix: ...
+    def __sub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
         from jaxfun.la import Matrix
 
         if isinstance(other, DiaMatrix):
             return self._merge(other, -1.0)
         if isinstance(other, Matrix):
             return Matrix(self.todense() - other.data)
+        return NotImplemented
+
+    @overload
+    def __rsub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __rsub__(self, other: Matrix) -> Matrix: ...
+    def __rsub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
+        from jaxfun.la import Matrix
+
+        if isinstance(other, DiaMatrix):
+            return other._merge(self, -1.0)
+        if isinstance(other, Matrix):
+            return Matrix(other.data - self.todense())
         return NotImplemented
 
     @jax.jit
@@ -1364,9 +1409,9 @@ class DiaMatrix(BaseMatrix):
 
     def pin(
         self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
-    ) -> PinnedSystem:
+    ) -> PinnedDiaMatrix:
         """Return a :class:`PinnedSystem` with the given DOFs fixed."""
-        from jaxfun.la.pinned import PinnedSystem
+        from jaxfun.la.pinned import PinnedDiaMatrix
 
         if isinstance(constraints, dict):
             constraints = tuple(sorted(constraints.items()))
@@ -1374,7 +1419,7 @@ class DiaMatrix(BaseMatrix):
         pinned_matrix = DiaMatrix(
             data=data, offsets=tuple(int(i) for i in new_offsets), shape=self.shape
         )
-        return PinnedSystem(
+        return PinnedDiaMatrix(
             pinned_matrix, tuple((int(i), float(j)) for i, j in norm_constraints)
         )
 
@@ -1401,7 +1446,7 @@ class DiaMatrix(BaseMatrix):
                 is raised.
 
         Returns:
-            :class:`PinnedSystem` whose :meth:`~PinnedSystem.solve` method
+            :class:`PinnedDiaMatrix` whose :meth:`~PinnedDiaMatrix.solve` method
             modifies the RHS and solves in one call.
 
         Example::
@@ -1578,7 +1623,11 @@ class DiagonalMatrix(DiaMatrix):
     def astype(self, dtype: jnp.dtype) -> DiagonalMatrix:
         return DiagonalMatrix(self.diagonal().astype(dtype))
 
-    def __add__(self, other):
+    @overload
+    def __add__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __add__(self, other: Matrix) -> Matrix: ...
+    def __add__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
         from jaxfun.la import Matrix
 
         if isinstance(other, DiaMatrix):
@@ -1591,11 +1640,39 @@ class DiagonalMatrix(DiaMatrix):
             return other + self
         return NotImplemented
 
-    def __sub__(self, other):
-        return self.__add__(-other)
+    @overload
+    def __sub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __sub__(self, other: Matrix) -> Matrix: ...
+    def __sub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
+        from jaxfun.la import Matrix
 
-    def __rsub__(self, other):
-        return (-self).__add__(other)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            if other.is_diagonal:
+                return DiagonalMatrix(self.diagonal() - other.diagonal())
+            return DiaMatrix.__sub__(self, other)
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(self.todense() - other.data)
+        return NotImplemented
+
+    @overload
+    def __rsub__(self, other: DiaMatrix) -> DiaMatrix: ...
+    @overload
+    def __rsub__(self, other: Matrix) -> Matrix: ...
+    def __rsub__(self, other: DiaMatrix | Matrix) -> DiaMatrix | Matrix:
+        from jaxfun.la import Matrix
+
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            if other.is_diagonal:
+                return DiagonalMatrix(other.diagonal() - self.diagonal())
+            return DiaMatrix.__rsub__(self, other)
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(other.data - self.todense())
+        return NotImplemented
 
 
 @jax.jit(static_argnums=(1, 2, 3))
@@ -1798,8 +1875,6 @@ class LUFactors(nnx.Pytree):
         self.L = nnx.data(L)
         self.U = nnx.data(U)
         self.shape = shape
-        # perm[i] = original row index that was placed at row i after pivoting.
-        # None means the identity permutation (no row swaps occurred).
         self.perm = perm
 
     @jax.jit(static_argnums=(2,))

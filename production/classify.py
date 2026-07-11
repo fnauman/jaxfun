@@ -11,7 +11,7 @@ and an under-resolved run is quarantined from threshold inference.
 from __future__ import annotations
 
 import math
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -19,7 +19,7 @@ import numpy as np
 from .health import MIN_INDEPENDENT_SAMPLES, effective_independent_samples
 
 
-class OperationalStatus(str, Enum):
+class OperationalStatus(StrEnum):
     """Did the integration run cleanly?"""
 
     COMPLETED = "completed"
@@ -31,7 +31,7 @@ class OperationalStatus(str, Enum):
     UNDERRESOLVED = "underresolved"
 
 
-class ScientificClass(str, Enum):
+class ScientificClass(StrEnum):
     """What did the physics do?"""
 
     GROWING = "growing"

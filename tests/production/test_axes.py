@@ -57,7 +57,11 @@ def test_legacy_uniform_tuple_is_order_invariant_and_silent():
 
 
 def test_scalar_is_uniform():
-    assert to_native_padding(1.5, SOLVER_NATIVE_AXES["pcf_primitive"]) == (1.5, 1.5, 1.5)
+    assert to_native_padding(1.5, SOLVER_NATIVE_AXES["pcf_primitive"]) == (
+        1.5,
+        1.5,
+        1.5,
+    )
     assert to_native_padding(1.0, SOLVER_NATIVE_AXES["pcf_kmm"]) == (1.0, 1.0, 1.0)
 
 
@@ -68,7 +72,9 @@ def test_missing_axis_in_semantic_map_raises():
 
 def test_padding_below_one_rejected():
     with pytest.raises(ProblemSpecError):
-        to_native_padding({"x": 1.0, "y": 0.5, "z": 1.5}, SOLVER_NATIVE_AXES["pcf_primitive"])
+        to_native_padding(
+            {"x": 1.0, "y": 0.5, "z": 1.5}, SOLVER_NATIVE_AXES["pcf_primitive"]
+        )
 
 
 def test_native_padding_for_solver_reads_resolution():

@@ -11,18 +11,28 @@ solver (pcf_mhd_mri_shearpy.py) could not provide cleanly.
 Run (cap CPUs):
     OMP_NUM_THREADS=4 python -m pytest test_pcf_mri_primitive.py -v
 """
+
 import math
 
 import numpy as np
 import pytest
-
-from pcf_mri_primitive import AxisymmetricPCFMRIDNS, PCFMRIDNS
+from pcf_mri_primitive import PCFMRIDNS, AxisymmetricPCFMRIDNS
 
 
 def _mk(dt=2e-3, Nx=40, Nz=16):
-    return AxisymmetricPCFMRIDNS(S=1.0, omega=2.0 / 3.0, B0=0.1, nu=1e-3,
-                                 eta_mag=1e-3, Nx=Nx, Nz=Nz, Lz=1.0, dt=dt,
-                                 family="C", dealias=1.0)
+    return AxisymmetricPCFMRIDNS(
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=1e-3,
+        eta_mag=1e-3,
+        Nx=Nx,
+        Nz=Nz,
+        Lz=1.0,
+        dt=dt,
+        family="C",
+        dealias=1.0,
+    )
 
 
 def test_seed_eigenmode_is_solenoidal():
@@ -30,7 +40,7 @@ def test_seed_eigenmode_is_solenoidal():
     velocity AND magnetic field that are divergence-free to roundoff."""
     d = _mk()
     s = d.seed_linear_eigenmode(kz_mode=1, amp=1e-6)
-    assert s.real > 0.05                         # genuinely MRI-unstable
+    assert s.real > 0.05  # genuinely MRI-unstable
     diag = d.diagnostics(0.0, 0)
     assert diag["divu"] < 1e-12
     assert diag["divb"] < 1e-12
@@ -55,6 +65,7 @@ def test_restart_equivalence():
     """PRODUCTION GATE (restart): a checkpoint taken mid-run via state_dict() and
     reloaded into a fresh solver reproduces the uninterrupted run bit-for-bit
     (the six (u,b) field coefficients + the AB2 history)."""
+
     def fresh():
         d = _mk()
         d.set_perturbation(amp=1e-3, kz_mode=1)
@@ -108,6 +119,7 @@ def test_temporal_order_cnab2():
     """PRODUCTION GATE (temporal order): the primitive MRI DNS is 2nd-order in
     time -- the measured growth-rate error vs the linear MRI eigenvalue shrinks
     like dt^2 under refinement (fitted log-log slope ~2)."""
+
     def rate_error(dt, T=0.4):
         d = _mk(dt=dt)
         s_lin = d.seed_linear_eigenmode(kz_mode=1, amp=1e-7)
@@ -144,7 +156,7 @@ def test_perturbation_divergence_stays_controlled():
     d = _mk()
     d.set_perturbation(amp=1e-3, kz_mode=1)
     df = d.run(0.2)
-    assert df["divu"] < 1e-4          # same threshold as the TC stable-regime test
+    assert df["divu"] < 1e-4  # same threshold as the TC stable-regime test
     assert df["divb"] < 1e-4
     assert np.all(np.isfinite(np.array(d.x)))
 
@@ -153,8 +165,19 @@ def test_perturbation_divergence_stays_controlled():
 # Hydro (B0=0) plane-Couette gates -- the same solver with no imposed field
 # ---------------------------------------------------------------------------
 def _mk_hydro(dt=2e-3, Nx=40):
-    return AxisymmetricPCFMRIDNS(S=1.0, omega=0.0, B0=0.0, nu=1e-2, eta_mag=1e-2,
-                                 Nx=Nx, Nz=16, Lz=1.0, dt=dt, family="C", dealias=1.0)
+    return AxisymmetricPCFMRIDNS(
+        S=1.0,
+        omega=0.0,
+        B0=0.0,
+        nu=1e-2,
+        eta_mag=1e-2,
+        Nx=Nx,
+        Nz=16,
+        Lz=1.0,
+        dt=dt,
+        family="C",
+        dealias=1.0,
+    )
 
 
 def test_hydro_decay_matches_linear():
@@ -164,19 +187,20 @@ def test_hydro_decay_matches_linear():
     magnetic field staying identically zero (pure hydro)."""
     d = _mk_hydro()
     s_lin = d.seed_hydro_eigenmode(kz_mode=1, amp=1e-4)
-    assert s_lin.real < 0.0                       # plane Couette is stable
+    assert s_lin.real < 0.0  # plane Couette is stable
     e0 = d.diagnostics(0.0, 0)["Ekin"]
     T = 0.4
     df = d.run(T)
     s_dns = 0.5 * math.log(df["Ekin"] / e0) / T
     assert abs(s_dns - s_lin.real) < 1e-4 * max(1.0, abs(s_lin.real))
-    assert df["Emag"] == 0.0                       # b decouples and stays 0
+    assert df["Emag"] == 0.0  # b decouples and stays 0
     assert df["divu"] < 1e-9
 
 
 def test_hydro_restart_equivalence():
     """PRODUCTION GATE (hydro restart): checkpoint mid-run via state_dict and reload
     reproduces the uninterrupted hydro run bit-for-bit."""
+
     def fresh():
         d = _mk_hydro()
         d.seed_hydro_eigenmode(kz_mode=1, amp=1e-3)
@@ -205,6 +229,7 @@ def test_hydro_restart_equivalence():
 def test_hydro_temporal_order_cnab2():
     """PRODUCTION GATE (hydro temporal order): the decay-rate error vs the linear
     plane-Couette eigenvalue shrinks like dt^2 (CNAB2 ~ slope 2)."""
+
     def rate_error(dt, T=0.3):
         d = _mk_hydro(dt=dt)
         s_lin = d.seed_hydro_eigenmode(kz_mode=1, amp=1e-4)
@@ -224,9 +249,21 @@ def test_hydro_temporal_order_cnab2():
 # Full 3D solver (PCFMRIDNS): functional tests for streamwise ky != 0 modes
 # ---------------------------------------------------------------------------
 def _mk3d(dt=2e-3, Nx=32):
-    return PCFMRIDNS(S=1.0, omega=2.0 / 3.0, B0=0.1, nu=1e-3, eta_mag=1e-3, Nx=Nx,
-                     Ny=8, Nz=16, Ly=2.0 * math.pi, Lz=1.0, dt=dt, family="C",
-                     dealias=1.0)
+    return PCFMRIDNS(
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=1e-3,
+        eta_mag=1e-3,
+        Nx=Nx,
+        Ny=8,
+        Nz=16,
+        Ly=2.0 * math.pi,
+        Lz=1.0,
+        dt=dt,
+        family="C",
+        dealias=1.0,
+    )
 
 
 def test_3d_ky0_reduces_to_axisymmetric_growth():
@@ -270,6 +307,7 @@ def test_3d_nonaxisymmetric_run_finite_and_divergence_controlled():
 def test_3d_restart_equivalence():
     """Checkpoint/restart of the 3D solver is bit-for-bit (six (u,b) fields + AB2
     history) for a ky!=0 mode."""
+
     def fresh():
         d = _mk3d()
         d.seed_linear_eigenmode(ky_mode=1, kz_mode=1, amp=1e-4)

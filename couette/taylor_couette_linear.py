@@ -46,10 +46,10 @@ infinity and are filtered out.
 This module implements the HYDRODYNAMIC problem.  The MHD / MRI extension lives
 in :mod:`taylor_couette_mri`.
 """
+
 from __future__ import annotations
 
 from _demo_utils import default_thread_cap
-
 
 default_thread_cap()
 
@@ -58,9 +58,6 @@ import math
 
 import numpy as np
 import sympy as sp
-from scipy.linalg import eig
-
-from shenfun import FunctionSpace, TestFunction, TrialFunction, inner, Dx, Array
 from _linear_analysis import (
     FINITE_CAP,
     finite_eigensystem,
@@ -68,6 +65,8 @@ from _linear_analysis import (
     print_transient_growth,
     transient_growth_from_eigs,
 )
+from scipy.linalg import eig
+from shenfun import Dx, FunctionSpace, TestFunction, TrialFunction, inner
 
 # Radial coordinate symbol.  A shenfun FunctionSpace built on ``domain=(R1, R2)``
 # uses the sympy symbol ``x`` for its (physical) coordinate, so cylindrical
@@ -90,16 +89,16 @@ class CircularCouette:
         self.a = (self.Omega2 * self.R2**2 - self.Omega1 * self.R1**2) / d2
         self.b = (self.Omega1 - self.Omega2) * self.R1**2 * self.R2**2 / d2
         self.gap = self.R2 - self.R1
-        self.eta = self.R1 / self.R2                      # radius ratio
+        self.eta = self.R1 / self.R2  # radius ratio
         self.mu = self.Omega2 / self.Omega1 if self.Omega1 != 0 else math.inf
 
         # sympy expressions in the radial symbol x
-        self.Omega_sym = self.a + self.b / x**2           # Omega(r)
+        self.Omega_sym = self.a + self.b / x**2  # Omega(r)
         self.twoOmega_sym = 2 * self.a + 2 * self.b / x**2  # 2 Omega
-        self.rOmega_p_sym = -2 * self.b / x**2            # r dOmega/dr
+        self.rOmega_p_sym = -2 * self.b / x**2  # r dOmega/dr
         # 2 Omega + r dOmega/dr = 2 a   (constant)
         self.shear2a = 2 * self.a
-        self.kappa2_sym = 4 * self.a * self.Omega_sym     # epicyclic kappa^2
+        self.kappa2_sym = 4 * self.a * self.Omega_sym  # epicyclic kappa^2
 
     # numeric helpers -------------------------------------------------------
     def Omega(self, r):
@@ -241,27 +240,27 @@ class TaylorCouetteLinear:
         imOm = sp.I * m_s * Om
 
         Lap = self._laplacian_scalar(m, kz)
-        Mvv = self._A(None, 0)                 # velocity mass (v, u)
+        Mvv = self._A(None, 0)  # velocity mass (v, u)
 
         # vector-Laplacian pieces (coefficients of nu)
-        lv_diag = Lap - self._A(1 / x**2, 0)               # acts on u_r and u_theta
-        lv_z = Lap                                          # acts on u_z
-        adv = -self._A(imOm, 0)                            # -i m Omega (each comp)
+        lv_diag = Lap - self._A(1 / x**2, 0)  # acts on u_r and u_theta
+        lv_z = Lap  # acts on u_z
+        adv = -self._A(imOm, 0)  # -i m Omega (each comp)
 
         # cross coupling coefficient blocks
-        twoOmega = self._A(b.twoOmega_sym, 0)              # 2 Omega
-        shear = self._A(sp.Float(b.shear2a), 0)            # 2 a  (=2Omega + r Omega')
-        couple_rt = self._A(2 * m_s * sp.I / x**2, 0)      # 2 i m / r^2
+        twoOmega = self._A(b.twoOmega_sym, 0)  # 2 Omega
+        shear = self._A(sp.Float(b.shear2a), 0)  # 2 a  (=2Omega + r Omega')
+        couple_rt = self._A(2 * m_s * sp.I / x**2, 0)  # 2 i m / r^2
 
         # pressure-gradient blocks (velocity-test x pressure)
-        Gr = self._Avp(None, 1)                            # dp/dr
-        Gt = self._Avp(sp.I * m_s / x, 0)                  # i m p / r
-        Gz = self._Avp(sp.I * kz_s, 0)                     # i kz p
+        Gr = self._Avp(None, 1)  # dp/dr
+        Gt = self._Avp(sp.I * m_s / x, 0)  # i m p / r
+        Gz = self._Avp(sp.I * kz_s, 0)  # i kz p
 
         # continuity blocks (pressure-test x velocity)
-        Dr = self._Aqu(None, 1) + self._Aqu(1 / x, 0)      # d/dr + 1/r
-        Dt = self._Aqu(sp.I * m_s / x, 0)                  # i m / r
-        Dz = self._Aqu(sp.I * kz_s, 0)                     # i kz
+        Dr = self._Aqu(None, 1) + self._Aqu(1 / x, 0)  # d/dr + 1/r
+        Dt = self._Aqu(sp.I * m_s / x, 0)  # i m / r
+        Dz = self._Aqu(sp.I * kz_s, 0)  # i kz
 
         # block index: 0 u_r, 1 u_theta, 2 u_z, 3 p
         L0 = np.zeros((4 * n, 4 * n), dtype=complex)
@@ -269,23 +268,28 @@ class TaylorCouetteLinear:
         M = np.zeros((4 * n, 4 * n), dtype=complex)
 
         def put(blk, i, j, val):
-            blk[i * n:(i + 1) * n, j * n:(j + 1) * n] = val
+            blk[i * n : (i + 1) * n, j * n : (j + 1) * n] = val
 
         # r-momentum:  s u_r = -imOm u_r + 2Om u_theta - dp/dr + nu(Lap-1/r^2)u_r
-        put(L0, 0, 0, adv);              put(Lv, 0, 0, lv_diag)
-        put(L0, 0, 1, twoOmega);         put(Lv, 0, 1, -couple_rt)
+        put(L0, 0, 0, adv)
+        put(Lv, 0, 0, lv_diag)
+        put(L0, 0, 1, twoOmega)
+        put(Lv, 0, 1, -couple_rt)
         put(L0, 0, 3, -Gr)
         put(M, 0, 0, Mvv)
 
         # theta-momentum: s u_theta = -imOm u_theta - 2a u_r - (im/r)p
         #                              + nu(Lap-1/r^2)u_theta + 2 i m/r^2 coupling
-        put(L0, 1, 0, -shear);           put(Lv, 1, 0, couple_rt)
-        put(L0, 1, 1, adv);              put(Lv, 1, 1, lv_diag)
+        put(L0, 1, 0, -shear)
+        put(Lv, 1, 0, couple_rt)
+        put(L0, 1, 1, adv)
+        put(Lv, 1, 1, lv_diag)
         put(L0, 1, 3, -Gt)
         put(M, 1, 1, Mvv)
 
         # z-momentum: s u_z = -imOm u_z - i kz p + nu Lap u_z
-        put(L0, 2, 2, adv);              put(Lv, 2, 2, lv_z)
+        put(L0, 2, 2, adv)
+        put(Lv, 2, 2, lv_z)
         put(L0, 2, 3, -Gz)
         put(M, 2, 2, Mvv)
 
@@ -331,13 +335,14 @@ class TaylorCouetteLinear:
         W = self._A(x, 0)
         W = 0.5 * (W + W.conj().T)
         for comp in range(3):
-            Q[comp * n:(comp + 1) * n, comp * n:(comp + 1) * n] = W
+            Q[comp * n : (comp + 1) * n, comp * n : (comp + 1) * n] = W
         return Q
 
     def nonmodal_growth(self, m, kz, times, n_modes=None, finite_cap=FINITE_CAP):
         """Optimal linear transient growth in kinetic-energy norm."""
-        w, V = finite_eigensystem(*self.assemble(m, kz), finite_cap=finite_cap,
-                                  n_return=n_modes)
+        w, V = finite_eigensystem(
+            *self.assemble(m, kz), finite_cap=finite_cap, n_return=n_modes
+        )
         return transient_growth_from_eigs(w, V, self.energy_matrix(), times)
 
     def max_growth_over_kz(self, m, kz_list):
@@ -360,9 +365,9 @@ class TaylorCouetteLinear:
             return w[0].real if len(w) else -np.inf
 
         if growth(nu_lo) < 0:
-            return None                      # stable even at the smallest nu
+            return None  # stable even at the smallest nu
         if growth(nu_hi) > 0:
-            return nu_hi                     # unstable even at the largest nu
+            return nu_hi  # unstable even at the largest nu
         for _ in range(iters):
             nm = 0.5 * (nu_lo + nu_hi)
             if growth(nm) > 0:
@@ -415,7 +420,9 @@ def _build(args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Taylor-Couette hydrodynamic linear stability")
+    p = argparse.ArgumentParser(
+        description="Taylor-Couette hydrodynamic linear stability"
+    )
     p.add_argument("--R1", type=float, default=1.0)
     p.add_argument("--R2", type=float, default=2.0)
     p.add_argument("--Omega1", type=float, default=1.0)
@@ -424,16 +431,29 @@ def main(argv=None):
     p.add_argument("--N", type=int, default=48)
     p.add_argument("--family", choices=["L", "C"], default="L")
     p.add_argument("--m", type=int, default=0)
-    p.add_argument("--kz", type=float, default=None, help="axial wavenumber; if unset, scan")
+    p.add_argument(
+        "--kz", type=float, default=None, help="axial wavenumber; if unset, scan"
+    )
     p.add_argument("--kz-min", type=float, default=0.5)
     p.add_argument("--kz-max", type=float, default=8.0)
     p.add_argument("--kz-num", type=int, default=40)
-    p.add_argument("--nonmodal", action="store_true",
-                   help="compute optimal transient growth instead of an eigenvalue scan")
-    p.add_argument("--times", type=str, default="1,5,10,20",
-                   help="comma-separated times for --nonmodal")
-    p.add_argument("--n-modes", type=int, default=None,
-                   help="number of finite eigenmodes retained for --nonmodal")
+    p.add_argument(
+        "--nonmodal",
+        action="store_true",
+        help="compute optimal transient growth instead of an eigenvalue scan",
+    )
+    p.add_argument(
+        "--times",
+        type=str,
+        default="1,5,10,20",
+        help="comma-separated times for --nonmodal",
+    )
+    p.add_argument(
+        "--n-modes",
+        type=int,
+        default=None,
+        help="number of finite eigenmodes retained for --nonmodal",
+    )
     args = p.parse_args(argv)
 
     base, solver = _build(args)
@@ -442,8 +462,9 @@ def main(argv=None):
 
     if args.nonmodal:
         kz = args.kz if args.kz is not None else 3.14 / base.gap
-        rows = solver.nonmodal_growth(args.m, kz, parse_times(args.times),
-                                      n_modes=args.n_modes)
+        rows = solver.nonmodal_growth(
+            args.m, kz, parse_times(args.times), n_modes=args.n_modes
+        )
         print(f"\nkz={kz:g}: hydrodynamic non-modal transient growth (energy norm):")
         print_transient_growth(rows)
         return 0
@@ -459,7 +480,9 @@ def main(argv=None):
         kb, gb, g = solver.max_growth_over_kz(args.m, kzs)
         print(f"\nkz scan [{args.kz_min},{args.kz_max}] (m={args.m}):")
         print(f"  most unstable kz = {kb:.4f}  growth = {gb:+.6e}")
-        print(f"  -> base flow is {'UNSTABLE' if gb > 1e-9 else 'stable'} at nu={args.nu:g}")
+        print(
+            f"  -> base flow is {'UNSTABLE' if gb > 1e-9 else 'stable'} at nu={args.nu:g}"
+        )
     return 0
 
 

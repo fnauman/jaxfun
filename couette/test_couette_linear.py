@@ -20,6 +20,7 @@ exact and published benchmarks:
 Run with the shenfun environment:
     conda run -n shenfun pytest -q demo/test_couette_linear.py
 """
+
 from __future__ import annotations
 
 import math
@@ -34,7 +35,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from _linear_analysis import (
     FINITE_CAP,
-    finite_eigensystem,
     parse_times,
     transient_growth_from_eigs,
 )
@@ -50,11 +50,11 @@ def test_modal_transient_growth_matches_matrix_exponential():
     rng = np.random.default_rng(0)
     n = 6
     A = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
-    A = A - 3.0 * np.eye(n)                       # push spectrum left (decaying)
+    A = A - 3.0 * np.eye(n)  # push spectrum left (decaying)
     # SPD metric Q = L L^H
     Lq = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
     Q = Lq @ Lq.conj().T
-    F = np.linalg.cholesky(Q).conj().T            # Q = F^H F
+    F = np.linalg.cholesky(Q).conj().T  # Q = F^H F
 
     evals, V = eig(A)
     times = [0.0, 0.3, 1.0, 2.5]
@@ -120,8 +120,7 @@ def test_plane_couette_optimal_growth_scales_as_Re_squared():
     t_over_re = []
     for Re in (500.0, 1000.0, 2000.0):
         pcf = PlaneCouetteLinear.couette(nx=80, Re=Re, U_wall=1.0, mhd=False)
-        rows = pcf.nonmodal_growth(0.0, 1.66, np.linspace(0.4 * Re * 0.3,
-                                                          0.4 * Re, 40))
+        rows = pcf.nonmodal_growth(0.0, 1.66, np.linspace(0.4 * Re * 0.3, 0.4 * Re, 40))
         best = max(rows, key=lambda r: r["gain"])
         g_over_re2.append(best["gain"] / Re**2)
         t_over_re.append(best["t"] / Re)
@@ -138,8 +137,9 @@ def test_mhd_kinetic_norm_reduces_to_hydro_at_zero_field():
     drives independent magnetic transient growth)."""
     ky, kz, t = 1.0, 1.0, [50.0]
     hyd = PlaneCouetteLinear.couette(nx=48, Re=500.0, mhd=False)
-    mhd = PlaneCouetteLinear.couette(nx=48, Re=500.0, Rm=500.0, mhd=True,
-                                     by=0.0, bz=0.0)
+    mhd = PlaneCouetteLinear.couette(
+        nx=48, Re=500.0, Rm=500.0, mhd=True, by=0.0, bz=0.0
+    )
     g_hyd = hyd.nonmodal_growth(ky, kz, t)[0]["gain"]
     g_kin = mhd.nonmodal_growth(ky, kz, t, energy="kinetic")[0]["gain"]
     g_tot = mhd.nonmodal_growth(ky, kz, t, energy="total")[0]["gain"]
@@ -155,8 +155,9 @@ def test_mhd_imposed_field_suppresses_transient_growth():
     ky, kz, t = 1.0, 1.0, [50.0]
     gains = []
     for bz in (0.0, 0.05, 0.1, 0.2):
-        mhd = PlaneCouetteLinear.couette(nx=48, Re=500.0, Rm=500.0, mhd=True,
-                                         by=0.0, bz=bz)
+        mhd = PlaneCouetteLinear.couette(
+            nx=48, Re=500.0, Rm=500.0, mhd=True, by=0.0, bz=bz
+        )
         gains.append(mhd.nonmodal_growth(ky, kz, t, energy="total")[0]["gain"])
     assert all(b < a for a, b in zip(gains, gains[1:]))
 

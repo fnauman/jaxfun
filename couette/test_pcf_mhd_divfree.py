@@ -6,7 +6,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 DEMO_DIR = Path(__file__).resolve().parents[1] / "demo"
 
 
@@ -37,36 +36,70 @@ def run_divfree_case(args, timeout=120):
 
 
 def test_tiny_legendre_mhd_keeps_divergence_at_roundoff():
-    diag = run_divfree_case([
-        "--family", "L",
-        "--nx", "8", "--ny", "8", "--nz", "8",
-        "--dt", "0.001", "--end-time", "0.003",
-        "--moderror", "0",
-        "--perturbation-amplitude", "0.05",
-        "--magnetic-amplitude", "0.02",
-        "--filename", "pytest_PCF_divfree_L",
-        "--max-divb-l2", "1e-12",
-        "--max-divu-l2", "1e-12",
-        "--assert-every-step",
-    ])
+    diag = run_divfree_case(
+        [
+            "--family",
+            "L",
+            "--nx",
+            "8",
+            "--ny",
+            "8",
+            "--nz",
+            "8",
+            "--dt",
+            "0.001",
+            "--end-time",
+            "0.003",
+            "--moderror",
+            "0",
+            "--perturbation-amplitude",
+            "0.05",
+            "--magnetic-amplitude",
+            "0.02",
+            "--filename",
+            "pytest_PCF_divfree_L",
+            "--max-divb-l2",
+            "1e-12",
+            "--max-divu-l2",
+            "1e-12",
+            "--assert-every-step",
+        ]
+    )
     assert diag["Emag"] > 0
     assert diag["divb_l2"] < 1e-12
     assert diag["divu_l2"] < 1e-12
 
 
 def test_chebyshev_mhd_uses_compatible_curl_spaces():
-    diag = run_divfree_case([
-        "--family", "C",
-        "--nx", "16", "--ny", "16", "--nz", "16",
-        "--dt", "0.001", "--end-time", "0.001",
-        "--moderror", "0",
-        "--perturbation-amplitude", "0.05",
-        "--magnetic-amplitude", "0.02",
-        "--filename", "pytest_PCF_divfree_C",
-        "--max-divb-l2", "1e-12",
-        "--max-divu-l2", "1e-12",
-        "--assert-every-step",
-    ])
+    diag = run_divfree_case(
+        [
+            "--family",
+            "C",
+            "--nx",
+            "16",
+            "--ny",
+            "16",
+            "--nz",
+            "16",
+            "--dt",
+            "0.001",
+            "--end-time",
+            "0.001",
+            "--moderror",
+            "0",
+            "--perturbation-amplitude",
+            "0.05",
+            "--magnetic-amplitude",
+            "0.02",
+            "--filename",
+            "pytest_PCF_divfree_C",
+            "--max-divb-l2",
+            "1e-12",
+            "--max-divu-l2",
+            "1e-12",
+            "--assert-every-step",
+        ]
+    )
     assert diag["Emag"] > 0
     assert diag["divb_l2"] < 1e-12
     assert diag["divu_l2"] < 1e-12

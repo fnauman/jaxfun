@@ -11,6 +11,7 @@ These assert against classic published benchmarks:
 
 Run with the shenfun environment:  conda run -n shenfun pytest -q demo/test_taylor_couette.py
 """
+
 from __future__ import annotations
 
 import math
@@ -25,8 +26,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from taylor_couette_linear import CircularCouette, TaylorCouetteLinear
 from taylor_couette_mri import (
     TaylorCouetteMRI,
-    mri_local_growth,
     mri_keplerian_optimum,
+    mri_local_growth,
 )
 
 
@@ -70,7 +71,7 @@ def test_exchange_of_stabilities_m0():
     s = TaylorCouetteLinear(base, nu=2e-3, N=40)
     w, _ = s.eigs(0, 3.14, n_return=1)
     assert abs(w[0].imag) < 1e-9
-    assert w[0].real > 0          # supercritical -> unstable
+    assert w[0].real > 0  # supercritical -> unstable
 
 
 @pytest.mark.slow
@@ -137,7 +138,7 @@ def test_local_mri_keplerian_optimum():
 def test_local_mri_cutoff_and_stability():
     # ideal Keplerian: unstable for 0<omega_A^2<3, stable beyond cutoff
     O, k2, dO2 = 1.0, 1.0, -3.0
-    assert mri_local_growth(0.5, O, k2, dO2) > 0          # inside band
+    assert mri_local_growth(0.5, O, k2, dO2) > 0  # inside band
     assert mri_local_growth(math.sqrt(3.0) * 1.01, O, k2, dO2) == 0.0  # past cutoff
 
 
@@ -153,7 +154,7 @@ def test_mri_null_keplerian_no_field_is_stable():
 
 
 def _eval_complex_mode(space, coeffs, points, derivative=False):
-    from shenfun import Function, Dx
+    from shenfun import Dx, Function
 
     real_part = Function(space)
     imag_part = Function(space)
@@ -175,13 +176,13 @@ def test_mri_leading_mode_is_magnetically_solenoidal():
     n = s.n
     rr = np.linspace(base.R1, base.R2, 200)
 
-    br = _eval_complex_mode(s.SDv, V[4*n:5*n, 0], rr)
-    dbr = _eval_complex_mode(s.SDv, V[4*n:5*n, 0], rr, derivative=True)
-    bt = _eval_complex_mode(s.Sbt, V[5*n:6*n, 0], rr)
-    bz = _eval_complex_mode(s.Sbz, V[6*n:7*n, 0], rr)
+    br = _eval_complex_mode(s.SDv, V[4 * n : 5 * n, 0], rr)
+    dbr = _eval_complex_mode(s.SDv, V[4 * n : 5 * n, 0], rr, derivative=True)
+    bt = _eval_complex_mode(s.Sbt, V[5 * n : 6 * n, 0], rr)
+    bz = _eval_complex_mode(s.Sbz, V[6 * n : 7 * n, 0], rr)
 
     divb = dbr + br / rr + 1j * m * bt / rr + 1j * kz * bz
-    bmag = np.sqrt(np.abs(br)**2 + np.abs(bt)**2 + np.abs(bz)**2)
+    bmag = np.sqrt(np.abs(br) ** 2 + np.abs(bt) ** 2 + np.abs(bz) ** 2)
     rel = np.max(np.abs(divb)) / max(np.max(bmag), 1e-30)
     assert rel < 1e-8
 
@@ -204,12 +205,15 @@ def test_critical_rm_uses_fixed_pm_and_lundquist_controls():
     assert res["S_c"] == 4.11
     assert math.isclose(res["nu_c"], 0.2 * res["eta_mag_c"])
     assert math.isclose(res["B0_c"], 4.11 * res["eta_mag_c"] / base.gap)
-    assert all(call[2] == 0.2 and call[3] == 4.11 and call[4]["iters"] == 3 for call in calls)
+    assert all(
+        call[2] == 0.2 and call[3] == 4.11 and call[4]["iters"] == 3 for call in calls
+    )
 
 
 def test_conducting_btheta_bc_is_satisfied():
     """The b_theta Robin basis must satisfy d(r b_theta)/dr = 0 at both walls."""
-    from shenfun import Function, Dx
+    from shenfun import Dx, Function
+
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
     s = TaylorCouetteMRI(base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=24)
     walls = np.array([base.R1, base.R2])
@@ -244,8 +248,8 @@ def test_flux_formulation_reproduces_conducting_growth():
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
     s = TaylorCouetteMRI(base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=40)  # conducting
     kz = 6.0
-    wp, _ = s.eigs(0, kz, n_return=2)                      # primitive 7-field
-    L0, Lnu, Leta, M = s._assemble_flux_parts(kz)          # flux, conducting bases
+    wp, _ = s.eigs(0, kz, n_return=2)  # primitive 7-field
+    L0, Lnu, Leta, M = s._assemble_flux_parts(kz)  # flux, conducting bases
     wf = s._spectrum(L0 + s.nu * Lnu + s.eta_mag * Leta, M)
     assert abs(wf[0].real - wp[0].real) < 1e-6
     assert abs(wf[1].real - wp[1].real) < 1e-6
@@ -256,28 +260,30 @@ def test_insulating_eigenmode_is_solenoidal_by_construction():
     b_r=-(ikz/r)chi and b_z=(1/r)chi', (1/r)(r b_r)' + ikz b_z = 0 for any chi.
     Reconstruct the leading insulating eigenmode and confirm to roundoff."""
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
-    s = TaylorCouetteMRI(base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=40,
-                         magnetic_bc="insulating")
+    s = TaylorCouetteMRI(
+        base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=40, magnetic_bc="insulating"
+    )
     kz = 6.0
     Schi, _ = s._flux_bases(kz)
     _, V = s.eigs(0, kz, n_return=1)
     n = s.n
     rr = np.linspace(base.R1, base.R2, 200)
-    chi = _eval_complex_mode(Schi, V[4*n:5*n, 0], rr)
-    chip = _eval_complex_mode(Schi, V[4*n:5*n, 0], rr, derivative=True)
+    chi = _eval_complex_mode(Schi, V[4 * n : 5 * n, 0], rr)
+    chip = _eval_complex_mode(Schi, V[4 * n : 5 * n, 0], rr, derivative=True)
     br = -(1j * kz / rr) * chi
-    dbr = -1j * kz * (chip / rr - chi / rr**2)            # d/dr of -(ikz/r)chi
+    dbr = -1j * kz * (chip / rr - chi / rr**2)  # d/dr of -(ikz/r)chi
     bz = chip / rr
     divb = dbr + br / rr + 1j * kz * bz
-    bmag = np.sqrt(np.abs(br)**2 + np.abs(bz)**2)
+    bmag = np.sqrt(np.abs(br) ** 2 + np.abs(bz) ** 2)
     assert np.max(np.abs(divb)) / max(np.max(bmag), 1e-30) < 1e-10
 
 
 def test_insulating_null_keplerian_no_field_is_stable():
     """B0=0 quasi-Keplerian with insulating walls: no MRI, modes decay."""
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
-    s = TaylorCouetteMRI(base, B0=0.0, nu=1e-3, eta_mag=1e-3, N=32,
-                         magnetic_bc="insulating")
+    s = TaylorCouetteMRI(
+        base, B0=0.0, nu=1e-3, eta_mag=1e-3, N=32, magnetic_bc="insulating"
+    )
     _, g, _ = s.max_growth_over_kz(0, np.linspace(0.5, 6, 10))
     assert g < 1e-7
 
@@ -286,8 +292,9 @@ def test_insulating_m_neq_0_not_supported():
     """Non-axisymmetric insulating walls couple the poloidal/toroidal scalars at
     the wall and are not yet implemented -- must raise, not mis-solve."""
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
-    s = TaylorCouetteMRI(base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=24,
-                         magnetic_bc="insulating")
+    s = TaylorCouetteMRI(
+        base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=24, magnetic_bc="insulating"
+    )
     with pytest.raises(NotImplementedError):
         s.eigs(1, 3.0)
 
@@ -296,8 +303,9 @@ def test_insulating_kz_zero_raises():
     """The insulating flux bases are kz-dependent (the exterior modified-Bessel
     field has no kz=0 limit here), so kz=0 must raise, not divide by zero."""
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
-    s = TaylorCouetteMRI(base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=24,
-                         magnetic_bc="insulating")
+    s = TaylorCouetteMRI(
+        base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=24, magnetic_bc="insulating"
+    )
     with pytest.raises(ValueError):
         s._flux_bases(0.0)
 
@@ -309,13 +317,14 @@ def test_insulating_mri_unstable_and_easier_than_conducting():
     expected ordering (Ruediger et al. 2023: insulating Rm_min=16.5 < conducting
     24.7 as Pm->0)."""
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
-    ins = TaylorCouetteMRI(base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=36,
-                           magnetic_bc="insulating")
+    ins = TaylorCouetteMRI(
+        base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=36, magnetic_bc="insulating"
+    )
     _, g, _ = ins.max_growth_over_kz(0, np.linspace(0.5, 8, 16))
-    assert g > 1e-2                                        # MRI-unstable
+    assert g > 1e-2  # MRI-unstable
     kzs = np.linspace(1.0, 8.0, 10) / base.gap
     cond = TaylorCouetteMRI(base, B0=0.1, nu=1e-3, eta_mag=1e-3, N=36)
     rc = cond.critical_Rm(m=0, kz_list=kzs, Pm=0.1, S=4.11, iters=20)
     ri = ins.critical_Rm(m=0, kz_list=kzs, Pm=0.1, S=5.21, iters=20)
     assert rc is not None and ri is not None
-    assert ri["Rm_c"] < rc["Rm_c"]                        # insulating destabilises more easily
+    assert ri["Rm_c"] < rc["Rm_c"]  # insulating destabilises more easily

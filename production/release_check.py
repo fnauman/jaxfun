@@ -30,7 +30,9 @@ CONVENTIONS: dict[str, Any] = {
     },
     "signed_shear": "shearing box S=+1 with U'(x) = -S (shearpy convention)",
     "gap": "wall-normal domain [-1, 1]; half-gap h = 1 (full box width = 2)",
-    "atlas_note": "the h=1 operator is built directly; do NOT use an a=0.5 atlas helper",
+    "atlas_note": (
+        "the h=1 operator is built directly; do NOT use an a=0.5 atlas helper"
+    ),
     "imposed_field": "B0 = bz (vertical Alfven speed, rho = mu0 = 1)",
     "ideal_mri_cutoff": "(k_z v_A)^2 < 2 q Omega^2 (Balbus-Hawley vertical field)",
     "energy_convention": {
@@ -112,7 +114,9 @@ def write_release_artifact(
 ) -> Path:
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(release_manifest(test_summary), indent=2) + "\n", "utf-8")
+    path.write_text(
+        json.dumps(release_manifest(test_summary), indent=2) + "\n", "utf-8"
+    )
     return path
 
 

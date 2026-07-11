@@ -31,8 +31,13 @@ def _op(Rm, *, nx=64):
     from examples.pcf_linear_jax import PlaneCouetteLinear
 
     return PlaneCouetteLinear.shearpy(
-        nx=nx, Re=400.0, Rm=Rm, shear_rate=1.0, omega=2.0 / 3.0,
-        bz=0.025, magnetic_bc="conducting",
+        nx=nx,
+        Re=400.0,
+        Rm=Rm,
+        shear_rate=1.0,
+        omega=2.0 / 3.0,
+        bz=0.025,
+        magnetic_bc="conducting",
     )
 
 

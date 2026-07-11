@@ -1,11 +1,12 @@
 """Run provenance and release-cleanliness gate (FJ-13).
 
 Every production manifest must record enough to reproduce the run from an
-immutable commit: the git commit, branch (informational), release tag, remote URL,
-dirty-state flag, dependency-lock hash, and JAX/CUDA versions. :func:`capture_provenance`
-collects these; :func:`assert_release_clean` refuses to start a production run from a
-dirty, untagged, or unpushed worktree unless an explicit discovery-only override is
-given, in which case the exact diff and its SHA256 are archived with the run.
+immutable commit: the git commit, branch (informational), release tag, remote
+URL, dirty-state flag, dependency-lock hash, and JAX/CUDA versions.
+:func:`capture_provenance` collects these; :func:`assert_release_clean` refuses
+to start a production run from a dirty, untagged, or unpushed worktree unless
+an explicit discovery-only override is given, in which case the exact diff and
+its SHA256 are archived with the run.
 """
 
 from __future__ import annotations
@@ -149,9 +150,7 @@ def capture_provenance() -> dict[str, Any]:
     }
 
 
-def assert_release_clean(
-    out_dir: Path, *, allow_dirty: bool = False
-) -> dict[str, Any]:
+def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[str, Any]:
     """Enforce the FJ-13 gate: no run from a dirty/untagged/unpushed commit.
 
     With ``allow_dirty`` the run is permitted as *discovery-only*: the exact diff and
@@ -218,7 +217,7 @@ def _archive_worktree(out_dir: Path) -> dict[str, Any]:
             dst = archive_dir / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
-            hasher.update(f"\0untracked:{rel}\0".encode("utf-8"))
+            hasher.update(f"\0untracked:{rel}\0".encode())
             hasher.update(data)
             archived_untracked.append(rel)
     return {

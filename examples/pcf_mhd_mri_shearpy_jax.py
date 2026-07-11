@@ -97,9 +97,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
                 u1 = u1 + amp * wall * jnp.sin(harmonic * kz * z)
             u0 = u0 + 0.1 * amp * wall * jnp.sin(ky * y) * jnp.cos(kz * z)
             u1 = u1 + 0.1 * amp * wall * jnp.cos(ky * y) * jnp.sin(kz * z)
-            u2 = u2 + 0.1 * amp * wall * jnp.sin(2.0 * ky * y) * jnp.cos(
-                2.0 * kz * z
-            )
+            u2 = u2 + 0.1 * amp * wall * jnp.sin(2.0 * ky * y) * jnp.cos(2.0 * kz * z)
         flow = self.state_from_physical((u0, u1, u2))
 
         mag_amp = self.magnetic_amplitude

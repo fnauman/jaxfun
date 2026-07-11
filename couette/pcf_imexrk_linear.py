@@ -15,6 +15,7 @@ linear couplings -- advection, Coriolis, shear, the imposed-field induction
 couplings -- explicitly, matching the IMEX split used by the PCF DNS solvers.
 ``--split full`` is a fully-implicit reference.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -33,9 +34,16 @@ from pcf_galerkin_linear import PlaneCouetteGalerkinLinear  # noqa: E402
 class PlaneCouetteIMEXRKLinearStepper:
     """Dense descriptor-system IMEXRK stepper for the PCF linear operator."""
 
-    def __init__(self, operator: PlaneCouetteGalerkinLinear, ky=0.0, kz=1.0,
-                 dt=1.0e-3, scheme="IMEXRK222", split="diffusion",
-                 energy="total"):
+    def __init__(
+        self,
+        operator: PlaneCouetteGalerkinLinear,
+        ky=0.0,
+        kz=1.0,
+        dt=1.0e-3,
+        scheme="IMEXRK222",
+        split="diffusion",
+        energy="total",
+    ):
         self.operator = operator
         self.ky = float(ky)
         self.kz = float(kz)
@@ -53,21 +61,59 @@ class PlaneCouetteIMEXRKLinearStepper:
         self.Q = operator.energy_matrix(self.energy_kind)
 
     @classmethod
-    def couette(cls, N=48, Re=1000.0, Rm=None, family="C", mhd=False,
-                half_gap=1.0, U_wall=1.0, by=0.0, bz=0.0,
-                magnetic_bc="conducting", **kw):
+    def couette(
+        cls,
+        N=48,
+        Re=1000.0,
+        Rm=None,
+        family="C",
+        mhd=False,
+        half_gap=1.0,
+        U_wall=1.0,
+        by=0.0,
+        bz=0.0,
+        magnetic_bc="conducting",
+        **kw,
+    ):
         op = PlaneCouetteGalerkinLinear.couette(
-            N=N, Re=Re, Rm=Rm, family=family, half_gap=half_gap, U_wall=U_wall,
-            mhd=mhd, by=by, bz=bz, magnetic_bc=magnetic_bc)
+            N=N,
+            Re=Re,
+            Rm=Rm,
+            family=family,
+            half_gap=half_gap,
+            U_wall=U_wall,
+            mhd=mhd,
+            by=by,
+            bz=bz,
+            magnetic_bc=magnetic_bc,
+        )
         return cls(op, **kw)
 
     @classmethod
-    def shearbox(cls, N=48, Re=1000.0, Rm=None, family="C", shear_rate=1.0,
-                 omega=2.0 / 3.0, by=0.0, bz=0.025, magnetic_bc="conducting",
-                 **kw):
+    def shearbox(
+        cls,
+        N=48,
+        Re=1000.0,
+        Rm=None,
+        family="C",
+        shear_rate=1.0,
+        omega=2.0 / 3.0,
+        by=0.0,
+        bz=0.025,
+        magnetic_bc="conducting",
+        **kw,
+    ):
         op = PlaneCouetteGalerkinLinear.shearbox(
-            N=N, Re=Re, Rm=Rm, family=family, shear_rate=shear_rate,
-            omega=omega, by=by, bz=bz, magnetic_bc=magnetic_bc)
+            N=N,
+            Re=Re,
+            Rm=Rm,
+            family=family,
+            shear_rate=shear_rate,
+            omega=omega,
+            by=by,
+            bz=bz,
+            magnetic_bc=magnetic_bc,
+        )
         return cls(op, **kw)
 
     def _assemble_split(self):
@@ -81,8 +127,10 @@ class PlaneCouetteIMEXRKLinearStepper:
         pressure = np.zeros_like(L0)
         for c in self.pblocks:
             col = slice(c * n, (c + 1) * n)
-            pressure[:, col] = L0[:, col]                 # gradient columns
-            pressure[c * n:(c + 1) * n, :] = L0[c * n:(c + 1) * n, :]  # constraint rows
+            pressure[:, col] = L0[:, col]  # gradient columns
+            pressure[c * n : (c + 1) * n, :] = L0[
+                c * n : (c + 1) * n, :
+            ]  # constraint rows
         Aimp = diffusion + pressure
         Aexp = L0 - pressure
         return Aimp, Aexp, M
@@ -104,14 +152,16 @@ class PlaneCouetteIMEXRKLinearStepper:
         return solve(lhs, rr, assume_a="gen")
 
     def step(self, q):
-        return imexrk_step(q, self.Aimp, self.Aexp, self.M, self.a, self.b,
-                           self.dt, self._solve_stage)
+        return imexrk_step(
+            q, self.Aimp, self.Aexp, self.M, self.a, self.b, self.dt, self._solve_stage
+        )
 
     def nsteps_for(self, end_time):
         nsteps_float = float(end_time) / self.dt
         nsteps = int(round(nsteps_float))
-        if not np.isclose(nsteps * self.dt, float(end_time),
-                          rtol=1.0e-12, atol=1.0e-14):
+        if not np.isclose(
+            nsteps * self.dt, float(end_time), rtol=1.0e-12, atol=1.0e-14
+        ):
             raise ValueError("end_time must be an integer multiple of dt")
         return nsteps
 
@@ -150,11 +200,13 @@ def _parse_args():
     p.add_argument("--kz", type=float, default=1.0)
     p.add_argument("--dt", type=float, default=1.0e-3)
     p.add_argument("--end-time", type=float, default=0.05)
-    p.add_argument("--scheme", choices=("IMEXRK111", "IMEXRK222", "IMEXRK443"),
-                   default="IMEXRK222")
+    p.add_argument(
+        "--scheme", choices=("IMEXRK111", "IMEXRK222", "IMEXRK443"), default="IMEXRK222"
+    )
     p.add_argument("--split", choices=("diffusion", "full"), default="diffusion")
-    p.add_argument("--energy", choices=("total", "kinetic", "magnetic"),
-                   default="total")
+    p.add_argument(
+        "--energy", choices=("total", "kinetic", "magnetic"), default="total"
+    )
     return p.parse_args()
 
 
@@ -162,12 +214,25 @@ def main():
     args = _parse_args()
     rm = args.Re if args.Rm is None else args.Rm
     op = PlaneCouetteGalerkinLinear(
-        N=args.N, family=args.family, nu=abs(args.Uprime) / args.Re,
-        eta=abs(args.Uprime) / rm, Uprime=args.Uprime, omega=args.omega,
-        mhd=args.mhd, by=args.by, bz=args.bz)
+        N=args.N,
+        family=args.family,
+        nu=abs(args.Uprime) / args.Re,
+        eta=abs(args.Uprime) / rm,
+        Uprime=args.Uprime,
+        omega=args.omega,
+        mhd=args.mhd,
+        by=args.by,
+        bz=args.bz,
+    )
     stepper = PlaneCouetteIMEXRKLinearStepper(
-        op, ky=args.ky, kz=args.kz, dt=args.dt, scheme=args.scheme,
-        split=args.split, energy=args.energy)
+        op,
+        ky=args.ky,
+        kz=args.kz,
+        dt=args.dt,
+        scheme=args.scheme,
+        split=args.split,
+        energy=args.energy,
+    )
     s, q0 = stepper.leading_eigenmode()
     nsteps = stepper.nsteps_for(args.end_time)
     e0 = stepper.energy(q0)

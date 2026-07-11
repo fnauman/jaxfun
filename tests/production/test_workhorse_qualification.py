@@ -33,7 +33,11 @@ def _vp_spec():
         },
         "domain": {"x": [-1.0, 1.0], "y_period": 4.0, "z_period": 1.0},
         "nondimensional_groups": {
-            "S": 1.0, "Omega": 2.0 / 3.0, "nu": 5e-3, "eta_mag": 5e-3, "B0": 0.05,
+            "S": 1.0,
+            "Omega": 2.0 / 3.0,
+            "nu": 5e-3,
+            "eta_mag": 5e-3,
+            "B0": 0.05,
         },
         "time": {"integrator": "IMEXRK222", "dt": 2e-3, "final_time": 0.6},
         "resolution": {"Nx": 17, "Ny": 8, "Nz": 16, "family": "L"},

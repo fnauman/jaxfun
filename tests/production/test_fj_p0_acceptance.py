@@ -19,8 +19,17 @@ def test_streamwise_is_dealiased_under_named_axis_contract():
     from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
 
     common = dict(
-        S=1.0, omega=2.0 / 3.0, B0=0.1, nu=1e-2, eta_mag=1e-2,
-        Nx=8, Ny=6, Nz=6, Ly=4.0, Lz=1.0, dt=1e-3,
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.1,
+        nu=1e-2,
+        eta_mag=1e-2,
+        Nx=8,
+        Ny=6,
+        Nz=6,
+        Ly=4.0,
+        Lz=1.0,
+        dt=1e-3,
     )
     corrected = PCFMRIDNSJax(dealias=(1.5, 1.5, 1.0), **common)  # native (y, z, x)
     buggy = PCFMRIDNSJax(dealias=(1.0, 1.5, 1.5), **common)  # streamwise y unpadded
@@ -59,8 +68,18 @@ def test_net_flux_3d_seed_is_nonaxisymmetric_and_solenoidal():
     from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
 
     solver = PCFMRIDNSJax(
-        S=1.0, omega=2.0 / 3.0, B0=0.025, nu=1e-2, eta_mag=1e-2,
-        Nx=10, Ny=6, Nz=6, Ly=4.0, Lz=1.0, dt=1e-3, dealias=1.0,
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.025,
+        nu=1e-2,
+        eta_mag=1e-2,
+        Nx=10,
+        Ny=6,
+        Nz=6,
+        Ly=4.0,
+        Lz=1.0,
+        dt=1e-3,
+        dealias=1.0,
     )
     # axisymmetric packet (ky=0) alone -> ~zero non-axisymmetric energy
     axi, _ = solver.seed_linear_eigenmode(ky_mode=0, kz_mode=1, amp=1e-3)
@@ -90,16 +109,24 @@ def test_znf_diagnostics_are_finite_without_net_flux_alpha():
     from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
 
     solver = PCFMRIDNSJax(
-        S=1.0, omega=2.0 / 3.0, B0=0.0, nu=1e-2, eta_mag=1e-2,
-        Nx=8, Ny=4, Nz=4, Ly=4.0, Lz=1.0, dt=1e-3, dealias=1.0,
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.0,
+        nu=1e-2,
+        eta_mag=1e-2,
+        Nx=8,
+        Ny=4,
+        Nz=4,
+        Ly=4.0,
+        Lz=1.0,
+        dt=1e-3,
+        dealias=1.0,
     )
     state, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=1e-2)
     diag = solver.diagnostics(state)
     assert "transport_alpha" not in diag and "alpha_B0" not in diag
     assert "alpha_Sh" in diag
-    assert all(
-        bool(jnp.isfinite(jnp.asarray(v)).all()) for v in diag.values()
-    )
+    assert all(bool(jnp.isfinite(jnp.asarray(v)).all()) for v in diag.values())
 
 
 # --------------------------------------------------------------------------- FJ-13

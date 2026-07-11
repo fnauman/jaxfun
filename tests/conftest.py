@@ -52,7 +52,9 @@ def pytest_configure(config) -> None:
 
 
 def _has_marker(item, name: str) -> bool:
-    return name in item.keywords or any(mark.name == name for mark in item.iter_markers())
+    return name in item.keywords or any(
+        mark.name == name for mark in item.iter_markers()
+    )
 
 
 def _count_live_shenfun_items(items) -> int:
@@ -106,9 +108,10 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         import jax
 
         expected_x64 = getattr(config, "_jaxfun_expected_x64", None)
-        x64_changed = expected_x64 is not None and bool(
-            jax.config.read("jax_enable_x64")
-        ) != expected_x64
+        x64_changed = (
+            expected_x64 is not None
+            and bool(jax.config.read("jax_enable_x64")) != expected_x64
+        )
         x64_worker_failed = bool(getattr(config, "_jaxfun_x64_worker_failed", False))
         if x64_changed or x64_worker_failed:
             reporter = config.pluginmanager.get_plugin("terminalreporter")

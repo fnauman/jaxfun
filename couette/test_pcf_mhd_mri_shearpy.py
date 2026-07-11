@@ -6,7 +6,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 DEMO_DIR = Path(__file__).resolve().parents[1] / "demo"
 
 
@@ -37,22 +36,53 @@ def run_mri_case(args, timeout=120):
 
 
 def test_tiny_legendre_shearpy_mri_pcf_analogue_runs():
-    diag = run_mri_case([
-        "--family", "L",
-        "--nx", "8", "--ny", "8", "--nz", "8",
-        "--lx", "4.0", "--ly", "4.0", "--lz", "1.0",
-        "--Re", "1000", "--Rm", "1000",
-        "--shear", "1.0", "--omega", "0.6667",
-        "--by", "0.0", "--bz", "0.025",
-        "--dt", "0.001", "--end-time", "0.002",
-        "--moderror", "0",
-        "--perturbation-amplitude", "0.001",
-        "--magnetic-amplitude", "0.0",
-        "--filename", "pytest_PCF_MRI_shearpy_L",
-        "--max-divb-l2", "1e-12",
-        "--max-divu-l2", "1e-12",
-        "--assert-every-step",
-    ])
+    diag = run_mri_case(
+        [
+            "--family",
+            "L",
+            "--nx",
+            "8",
+            "--ny",
+            "8",
+            "--nz",
+            "8",
+            "--lx",
+            "4.0",
+            "--ly",
+            "4.0",
+            "--lz",
+            "1.0",
+            "--Re",
+            "1000",
+            "--Rm",
+            "1000",
+            "--shear",
+            "1.0",
+            "--omega",
+            "0.6667",
+            "--by",
+            "0.0",
+            "--bz",
+            "0.025",
+            "--dt",
+            "0.001",
+            "--end-time",
+            "0.002",
+            "--moderror",
+            "0",
+            "--perturbation-amplitude",
+            "0.001",
+            "--magnetic-amplitude",
+            "0.0",
+            "--filename",
+            "pytest_PCF_MRI_shearpy_L",
+            "--max-divb-l2",
+            "1e-12",
+            "--max-divu-l2",
+            "1e-12",
+            "--assert-every-step",
+        ]
+    )
     assert diag["Epert"] > 0
     assert diag["Emag_total"] > 0
     assert abs(diag["B0z"] - 0.025) < 1e-15

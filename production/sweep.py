@@ -25,8 +25,16 @@ from .problem_spec import ProblemSpecError, load_spec, spec_hash, validate_spec
 # override would only change the run id/hash without changing the trajectory (a
 # silent relabel). Re-add it only once a solver actually consumes the seed.
 _SUPPORTED_OVERRIDES = {
-    "Re_h", "Rm_h", "B0", "Ly", "Lz", "horizon", "dt", "bc",
-    "precision", "resolution",
+    "Re_h",
+    "Rm_h",
+    "B0",
+    "Ly",
+    "Lz",
+    "horizon",
+    "dt",
+    "bc",
+    "precision",
+    "resolution",
 }
 
 
@@ -34,7 +42,9 @@ class SweepOverrideError(ProblemSpecError):
     """Raised for an unknown or invalid sweep override."""
 
 
-def apply_overrides(base_spec: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+def apply_overrides(
+    base_spec: dict[str, Any], overrides: dict[str, Any]
+) -> dict[str, Any]:
     """Return a validated, physics-resolved spec with ``overrides`` applied.
 
     Coefficient overrides (``Re_h``/``Rm_h``) drop the stale ``nu``/``eta``/``Pm`` so
@@ -210,11 +220,7 @@ def execute_sweep(
         record = materialize_run_spec(base_spec_path, overrides, out_path)
         run_id = record["run_id"]
         prior = entries.get(run_id)
-        if (
-            skip_completed
-            and prior is not None
-            and prior.get("status") == "completed"
-        ):
+        if skip_completed and prior is not None and prior.get("status") == "completed":
             skipped += 1
             continue
         entry = {**record, "status": "materialized"}
@@ -266,7 +272,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", required=True, help="Base spec JSON path.")
     parser.add_argument("--out", required=True, help="Output directory for run specs.")
     parser.add_argument(
-        "--set", action="append", default=[], metavar="key=value",
+        "--set",
+        action="append",
+        default=[],
+        metavar="key=value",
         help="Semantic override, e.g. --set Re_h=1600 --set B0=0.0125",
     )
     parser.add_argument(

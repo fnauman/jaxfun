@@ -138,6 +138,7 @@ def main() -> None:
     )
     state0 = solver.initial_state()
     if args.moderror > 0:
+
         def print_diagnostics(t, tstep, diag):
             values = " ".join(
                 f"{key}={float(value):.6e}" for key, value in diag.items()

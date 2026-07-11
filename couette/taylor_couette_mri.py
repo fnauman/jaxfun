@@ -56,10 +56,10 @@ Validation targets
   conducting walls ``Rm_min ~ 24.7`` (``S=4.11``), insulating ``Rm_min ~ 16.5``
   (``S=5.21``) as ``Pm -> 0`` -- insulating destabilises more easily.
 """
+
 from __future__ import annotations
 
 from _demo_utils import default_thread_cap
-
 
 default_thread_cap()
 
@@ -68,10 +68,6 @@ import math
 
 import numpy as np
 import sympy as sp
-from scipy.linalg import eig
-from scipy.special import iv, kv
-
-from shenfun import FunctionSpace, TestFunction, TrialFunction, inner, Dx
 from _linear_analysis import (
     FINITE_CAP,
     finite_eigensystem,
@@ -79,7 +75,9 @@ from _linear_analysis import (
     print_transient_growth,
     transient_growth_from_eigs,
 )
-
+from scipy.linalg import eig
+from scipy.special import iv, kv
+from shenfun import Dx, FunctionSpace, TestFunction, TrialFunction, inner
 from taylor_couette_linear import CircularCouette, x
 
 
@@ -97,8 +95,8 @@ def mri_local_growth(omega_A, Omega, kappa2, dOmega2_dlnr):
     C = omega_A**2 * (omega_A**2 + dOmega2_dlnr)
     disc = A**2 - C
     if disc < 0:
-        return 0.0                      # complex s^2 -> oscillatory, |Re s| from sqrt
-    s2 = -A + math.sqrt(disc)           # the larger root of s^2
+        return 0.0  # complex s^2 -> oscillatory, |Re s| from sqrt
+    s2 = -A + math.sqrt(disc)  # the larger root of s^2
     return math.sqrt(s2) if s2 > 0 else 0.0
 
 
@@ -107,8 +105,8 @@ def mri_keplerian_optimum(Omega=1.0, vA=1.0):
     s_max, the optimal omega_A^2/Omega^2, and the cutoff, vs theory
     (0.75 Omega, 0.9375, 3.0)."""
     q = 1.5
-    kappa2 = (4 - 2 * q) * Omega**2          # = Omega^2 for q=3/2
-    dOmega2_dlnr = -2 * q * Omega**2         # = -3 Omega^2
+    kappa2 = (4 - 2 * q) * Omega**2  # = Omega^2 for q=3/2
+    dOmega2_dlnr = -2 * q * Omega**2  # = -3 Omega^2
     wa = np.linspace(1e-3, math.sqrt(3.0) * Omega * 0.999, 4000)
     s = np.array([mri_local_growth(w, Omega, kappa2, dOmega2_dlnr) for w in wa])
     i = int(np.argmax(s))
@@ -149,8 +147,16 @@ class TaylorCouetteMRI:
         leave ``div(b) ~ O(1)``); see :meth:`_assemble_flux_parts`.
     """
 
-    def __init__(self, base: CircularCouette, B0=0.1, nu=1e-3, eta_mag=1e-3,
-                 N=48, family="L", magnetic_bc="conducting"):
+    def __init__(
+        self,
+        base: CircularCouette,
+        B0=0.1,
+        nu=1e-3,
+        eta_mag=1e-3,
+        N=48,
+        family="L",
+        magnetic_bc="conducting",
+    ):
         self.base = base
         self.B0 = float(B0)
         self.nu = float(nu)
@@ -167,7 +173,7 @@ class TaylorCouetteMRI:
         # pressure: orthogonal, sliced to N-2 (inf-sup-stable P_N - P_{N-2})
         self.SP = FunctionSpace(N, family, domain=dom)
         self.SP.slice = lambda: slice(0, N - 2)
-        self.Jm = 0.5 * (base.R2 - base.R1)            # dr_phys/dr_ref (linear map)
+        self.Jm = 0.5 * (base.R2 - base.R1)  # dr_phys/dr_ref (linear map)
         self.n = self.SDv.dim()
         assert self.SP.dim() == self.n, (self.SP.dim(), self.n)
 
@@ -181,11 +187,17 @@ class TaylorCouetteMRI:
             # shenfun Robin {'R':(c,d)} is u + c*u'_REF = d (reference-coord
             # derivative), so c = r_wall / J, J = (R2-R1)/2.  b_z: Neumann b_z'=0.
             self.Sbt = FunctionSpace(
-                N, family, domain=dom,
-                bc={"left": {"R": (base.R1 / self.Jm, 0)},
-                    "right": {"R": (base.R2 / self.Jm, 0)}})
+                N,
+                family,
+                domain=dom,
+                bc={
+                    "left": {"R": (base.R1 / self.Jm, 0)},
+                    "right": {"R": (base.R2 / self.Jm, 0)},
+                },
+            )
             self.Sbz = FunctionSpace(
-                N, family, bc={"left": {"N": 0}, "right": {"N": 0}}, domain=dom)
+                N, family, bc={"left": {"N": 0}, "right": {"N": 0}}, domain=dom
+            )
             assert self.Sbt.dim() == self.n and self.Sbz.dim() == self.n
             spaces.update(br=self.SDv, bt=self.Sbt, bz=self.Sbz)
         self.tv = {s: TestFunction(sp_) for s, sp_ in spaces.items()}
@@ -196,8 +208,14 @@ class TaylorCouetteMRI:
         d, R1, O1 = base.gap, base.R1, base.Omega1
         self.Re = O1 * R1 * d / self.nu if self.nu > 0 else math.inf
         self.Rm = O1 * R1 * d / self.eta_mag if self.eta_mag > 0 else math.inf
-        self.S = self.B0 * d / self.eta_mag if self.eta_mag > 0 else math.inf   # Lundquist
-        self.Ha = self.B0 * d / math.sqrt(self.nu * self.eta_mag) if self.nu * self.eta_mag > 0 else math.inf
+        self.S = (
+            self.B0 * d / self.eta_mag if self.eta_mag > 0 else math.inf
+        )  # Lundquist
+        self.Ha = (
+            self.B0 * d / math.sqrt(self.nu * self.eta_mag)
+            if self.nu * self.eta_mag > 0
+            else math.inf
+        )
 
     # ---- generic dense block (test, trial, [(coeff, order), ...]) ----------
     def _blk(self, test, trial, terms):
@@ -233,8 +251,11 @@ class TaylorCouetteMRI:
 
     def _lap_terms(self, m, kz):
         """Scalar cylindrical Laplacian terms."""
-        return [(None, 2), (1 / x, 1),
-                (-(sp.Integer(m**2) / x**2 + sp.Float(kz**2)), 0)]
+        return [
+            (None, 2),
+            (1 / x, 1),
+            (-(sp.Integer(m**2) / x**2 + sp.Float(kz**2)), 0),
+        ]
 
     def assemble_parts(self, m, kz, B0=None):
         """Return (L0, Lnu, Leta, M) with L = L0 + nu*Lnu + eta_mag*Leta.
@@ -249,7 +270,8 @@ class TaylorCouetteMRI:
                 raise NotImplementedError(
                     "insulating walls are implemented for the axisymmetric m=0 "
                     "MRI only (m!=0 couples poloidal and toroidal scalars at the "
-                    "wall via the vacuum field)")
+                    "wall via the vacuum field)"
+                )
             return self._assemble_flux_parts(kz, B0)
         n = self.n
         b = self.base
@@ -261,8 +283,8 @@ class TaylorCouetteMRI:
         ikzB0 = sp.I * kz_s * sp.Float(B0)
 
         lap = self._lap_terms(m, kz)
-        lv = lap + [(-1 / x**2, 0)]                  # vector-Laplacian diag piece
-        couple = [(2 * m_s * sp.I / x**2, 0)]        # +- 2 i m / r^2
+        lv = lap + [(-1 / x**2, 0)]  # vector-Laplacian diag piece
+        couple = [(2 * m_s * sp.I / x**2, 0)]  # +- 2 i m / r^2
 
         L0 = np.zeros((7 * n, 7 * n), dtype=complex)
         Lnu = np.zeros((7 * n, 7 * n), dtype=complex)
@@ -271,25 +293,40 @@ class TaylorCouetteMRI:
         idx = dict(ur=0, ut=1, uz=2, p=3, br=4, bt=5, bz=6)
 
         def put(blk, ri, ci, val):
-            blk[ri * n:(ri + 1) * n, ci * n:(ci + 1) * n] += val
+            blk[ri * n : (ri + 1) * n, ci * n : (ci + 1) * n] += val
 
         tv, tr = self.tv, self.tr
 
         # ----- r-momentum (test ur) -----
         put(L0, idx["ur"], idx["ur"], self._blk(tv["ur"], tr["ur"], [(-imOm, 0)]))
         put(Lnu, idx["ur"], idx["ur"], self._blk(tv["ur"], tr["ur"], lv))
-        put(L0, idx["ur"], idx["ut"], self._blk(tv["ur"], tr["ut"], [(b.twoOmega_sym, 0)]))
+        put(
+            L0,
+            idx["ur"],
+            idx["ut"],
+            self._blk(tv["ur"], tr["ut"], [(b.twoOmega_sym, 0)]),
+        )
         put(Lnu, idx["ur"], idx["ut"], -self._blk(tv["ur"], tr["ut"], couple))
         put(L0, idx["ur"], idx["p"], -self._blk(tv["ur"], tr["p"], [(None, 1)]))
         put(L0, idx["ur"], idx["br"], self._blk(tv["ur"], tr["br"], [(ikzB0, 0)]))
         put(M, idx["ur"], idx["ur"], self._blk(tv["ur"], tr["ur"], [(None, 0)]))
 
         # ----- theta-momentum (test ut) -----
-        put(L0, idx["ut"], idx["ur"], self._blk(tv["ut"], tr["ur"], [(-sp.Float(b.shear2a), 0)]))
+        put(
+            L0,
+            idx["ut"],
+            idx["ur"],
+            self._blk(tv["ut"], tr["ur"], [(-sp.Float(b.shear2a), 0)]),
+        )
         put(Lnu, idx["ut"], idx["ur"], self._blk(tv["ut"], tr["ur"], couple))
         put(L0, idx["ut"], idx["ut"], self._blk(tv["ut"], tr["ut"], [(-imOm, 0)]))
         put(Lnu, idx["ut"], idx["ut"], self._blk(tv["ut"], tr["ut"], lv))
-        put(L0, idx["ut"], idx["p"], -self._blk(tv["ut"], tr["p"], [(sp.I * m_s / x, 0)]))
+        put(
+            L0,
+            idx["ut"],
+            idx["p"],
+            -self._blk(tv["ut"], tr["p"], [(sp.I * m_s / x, 0)]),
+        )
         put(L0, idx["ut"], idx["bt"], self._blk(tv["ut"], tr["bt"], [(ikzB0, 0)]))
         put(M, idx["ut"], idx["ut"], self._blk(tv["ut"], tr["ut"], [(None, 0)]))
 
@@ -301,8 +338,15 @@ class TaylorCouetteMRI:
         put(M, idx["uz"], idx["uz"], self._blk(tv["uz"], tr["uz"], [(None, 0)]))
 
         # ----- continuity (test p) -----
-        put(L0, idx["p"], idx["ur"], self._blk(tv["p"], tr["ur"], [(None, 1), (1 / x, 0)]))
-        put(L0, idx["p"], idx["ut"], self._blk(tv["p"], tr["ut"], [(sp.I * m_s / x, 0)]))
+        put(
+            L0,
+            idx["p"],
+            idx["ur"],
+            self._blk(tv["p"], tr["ur"], [(None, 1), (1 / x, 0)]),
+        )
+        put(
+            L0, idx["p"], idx["ut"], self._blk(tv["p"], tr["ut"], [(sp.I * m_s / x, 0)])
+        )
         put(L0, idx["p"], idx["uz"], self._blk(tv["p"], tr["uz"], [(sp.I * kz_s, 0)]))
         # M row p stays zero (constraint)
 
@@ -315,7 +359,12 @@ class TaylorCouetteMRI:
 
         # ----- b_theta induction (test bt) -----
         put(L0, idx["bt"], idx["ut"], self._blk(tv["bt"], tr["ut"], [(ikzB0, 0)]))
-        put(L0, idx["bt"], idx["br"], self._blk(tv["bt"], tr["br"], [(b.rOmega_p_sym, 0)]))
+        put(
+            L0,
+            idx["bt"],
+            idx["br"],
+            self._blk(tv["bt"], tr["br"], [(b.rOmega_p_sym, 0)]),
+        )
         put(Leta, idx["bt"], idx["br"], self._blk(tv["bt"], tr["br"], couple))
         put(L0, idx["bt"], idx["bt"], self._blk(tv["bt"], tr["bt"], [(-imOm, 0)]))
         put(Leta, idx["bt"], idx["bt"], self._blk(tv["bt"], tr["bt"], lv))
@@ -355,21 +404,30 @@ class TaylorCouetteMRI:
         N, fam, J, b = self.N, self.family, self.Jm, self.base
         dom = (b.R1, b.R2)
         if self.magnetic_bc == "conducting":
-            Schi = FunctionSpace(N, fam, bc=(0, 0), domain=dom)          # chi=0
-            Sbth = FunctionSpace(N, fam, domain=dom,
-                                 bc={"left": {"R": (b.R1 / J, 0)},
-                                     "right": {"R": (b.R2 / J, 0)}})
-        else:                                                            # insulating
+            Schi = FunctionSpace(N, fam, bc=(0, 0), domain=dom)  # chi=0
+            Sbth = FunctionSpace(
+                N,
+                fam,
+                domain=dom,
+                bc={"left": {"R": (b.R1 / J, 0)}, "right": {"R": (b.R2 / J, 0)}},
+            )
+        else:  # insulating
             k = abs(float(kz))
             if k < 1e-12:
                 raise ValueError("insulating BCs require kz != 0")
-            kap_in = k * iv(1, k * b.R1) / iv(0, k * b.R1)               # I_0'=I_1
-            kap_out = -k * kv(1, k * b.R2) / kv(0, k * b.R2)             # K_0'=-K_1
+            kap_in = k * iv(1, k * b.R1) / iv(0, k * b.R1)  # I_0'=I_1
+            kap_out = -k * kv(1, k * b.R2) / kv(0, k * b.R2)  # K_0'=-K_1
             # chi'_phys = (kz^2/kappa) chi -> shenfun Robin c = -kappa/(kz^2 J)
-            Schi = FunctionSpace(N, fam, domain=dom,
-                                 bc={"left": {"R": (-kap_in / (k * k * J), 0)},
-                                     "right": {"R": (-kap_out / (k * k * J), 0)}})
-            Sbth = FunctionSpace(N, fam, bc=(0, 0), domain=dom)          # b_theta=0
+            Schi = FunctionSpace(
+                N,
+                fam,
+                domain=dom,
+                bc={
+                    "left": {"R": (-kap_in / (k * k * J), 0)},
+                    "right": {"R": (-kap_out / (k * k * J), 0)},
+                },
+            )
+            Sbth = FunctionSpace(N, fam, bc=(0, 0), domain=dom)  # b_theta=0
         assert Schi.dim() == self.n and Sbth.dim() == self.n
         cache[key] = (Schi, Sbth)
         return cache[key]
@@ -395,8 +453,9 @@ class TaylorCouetteMRI:
         kz_s = sp.Float(float(kz))
         ikzB0 = sp.I * kz_s * sp.Float(B0)
         Schi, Sbth = self._flux_bases(kz)
-        sp_map = dict(ur=self.SDv, ut=self.SDv, uz=self.SDv,
-                      p=self.SP, chi=Schi, bt=Sbth)
+        sp_map = dict(
+            ur=self.SDv, ut=self.SDv, uz=self.SDv, p=self.SP, chi=Schi, bt=Sbth
+        )
         tv = {s: TestFunction(v) for s, v in sp_map.items()}
         tr = {s: TrialFunction(v) for s, v in sp_map.items()}
         idx = dict(ur=0, ut=1, uz=2, p=3, chi=4, bt=5)
@@ -407,17 +466,22 @@ class TaylorCouetteMRI:
         M = np.zeros_like(L0)
 
         def put(blk, ri, ci, val):
-            blk[idx[ri]*n:(idx[ri]+1)*n, idx[ci]*n:(idx[ci]+1)*n] += val
+            blk[idx[ri] * n : (idx[ri] + 1) * n, idx[ci] * n : (idx[ci] + 1) * n] += val
 
-        Lp = [(None, 2), (1 / x, 1), (-(kz_s**2), 0)]      # scalar Laplacian (m=0)
-        Lv = Lp + [(-1 / x**2, 0)]                          # vector-Laplacian diag
-        Lchi = [(None, 2), (-1 / x, 1), (-(kz_s**2), 0)]    # Stokes operator for chi
+        Lp = [(None, 2), (1 / x, 1), (-(kz_s**2), 0)]  # scalar Laplacian (m=0)
+        Lv = Lp + [(-1 / x**2, 0)]  # vector-Laplacian diag
+        Lchi = [(None, 2), (-1 / x, 1), (-(kz_s**2), 0)]  # Stokes operator for chi
 
         # r-momentum
         put(L0, "ur", "ut", self._blk(tv["ur"], tr["ut"], [(b.twoOmega_sym, 0)]))
         put(L0, "ur", "p", -self._blk(tv["ur"], tr["p"], [(None, 1)]))
         put(Lnu, "ur", "ur", self._blk(tv["ur"], tr["ur"], Lv))
-        put(L0, "ur", "chi", self._blk(tv["ur"], tr["chi"], [(kz_s**2 * sp.Float(B0) / x, 0)]))
+        put(
+            L0,
+            "ur",
+            "chi",
+            self._blk(tv["ur"], tr["chi"], [(kz_s**2 * sp.Float(B0) / x, 0)]),
+        )
         put(M, "ur", "ur", self._blk(tv["ur"], tr["ur"], [(None, 0)]))
         # theta-momentum
         put(L0, "ut", "ur", self._blk(tv["ut"], tr["ur"], [(-sp.Float(b.shear2a), 0)]))
@@ -438,7 +502,12 @@ class TaylorCouetteMRI:
         put(M, "chi", "chi", self._blk(tv["chi"], tr["chi"], [(None, 0)]))
         # toroidal b_theta:  s b_t = i kz B0 u_t - i kz Om' chi + eta Lv b_t
         put(L0, "bt", "ut", self._blk(tv["bt"], tr["ut"], [(ikzB0, 0)]))
-        put(L0, "bt", "chi", self._blk(tv["bt"], tr["chi"], [(-sp.I * kz_s * b.rOmega_p_sym / x, 0)]))
+        put(
+            L0,
+            "bt",
+            "chi",
+            self._blk(tv["bt"], tr["chi"], [(-sp.I * kz_s * b.rOmega_p_sym / x, 0)]),
+        )
         put(Leta, "bt", "bt", self._blk(tv["bt"], tr["bt"], Lv))
         put(M, "bt", "bt", self._blk(tv["bt"], tr["bt"], [(None, 0)]))
         return L0, Lnu, Leta, M
@@ -498,40 +567,44 @@ class TaylorCouetteMRI:
         if self.magnetic_bc == "conducting":
             Q = np.zeros((7 * n, 7 * n), dtype=complex)
             idx = dict(ur=0, ut=1, uz=2, p=3, br=4, bt=5, bz=6)
-            names = (["ur", "ut", "uz"] if want_kin else []) + \
-                    (["br", "bt", "bz"] if want_mag else [])
+            names = (["ur", "ut", "uz"] if want_kin else []) + (
+                ["br", "bt", "bz"] if want_mag else []
+            )
             for name in names:
                 W = self._blk(self.tv[name], self.tr[name], [(x, 0)])
                 W = 0.5 * (W + W.conj().T)
                 i = idx[name]
-                Q[i * n:(i + 1) * n, i * n:(i + 1) * n] = W
+                Q[i * n : (i + 1) * n, i * n : (i + 1) * n] = W
             return Q
 
         Schi, Sbth = self._flux_bases(kz)
-        sp_map = dict(ur=self.SDv, ut=self.SDv, uz=self.SDv, p=self.SP,
-                      chi=Schi, bt=Sbth)
+        sp_map = dict(
+            ur=self.SDv, ut=self.SDv, uz=self.SDv, p=self.SP, chi=Schi, bt=Sbth
+        )
         tv = {s: TestFunction(v) for s, v in sp_map.items()}
         tr = {s: TrialFunction(v) for s, v in sp_map.items()}
         idx = dict(ur=0, ut=1, uz=2, p=3, chi=4, bt=5)
         Q = np.zeros((6 * n, 6 * n), dtype=complex)
-        names = (["ur", "ut", "uz"] if want_kin else []) + \
-                (["bt"] if want_mag else [])
+        names = (["ur", "ut", "uz"] if want_kin else []) + (["bt"] if want_mag else [])
         for name in names:
             W = self._blk(tv[name], tr[name], [(x, 0)])
             W = 0.5 * (W + W.conj().T)
             i = idx[name]
-            Q[i * n:(i + 1) * n, i * n:(i + 1) * n] = W
+            Q[i * n : (i + 1) * n, i * n : (i + 1) * n] = W
         if want_mag:
             kz_s = sp.Float(float(kz))
             chi_metric = self._dense_inner(tv["chi"], (kz_s**2 / x) * tr["chi"])
-            chi_metric += self._dense_inner(Dx(tv["chi"], 0, 1), (1 / x) * Dx(tr["chi"], 0, 1))
+            chi_metric += self._dense_inner(
+                Dx(tv["chi"], 0, 1), (1 / x) * Dx(tr["chi"], 0, 1)
+            )
             chi_metric = 0.5 * (chi_metric + chi_metric.conj().T)
             i = idx["chi"]
-            Q[i * n:(i + 1) * n, i * n:(i + 1) * n] = chi_metric
+            Q[i * n : (i + 1) * n, i * n : (i + 1) * n] = chi_metric
         return Q
 
-    def nonmodal_growth(self, m, kz, times, n_modes=None, finite_cap=FINITE_CAP,
-                        energy="total"):
+    def nonmodal_growth(
+        self, m, kz, times, n_modes=None, finite_cap=FINITE_CAP, energy="total"
+    ):
         """Optimal linear transient growth in the selected energy norm.
 
         ``energy`` selects ``'total'`` (kinetic+magnetic, default), ``'kinetic'``,
@@ -540,10 +613,12 @@ class TaylorCouetteMRI:
         own transient growth, so the total-energy gain need not coincide with the
         purely kinetic one even at modest fields.
         """
-        w, V = finite_eigensystem(*self.assemble(m, kz), finite_cap=finite_cap,
-                                  n_return=n_modes)
-        return transient_growth_from_eigs(w, V,
-                                          self.energy_matrix(m, kz, energy), times)
+        w, V = finite_eigensystem(
+            *self.assemble(m, kz), finite_cap=finite_cap, n_return=n_modes
+        )
+        return transient_growth_from_eigs(
+            w, V, self.energy_matrix(m, kz, energy), times
+        )
 
     def max_growth_over_kz(self, m, kz_list):
         g = np.array([self.growth_rate(m, kz) for kz in kz_list])
@@ -569,7 +644,7 @@ class TaylorCouetteMRI:
         if growth(hi) > 0:
             return hi
         for _ in range(iters):
-            mid = math.sqrt(lo * hi)          # geometric bisection (Rm spans decades)
+            mid = math.sqrt(lo * hi)  # geometric bisection (Rm spans decades)
             if growth(mid) > 0:
                 lo = mid
             else:
@@ -581,7 +656,7 @@ class TaylorCouetteMRI:
         b = self.base
         if kz_list is None:
             kz_list = np.linspace(1.0, 8.0, 18) / b.gap
-        best = None   # maximize eta_mag (minimize Rm)
+        best = None  # maximize eta_mag (minimize Rm)
         for kz in kz_list:
             ec = self.critical_eta_mag(m, kz, **kw)
             if ec is None:
@@ -592,11 +667,16 @@ class TaylorCouetteMRI:
             return None
         kz_c, eta_c = best
         Rm_c = b.Omega1 * b.R1 * b.gap / eta_c
-        return {"kz_c": kz_c, "eta_mag_c": eta_c, "Rm_c": Rm_c,
-                "S_c": self.B0 * b.gap / eta_c}
+        return {
+            "kz_c": kz_c,
+            "eta_mag_c": eta_c,
+            "Rm_c": Rm_c,
+            "S_c": self.B0 * b.gap / eta_c,
+        }
 
-    def critical_eta_mag_fixed_controls(self, m, kz, Pm=None, S=None,
-                                        lo=1e-5, hi=1.0, iters=34):
+    def critical_eta_mag_fixed_controls(
+        self, m, kz, Pm=None, S=None, lo=1e-5, hi=1.0, iters=34
+    ):
         """Largest eta_mag still unstable at fixed ``Pm`` and Lundquist ``S``."""
         b = self.base
         Pm = self.Pm if Pm is None else float(Pm)
@@ -650,8 +730,15 @@ class TaylorCouetteMRI:
         Rm_c = b.Omega1 * b.R1 * b.gap / eta_c
         nu_c = Pm * eta_c
         B0_c = S * eta_c / b.gap
-        return {"kz_c": kz_c, "eta_mag_c": eta_c, "nu_c": nu_c,
-                "B0_c": B0_c, "Rm_c": Rm_c, "Pm": Pm, "S_c": S}
+        return {
+            "kz_c": kz_c,
+            "eta_mag_c": eta_c,
+            "nu_c": nu_c,
+            "B0_c": B0_c,
+            "Rm_c": Rm_c,
+            "Pm": Pm,
+            "S_c": S,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -662,33 +749,57 @@ def main(argv=None):
     p.add_argument("--R1", type=float, default=1.0)
     p.add_argument("--R2", type=float, default=2.0)
     p.add_argument("--Omega1", type=float, default=1.0)
-    p.add_argument("--Omega2", type=float, default=None,
-                   help="outer rotation; default = Keplerian mu=eta^1.5")
+    p.add_argument(
+        "--Omega2",
+        type=float,
+        default=None,
+        help="outer rotation; default = Keplerian mu=eta^1.5",
+    )
     p.add_argument("--B0", type=float, default=0.1)
     p.add_argument("--nu", type=float, default=1e-3)
     p.add_argument("--eta-mag", type=float, default=1e-3)
     p.add_argument("--N", type=int, default=48)
     p.add_argument("--family", choices=["L", "C"], default="L")
-    p.add_argument("--magnetic-bc", choices=["conducting", "insulating"],
-                   default="conducting",
-                   help="magnetic wall BC; insulating uses the flux-function "
-                        "formulation and is axisymmetric (m=0) only")
+    p.add_argument(
+        "--magnetic-bc",
+        choices=["conducting", "insulating"],
+        default="conducting",
+        help="magnetic wall BC; insulating uses the flux-function "
+        "formulation and is axisymmetric (m=0) only",
+    )
     p.add_argument("--m", type=int, default=0)
     p.add_argument("--kz", type=float, default=None)
     p.add_argument("--kz-min", type=float, default=0.5)
     p.add_argument("--kz-max", type=float, default=8.0)
     p.add_argument("--kz-num", type=int, default=30)
-    p.add_argument("--nonmodal", action="store_true",
-                   help="compute optimal transient growth instead of an eigenvalue scan")
-    p.add_argument("--times", type=str, default="1,5,10,20",
-                   help="comma-separated times for --nonmodal")
-    p.add_argument("--n-modes", type=int, default=None,
-                   help="number of finite eigenmodes retained for --nonmodal")
-    p.add_argument("--energy", choices=["total", "kinetic", "magnetic"],
-                   default="total",
-                   help="energy norm for --nonmodal (kinetic+magnetic by default)")
-    p.add_argument("--local-check", action="store_true",
-                   help="print the ideal local Keplerian MRI optimum and exit")
+    p.add_argument(
+        "--nonmodal",
+        action="store_true",
+        help="compute optimal transient growth instead of an eigenvalue scan",
+    )
+    p.add_argument(
+        "--times",
+        type=str,
+        default="1,5,10,20",
+        help="comma-separated times for --nonmodal",
+    )
+    p.add_argument(
+        "--n-modes",
+        type=int,
+        default=None,
+        help="number of finite eigenmodes retained for --nonmodal",
+    )
+    p.add_argument(
+        "--energy",
+        choices=["total", "kinetic", "magnetic"],
+        default="total",
+        help="energy norm for --nonmodal (kinetic+magnetic by default)",
+    )
+    p.add_argument(
+        "--local-check",
+        action="store_true",
+        help="print the ideal local Keplerian MRI optimum and exit",
+    )
     args = p.parse_args(argv)
 
     if args.local_check:
@@ -701,19 +812,36 @@ def main(argv=None):
     eta = args.R1 / args.R2
     Omega2 = args.Omega2 if args.Omega2 is not None else args.Omega1 * eta**1.5
     base = CircularCouette(args.R1, args.R2, args.Omega1, Omega2)
-    solver = TaylorCouetteMRI(base, B0=args.B0, nu=args.nu, eta_mag=args.eta_mag,
-                              N=args.N, family=args.family,
-                              magnetic_bc=args.magnetic_bc)
+    solver = TaylorCouetteMRI(
+        base,
+        B0=args.B0,
+        nu=args.nu,
+        eta_mag=args.eta_mag,
+        N=args.N,
+        family=args.family,
+        magnetic_bc=args.magnetic_bc,
+    )
     print(base.describe())
-    print(f"  B0={args.B0:g} nu={args.nu:g} eta_mag={args.eta_mag:g} "
-          f"Pm={solver.Pm:g} walls={args.magnetic_bc}")
-    print(f"  Re={solver.Re:.3g} Rm={solver.Rm:.3g} S(Lundquist)={solver.S:.3g} Ha={solver.Ha:.3g}")
+    print(
+        f"  B0={args.B0:g} nu={args.nu:g} eta_mag={args.eta_mag:g} "
+        f"Pm={solver.Pm:g} walls={args.magnetic_bc}"
+    )
+    print(
+        f"  Re={solver.Re:.3g} Rm={solver.Rm:.3g} S(Lundquist)={solver.S:.3g} Ha={solver.Ha:.3g}"
+    )
 
     if args.nonmodal:
         kz = args.kz if args.kz is not None else 3.0 / base.gap
-        rows = solver.nonmodal_growth(args.m, kz, parse_times(args.times),
-                                      n_modes=args.n_modes, energy=args.energy)
-        print(f"\nkz={kz:g}: MHD/MRI non-modal transient growth ({args.energy} energy):")
+        rows = solver.nonmodal_growth(
+            args.m,
+            kz,
+            parse_times(args.times),
+            n_modes=args.n_modes,
+            energy=args.energy,
+        )
+        print(
+            f"\nkz={kz:g}: MHD/MRI non-modal transient growth ({args.energy} energy):"
+        )
         print_transient_growth(rows)
         return 0
 

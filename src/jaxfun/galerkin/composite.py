@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 import jax
 import jax.numpy as jnp
@@ -15,6 +15,9 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import MeshKind, TestSpaceKind
 from jaxfun.utils.common import Domain, matmat, n
+
+if TYPE_CHECKING:
+    from jaxfun.galerkin.cartesianproductspace import CartesianProductSpace
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
@@ -40,10 +43,19 @@ class BoundaryConditions(dict):
 
     Args:
         bc: User dictionary (partial). Missing sides are filled.
-        domain: Physical domain (unused here, kept for future features).
+        domain: Physical domain.
 
     Attributes:
         left/right: Dicts of condition_code -> value.
+
+    Note:
+        Neumann boundary conditions are normalized to domain if input dict is
+        not already a BoundaryConditions instance. This ensures correct scaling
+        of Neumann BCs when using non-standard domains. Hence, if passing a
+        dict, the user can specify Neumann values in physical units and they
+        will be normalized appropriately. If passing a BoundaryConditions
+        instance, it is assumed that the values are already normalized (e.g.
+        if the instance was created with a non-standard domain).
     """
 
     def __init__(self, bc: dict, domain: Domain | None = None) -> None:
@@ -52,6 +64,13 @@ class BoundaryConditions(dict):
         bcs = {"left": {}, "right": {}}
         bcs.update(copy.deepcopy(bc))
         dict.__init__(self, bcs)
+        if not isinstance(bc, BoundaryConditions):  # Normalize if dict was passed in
+            df = 2 / (domain.upper - domain.lower)
+            for val in self.values():
+                for k, v in val.items():
+                    if k[0] == "N":
+                        nd = int(k[1:]) if len(k) > 1 else 1
+                        val[k] = v / df**nd
 
     def orderednames(self) -> list[str]:
         """Return ordered boundary condition codes (prefixed with L/R)."""
@@ -126,6 +145,7 @@ class Composite(OrthogonalSpace):
         stencil: Ordered dict of diagonal shift -> expression / scaling.
         S: Sparse (DiaMatrix) stencil matrix.
         ST: Pre-computed transpose of S for efficiency.
+        P: Sparse (DiaMatrix) representing S @ S.T.
         scaling: Scaling expression applied to user stencil.
     """
 
@@ -162,6 +182,8 @@ class Composite(OrthogonalSpace):
         self.stencil = {(si[0]): si[1] / scaling for si in sorted(stencil.items())}
         self.S: DiaMatrix = self.stencil_to_diamatrix()
         self.ST: DiaMatrix = self.S.T
+        self.P: DiaMatrix = self.S @ self.ST
+        self.P.lu_factor()  # Pre-factor to allow jitted solves
         self._mass_matrix: DiaMatrix = self._compute_mass_matrix()
         self._mass_matrix.lu_factor()
 
@@ -174,6 +196,12 @@ class Composite(OrthogonalSpace):
     def _evaluate(self, X: Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""
         return self.orthogonal._evaluate(X, self.to_orthogonal(c))
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def evaluate_mesh(
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
 
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:
@@ -254,7 +282,7 @@ class Composite(OrthogonalSpace):
     @jax.jit(static_argnums=0)
     def from_orthogonal(self, a: Array) -> Array:
         """Map underlying orthogonal coefficients -> composite coefficients."""
-        return a @ self.get_inverse_stencil()
+        return self.P.solve(self.S @ a)
 
     @overload
     def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
@@ -424,9 +452,10 @@ class BCGeneric(Composite):
         )
         S = get_bc_basis(bcs, self.orthogonal)
         self.orthogonal.N = S.shape[1]
+        self.orthogonal._num_dofs = S.shape[1]
         self.orthogonal._num_quad_points = num_quad_points
         self.S = DiaMatrix.from_dense(S.__array__().astype(float))
-        self.ST: DiaMatrix = self.S.T  # pre-computed transpose; avoids creating
+        self.ST: DiaMatrix = self.S.T
 
     @property
     def dim(self) -> int:
@@ -440,7 +469,12 @@ class BCGeneric(Composite):
 
     def bnd_vals(self) -> Array:
         """Return ordered boundary values vector."""
-        return jnp.array(self.bcs.orderedvals(), dtype=float)
+        return jnp.array(
+            [
+                complex(s) if sp.sympify(s).has(sp.I) else float(s)
+                for s in self.bcs.orderedvals()
+            ]
+        )
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> Array:
@@ -508,6 +542,8 @@ class DirectSum:
         self.dims = a.dims
         self.rank = a.rank
         self.domain = a.domain
+        self.leaf: CartesianProductSpace | None = None
+        self.global_index: int = 0
 
     @overload
     def __getitem__(self, i: Literal[0]) -> Composite: ...
@@ -538,9 +574,14 @@ class DirectSum:
         return self[1].bnd_vals()
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        """Return physical-space shape (number of quadrature points)."""
+        return (self.num_quad_points,)
+
+    @property
     def dim(self) -> int:
-        """Return total dimension (homogeneous + boundary)."""
-        return self[0].dim + self[1].dim
+        """Return dimension of unknown (homogeneous) part only."""
+        return self[0].dim
 
     @property
     def num_dofs(self) -> int:
@@ -567,6 +608,12 @@ class DirectSum:
     def evaluate(self, x: Array, c: Array) -> Array:
         """Evaluate direct-sum expansion at points x."""
         return self.orthogonal.evaluate(x, self.to_orthogonal(c))
+
+    @jax.jit(static_argnums=(0, 2, 3))
+    def evaluate_mesh(
+        self, c: Array, kind: MeshKind | str = MeshKind.QUADRATURE, N: int | None = None
+    ) -> Array:
+        return self.orthogonal.evaluate_mesh(self.to_orthogonal(c), kind=kind, N=N)
 
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:

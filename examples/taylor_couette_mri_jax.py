@@ -416,7 +416,7 @@ class TaylorCouetteMRIJax:
         if self.magnetic_bc == "conducting":
             Q = np.zeros((7 * n, 7 * n), dtype=complex)
             idx = {"ur": 0, "ut": 1, "uz": 2, "p": 3, "br": 4, "bt": 5, "bz": 6}
-            names = ([] if not want_kin else ["ur", "ut", "uz"])
+            names = [] if not want_kin else ["ur", "ut", "uz"]
             names += [] if not want_mag else ["br", "bt", "bz"]
             for name in names:
                 W = self._blk(self.tv[name], self.tr[name], [(r, 0)])
@@ -438,7 +438,7 @@ class TaylorCouetteMRIJax:
         tr = {name: TrialFunction(space) for name, space in spaces.items()}
         idx = {"ur": 0, "ut": 1, "uz": 2, "p": 3, "chi": 4, "bt": 5}
         Q = np.zeros((6 * n, 6 * n), dtype=complex)
-        names = ([] if not want_kin else ["ur", "ut", "uz"])
+        names = [] if not want_kin else ["ur", "ut", "uz"]
         names += [] if not want_mag else ["bt"]
         for name in names:
             W = self._blk(tv[name], tr[name], [(r, 0)])

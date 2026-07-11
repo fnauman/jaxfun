@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
-
 
 DNS_DIVERGENCE_KEYS: dict[str, tuple[str, ...]] = {
     "pcf_hydro_primitive_dns_v1": ("divergence_u",),
@@ -79,7 +79,11 @@ def canonicalize_scalars(
     """Map jaxfun/internal diagnostic names onto shenfun golden scalar names."""
 
     out: dict[str, Any] = {}
-    expected = set(expected_divergence_keys(geometry=geometry, physics=physics, artifact_id=artifact_id))
+    expected = set(
+        expected_divergence_keys(
+            geometry=geometry, physics=physics, artifact_id=artifact_id
+        )
+    )
     expected.update(
         key
         for key, candidates in CANONICAL_CANDIDATES.items()
@@ -114,7 +118,9 @@ def integral(values: Any, weights: Any = None) -> float:
 def trapezoid_weights(coordinate: Any) -> np.ndarray:
     x = np.asarray(coordinate, dtype=float)
     if x.ndim != 1 or x.size < 2:
-        raise ValueError("trapezoid_weights requires a 1-D coordinate with at least two points")
+        raise ValueError(
+            "trapezoid_weights requires a 1-D coordinate with at least two points"
+        )
     dx = np.diff(x)
     weights = np.empty_like(x, dtype=float)
     weights[0] = 0.5 * dx[0]
@@ -136,7 +142,9 @@ def magnetic_energy(magnetic_field: Any, weights: Any = None) -> float:
     return 0.5 * integral(density, weights)
 
 
-def total_energy(velocity: Any = None, magnetic_field: Any = None, weights: Any = None) -> float:
+def total_energy(
+    velocity: Any = None, magnetic_field: Any = None, weights: Any = None
+) -> float:
     total = 0.0
     if velocity is not None:
         total += kinetic_energy(velocity, weights)
@@ -154,17 +162,23 @@ def divergence_linf(divergence: Any) -> float:
     return float(np.max(np.abs(np.asarray(divergence))))
 
 
-def reynolds_stress(velocity: Any, pair: tuple[int, int] = (0, 1), weights: Any = None) -> float:
+def reynolds_stress(
+    velocity: Any, pair: tuple[int, int] = (0, 1), weights: Any = None
+) -> float:
     comps = as_components(velocity)
     return integral(np.real(comps[pair[0]] * np.conjugate(comps[pair[1]])), weights)
 
 
-def maxwell_stress(magnetic_field: Any, pair: tuple[int, int] = (0, 1), weights: Any = None) -> float:
+def maxwell_stress(
+    magnetic_field: Any, pair: tuple[int, int] = (0, 1), weights: Any = None
+) -> float:
     comps = as_components(magnetic_field)
     return -integral(np.real(comps[pair[0]] * np.conjugate(comps[pair[1]])), weights)
 
 
-def transport_alpha(reynolds: float, maxwell: float = 0.0, pressure: float = 1.0) -> float:
+def transport_alpha(
+    reynolds: float, maxwell: float = 0.0, pressure: float = 1.0
+) -> float:
     if pressure == 0:
         raise ValueError("pressure must be nonzero for alpha normalization")
     return float((reynolds + maxwell) / pressure)

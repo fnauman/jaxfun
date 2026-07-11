@@ -18,6 +18,7 @@ from jax import Array
 from examples.channelflow_kmm import KMMState
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 
+
 @dataclass(frozen=True)
 class MinimalSeedIteration:
     """One accepted or terminal step from the fixed-energy ascent loop."""
@@ -194,7 +195,9 @@ def minimal_seed_ascent(
         grad_norm_f = float(gradient_norm)
         energy_f = float(solver.perturbation_energy(current))
         if not (math.isfinite(gain_f) and math.isfinite(grad_norm_f)):
-            raise FloatingPointError("minimal-seed ascent produced nonfinite gain/gradient")
+            raise FloatingPointError(
+                "minimal-seed ascent produced nonfinite gain/gradient"
+            )
         if grad_norm_f <= tolerance:
             history.append(
                 MinimalSeedIteration(

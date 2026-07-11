@@ -68,9 +68,7 @@ def test_domain_required_keys_are_rejected_before_solver_setup():
     spec = json.loads((EXAMPLES / "channel_poiseuille_hydro_v1.json").read_text())
     spec["domain"].pop("z_period")
 
-    with pytest.raises(
-        ProblemSpecError, match="schema validation failed.*z_period"
-    ):
+    with pytest.raises(ProblemSpecError, match="schema validation failed.*z_period"):
         validate_spec(spec)
 
 
@@ -102,7 +100,9 @@ def test_unknown_jaxfun_oracle_is_rejected_before_solver_setup():
     spec["expected_oracle"] = {**spec["expected_oracle"], "type": "unwired_test"}
     spec["golden"] = {**spec["golden"], "artifact_id": spec["problem_id"]}
 
-    with pytest.raises(UnsupportedSpecError, match="not in the jaxfun implementation allowlist"):
+    with pytest.raises(
+        UnsupportedSpecError, match="not in the jaxfun implementation allowlist"
+    ):
         validate_spec(spec)
 
 

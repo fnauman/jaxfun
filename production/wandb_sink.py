@@ -15,6 +15,7 @@ Offline runs use ``WANDB_MODE=offline`` and a later ``wandb sync``.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 
@@ -89,12 +90,8 @@ class WandbSink:
         if not self.active:
             return
         payload = {k: v for k, v in row.items() if _is_scalarish(v)}
-        step = row.get("t")
-        try:
+        with contextlib.suppress(Exception):
             self._run.log(payload)  # type: ignore[union-attr]
-        except Exception:
-            pass
-        _ = step  # step is included in payload as "t"
 
     def log_summary(self, summary: dict[str, Any]) -> None:
         """Populate the run summary (status, class, growth, stresses, cost, ...)."""
@@ -113,10 +110,8 @@ class WandbSink:
             return
         self._closed = True
         if self._run is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._run.finish(exit_code=exit_code)
-            except Exception:
-                pass
 
     def __enter__(self) -> WandbSink:
         return self

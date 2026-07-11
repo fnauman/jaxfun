@@ -4,7 +4,6 @@ import pytest
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_mhd_jax import PlaneCouetteMHDJax
-from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
 from examples.pcf_minimal_seed_jax import (
     gain_and_projected_gradient,
     jax_complex_directional_derivative,
@@ -15,6 +14,7 @@ from examples.pcf_minimal_seed_jax import (
     tree_l2_norm,
     tree_scale,
 )
+from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
 from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
 
 

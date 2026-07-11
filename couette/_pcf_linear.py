@@ -5,10 +5,10 @@ wall-normal coordinate ``x`` with Fourier perturbations
 ``exp(s t + i ky y + i kz z)``.  It is intentionally small and dense because the
 demo use case is analysis and smoke testing, not production-scale DNS.
 """
+
 from __future__ import annotations
 
 import numpy as np
-
 from _linear_analysis import (
     FINITE_CAP,
     finite_eigensystem,
@@ -132,8 +132,18 @@ class PlaneCouetteLinear:
         )
 
     @classmethod
-    def shearpy(cls, nx=64, Re=1000.0, Rm=1000.0, shear_rate=1.0,
-                omega=2.0 / 3.0, by=0.0, bz=0.025, velocity_scale=1.0, **kw):
+    def shearpy(
+        cls,
+        nx=64,
+        Re=1000.0,
+        Rm=1000.0,
+        shear_rate=1.0,
+        omega=2.0 / 3.0,
+        by=0.0,
+        bz=0.025,
+        velocity_scale=1.0,
+        **kw,
+    ):
         return cls(
             nx=nx,
             nu=float(velocity_scale) / float(Re),
@@ -149,13 +159,21 @@ class PlaneCouetteLinear:
 
     def _blocks(self):
         if self.mhd:
-            return {"ux": 0, "uy": 1, "uz": 2, "p": 3,
-                    "bx": 4, "by": 5, "bz": 6, "phi": 7}
+            return {
+                "ux": 0,
+                "uy": 1,
+                "uz": 2,
+                "p": 3,
+                "bx": 4,
+                "by": 5,
+                "bz": 6,
+                "phi": 7,
+            }
         return {"ux": 0, "uy": 1, "uz": 2, "p": 3}
 
     def _put(self, mat, rb, cb, block):
         n = self.nx
-        mat[rb * n:(rb + 1) * n, cb * n:(cb + 1) * n] += block
+        mat[rb * n : (rb + 1) * n, cb * n : (cb + 1) * n] += block
 
     def _set_row(self, L, M, row, entries):
         L[row, :] = 0.0
@@ -190,8 +208,10 @@ class PlaneCouetteLinear:
             bx, by, bz = b["bx"], b["by"], b["bz"]
             for wall in (0, n - 1):
                 self._set_row(
-                    L, M, bx * n + wall,
-                    [(slice(bx * n, (bx + 1) * n), self.D[wall, :])]
+                    L,
+                    M,
+                    bx * n + wall,
+                    [(slice(bx * n, (bx + 1) * n), self.D[wall, :])],
                 )
                 self._set_row(L, M, by * n + wall, [(by * n + wall, 1.0)])
                 self._set_row(L, M, bz * n + wall, [(bz * n + wall, 1.0)])
@@ -201,12 +221,10 @@ class PlaneCouetteLinear:
         for wall in (0, n - 1):
             self._set_row(L, M, bx * n + wall, [(bx * n + wall, 1.0)])
             self._set_row(
-                L, M, by * n + wall,
-                [(slice(by * n, (by + 1) * n), self.D[wall, :])]
+                L, M, by * n + wall, [(slice(by * n, (by + 1) * n), self.D[wall, :])]
             )
             self._set_row(
-                L, M, bz * n + wall,
-                [(slice(bz * n, (bz + 1) * n), self.D[wall, :])]
+                L, M, bz * n + wall, [(slice(bz * n, (bz + 1) * n), self.D[wall, :])]
             )
 
     def assemble(self, ky, kz):
@@ -289,24 +307,27 @@ class PlaneCouetteLinear:
             names += ["bx", "by", "bz"]
         for name in names:
             blk = b[name]
-            Q[blk * n:(blk + 1) * n, blk * n:(blk + 1) * n] = W
+            Q[blk * n : (blk + 1) * n, blk * n : (blk + 1) * n] = W
         return Q
 
     def eigs(self, ky, kz, n_return=8, finite_cap=FINITE_CAP):
-        return finite_eigensystem(*self.assemble(ky, kz), finite_cap=finite_cap,
-                                  n_return=n_return)
+        return finite_eigensystem(
+            *self.assemble(ky, kz), finite_cap=finite_cap, n_return=n_return
+        )
 
     def growth_rate(self, ky, kz):
         w, _ = self.eigs(ky, kz, n_return=1)
         return float(w[0].real) if len(w) else float("nan")
 
-    def nonmodal_growth(self, ky, kz, times, n_modes=None, finite_cap=FINITE_CAP,
-                        energy="total"):
+    def nonmodal_growth(
+        self, ky, kz, times, n_modes=None, finite_cap=FINITE_CAP, energy="total"
+    ):
         """Optimal transient growth in the selected energy norm.
 
         ``energy`` is passed to :meth:`energy_matrix` (``'total'`` /
         ``'kinetic'`` / ``'magnetic'``).
         """
-        w, V = finite_eigensystem(*self.assemble(ky, kz), finite_cap=finite_cap,
-                                  n_return=n_modes)
+        w, V = finite_eigensystem(
+            *self.assemble(ky, kz), finite_cap=finite_cap, n_return=n_modes
+        )
         return transient_growth_from_eigs(w, V, self.energy_matrix(energy), times)

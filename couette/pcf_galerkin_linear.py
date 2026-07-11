@@ -5,6 +5,7 @@ existing dense collocation operator in ``_pcf_linear.py``; instead it assembles 
 radial Galerkin generalized eigenproblem with the same primitive variables used
 by the Taylor-Couette linear solvers.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,6 @@ import sys
 
 import numpy as np
 import sympy as sp
-
 from shenfun import Dx, FunctionSpace, TestFunction, TrialFunction, inner
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -101,8 +101,9 @@ class PlaneCouetteGalerkinLinear:
         self.tr = {name: TrialFunction(space) for name, space in spaces.items()}
 
     @classmethod
-    def couette(cls, N=64, Re=1000.0, Rm=None, half_gap=1.0, U_wall=1.0,
-                mhd=False, **kw):
+    def couette(
+        cls, N=64, Re=1000.0, Rm=None, half_gap=1.0, U_wall=1.0, mhd=False, **kw
+    ):
         Rm = Re if Rm is None else Rm
         domain = (-float(half_gap), float(half_gap))
         return cls(
@@ -117,9 +118,18 @@ class PlaneCouetteGalerkinLinear:
         )
 
     @classmethod
-    def shearbox(cls, N=64, Re=1000.0, Rm=None, half_gap=1.0,
-                 shear_rate=1.0, omega=2.0 / 3.0, by=0.0, bz=0.0,
-                 **kw):
+    def shearbox(
+        cls,
+        N=64,
+        Re=1000.0,
+        Rm=None,
+        half_gap=1.0,
+        shear_rate=1.0,
+        omega=2.0 / 3.0,
+        by=0.0,
+        bz=0.0,
+        **kw,
+    ):
         Rm = Re if Rm is None else Rm
         velocity_scale = abs(float(shear_rate)) * float(half_gap)
         return cls(
@@ -138,8 +148,16 @@ class PlaneCouetteGalerkinLinear:
 
     def _blocks(self):
         if self.mhd:
-            return {"ux": 0, "uy": 1, "uz": 2, "p": 3,
-                    "bx": 4, "by": 5, "bz": 6, "phi": 7}
+            return {
+                "ux": 0,
+                "uy": 1,
+                "uz": 2,
+                "p": 3,
+                "bx": 4,
+                "by": 5,
+                "bz": 6,
+                "phi": 7,
+            }
         return {"ux": 0, "uy": 1, "uz": 2, "p": 3}
 
     def _blk(self, test_name, trial_name, terms):
@@ -162,7 +180,7 @@ class PlaneCouetteGalerkinLinear:
 
     def _put(self, mat, rb, cb, block):
         n = self.n
-        mat[rb * n:(rb + 1) * n, cb * n:(cb + 1) * n] += block
+        mat[rb * n : (rb + 1) * n, cb * n : (cb + 1) * n] += block
 
     def assemble_parts(self, ky, kz):
         """Return ``(L0, Lnu, Leta, M)`` with ``L = L0 + nu*Lnu + eta*Leta``.
@@ -202,11 +220,18 @@ class PlaneCouetteGalerkinLinear:
         self._put(L0, b["ux"], b["p"], -self._blk("ux", "p", [(None, 1)]))
         self._put(L0, b["uy"], b["p"], -self._blk("uy", "p", [(grad_y, 0)]))
         self._put(L0, b["uz"], b["p"], -self._blk("uz", "p", [(grad_z, 0)]))
-        self._put(L0, b["ux"], b["uy"],
-                  self._blk("ux", "uy", [(sp.Float(2.0 * self.omega), 0)]))
-        self._put(L0, b["uy"], b["ux"],
-                  self._blk("uy", "ux",
-                            [(sp.Float(-self.Uprime - 2.0 * self.omega), 0)]))
+        self._put(
+            L0,
+            b["ux"],
+            b["uy"],
+            self._blk("ux", "uy", [(sp.Float(2.0 * self.omega), 0)]),
+        )
+        self._put(
+            L0,
+            b["uy"],
+            b["ux"],
+            self._blk("uy", "ux", [(sp.Float(-self.Uprime - 2.0 * self.omega), 0)]),
+        )
 
         self._put(L0, b["p"], b["ux"], self._blk("p", "ux", [(None, 1)]))
         self._put(L0, b["p"], b["uy"], self._blk("p", "uy", [(grad_y, 0)]))
@@ -216,24 +241,28 @@ class PlaneCouetteGalerkinLinear:
             kB = ky * self.by + kz * self.bz
             ikB = sp.I * sp.Float(kB)
             for u_name, b_name in (("ux", "bx"), ("uy", "by"), ("uz", "bz")):
-                self._put(L0, b[u_name], b[b_name],
-                          self._blk(u_name, b_name, [(ikB, 0)]))
-                self._put(L0, b[b_name], b[u_name],
-                          self._blk(b_name, u_name, [(ikB, 0)]))
-                self._put(L0, b[b_name], b[b_name],
-                          self._blk(b_name, b_name, [(adv, 0)]))
-                self._put(Leta, b[b_name], b[b_name],
-                          self._blk(b_name, b_name, lap))
-                self._put(M, b[b_name], b[b_name],
-                          self._blk(b_name, b_name, [(None, 0)]))
-            self._put(L0, b["by"], b["bx"],
-                      self._blk("by", "bx", [(sp.Float(self.Uprime), 0)]))
-            self._put(L0, b["bx"], b["phi"],
-                      -self._blk("bx", "phi", [(None, 1)]))
-            self._put(L0, b["by"], b["phi"],
-                      -self._blk("by", "phi", [(grad_y, 0)]))
-            self._put(L0, b["bz"], b["phi"],
-                      -self._blk("bz", "phi", [(grad_z, 0)]))
+                self._put(
+                    L0, b[u_name], b[b_name], self._blk(u_name, b_name, [(ikB, 0)])
+                )
+                self._put(
+                    L0, b[b_name], b[u_name], self._blk(b_name, u_name, [(ikB, 0)])
+                )
+                self._put(
+                    L0, b[b_name], b[b_name], self._blk(b_name, b_name, [(adv, 0)])
+                )
+                self._put(Leta, b[b_name], b[b_name], self._blk(b_name, b_name, lap))
+                self._put(
+                    M, b[b_name], b[b_name], self._blk(b_name, b_name, [(None, 0)])
+                )
+            self._put(
+                L0,
+                b["by"],
+                b["bx"],
+                self._blk("by", "bx", [(sp.Float(self.Uprime), 0)]),
+            )
+            self._put(L0, b["bx"], b["phi"], -self._blk("bx", "phi", [(None, 1)]))
+            self._put(L0, b["by"], b["phi"], -self._blk("by", "phi", [(grad_y, 0)]))
+            self._put(L0, b["bz"], b["phi"], -self._blk("bz", "phi", [(grad_z, 0)]))
             self._put(L0, b["phi"], b["bx"], self._blk("phi", "bx", [(None, 1)]))
             self._put(L0, b["phi"], b["by"], self._blk("phi", "by", [(grad_y, 0)]))
             self._put(L0, b["phi"], b["bz"], self._blk("phi", "bz", [(grad_z, 0)]))
@@ -260,21 +289,24 @@ class PlaneCouetteGalerkinLinear:
             W = self._blk(name, name, [(None, 0)])
             W = 0.5 * (W + W.conj().T)
             i = b[name]
-            Q[i * self.n:(i + 1) * self.n, i * self.n:(i + 1) * self.n] = W
+            Q[i * self.n : (i + 1) * self.n, i * self.n : (i + 1) * self.n] = W
         return Q
 
     def eigs(self, ky, kz, n_return=8, finite_cap=FINITE_CAP):
-        return finite_eigensystem(*self.assemble(ky, kz), finite_cap=finite_cap,
-                                  n_return=n_return)
+        return finite_eigensystem(
+            *self.assemble(ky, kz), finite_cap=finite_cap, n_return=n_return
+        )
 
     def growth_rate(self, ky, kz):
         w, _ = self.eigs(ky, kz, n_return=1)
         return float(w[0].real) if len(w) else float("nan")
 
-    def nonmodal_growth(self, ky, kz, times, n_modes=None, finite_cap=FINITE_CAP,
-                        energy="total"):
-        w, V = finite_eigensystem(*self.assemble(ky, kz), finite_cap=finite_cap,
-                                  n_return=n_modes)
+    def nonmodal_growth(
+        self, ky, kz, times, n_modes=None, finite_cap=FINITE_CAP, energy="total"
+    ):
+        w, V = finite_eigensystem(
+            *self.assemble(ky, kz), finite_cap=finite_cap, n_return=n_modes
+        )
         return transient_growth_from_eigs(w, V, self.energy_matrix(energy), times)
 
 
@@ -291,12 +323,14 @@ def _parse_args():
     p.add_argument("--bz", type=float, default=0.0)
     p.add_argument("--omega", type=float, default=0.0)
     p.add_argument("--Uprime", type=float, default=1.0)
-    p.add_argument("--magnetic-bc", choices=("conducting", "dirichlet"),
-                   default="conducting")
+    p.add_argument(
+        "--magnetic-bc", choices=("conducting", "dirichlet"), default="conducting"
+    )
     p.add_argument("--nonmodal", action="store_true")
     p.add_argument("--times", default="1")
-    p.add_argument("--energy", choices=("total", "kinetic", "magnetic"),
-                   default="total")
+    p.add_argument(
+        "--energy", choices=("total", "kinetic", "magnetic"), default="total"
+    )
     return p.parse_args()
 
 
@@ -316,8 +350,9 @@ def main():
         magnetic_bc=args.magnetic_bc,
     )
     if args.nonmodal:
-        rows = solver.nonmodal_growth(args.ky, args.kz, parse_times(args.times),
-                                      energy=args.energy)
+        rows = solver.nonmodal_growth(
+            args.ky, args.kz, parse_times(args.times), energy=args.energy
+        )
         print_transient_growth(rows, "PCF Galerkin non-modal growth")
     else:
         w, _ = solver.eigs(args.ky, args.kz, n_return=8)
@@ -326,4 +361,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

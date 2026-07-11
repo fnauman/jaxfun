@@ -1,4 +1,5 @@
 """Shared dense linear-analysis helpers for demo eigen/non-modal variants."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -19,7 +20,9 @@ FINITE_CAP = 1.0e8
 def parse_times(value):
     """Parse comma-separated times, or return a 1D float array unchanged."""
     if isinstance(value, str):
-        times = [float(item) for item in value.replace(";", ",").split(",") if item.strip()]
+        times = [
+            float(item) for item in value.replace(";", ",").split(",") if item.strip()
+        ]
     else:
         times = list(value)
     if not times:
@@ -71,7 +74,7 @@ def transient_growth_from_eigs(evals, evecs, metric, times, metric_rtol=1.0e-10)
     sqrt_d = np.sqrt(d)
     inv_sqrt_d = 1.0 / sqrt_d
 
-    left = sqrt_d[:, None] * U.conj().T          # fixed across times; build once
+    left = sqrt_d[:, None] * U.conj().T  # fixed across times; build once
     out = []
     for t in times:
         exp_diag = np.exp(evals * float(t))
@@ -117,11 +120,14 @@ def match_eigenvalues(reference, candidates):
     out = [{"ref": complex(z), "match": nan, "delta": nan} for z in ref]
     if ref.size == 0 or cand.size == 0:
         return out
-    cost = np.abs(ref[:, None] - cand[None, :])      # (n_ref, n_cand)
-    rows, cols = linear_sum_assignment(cost)         # one-to-one min-cost match
+    cost = np.abs(ref[:, None] - cand[None, :])  # (n_ref, n_cand)
+    rows, cols = linear_sum_assignment(cost)  # one-to-one min-cost match
     for r, c in zip(rows, cols):
-        out[int(r)] = {"ref": complex(ref[r]), "match": complex(cand[c]),
-                       "delta": complex(cand[c] - ref[r])}
+        out[int(r)] = {
+            "ref": complex(ref[r]),
+            "match": complex(cand[c]),
+            "delta": complex(cand[c] - ref[r]),
+        }
     return out
 
 
@@ -138,23 +144,29 @@ def imex_tableau(name):
     elif name == "IMEXRK222":
         gamma = (2 - np.sqrt(2)) / 2
         delta = 1 - 1 / (2 * gamma)
-        a = np.array([[0, 0, 0],
-                      [0, gamma, 0],
-                      [0, 1 - gamma, gamma]], dtype=float)
-        b = np.array([[0, 0, 0],
-                      [gamma, 0, 0],
-                      [delta, 1 - delta, 0]], dtype=float)
+        a = np.array([[0, 0, 0], [0, gamma, 0], [0, 1 - gamma, gamma]], dtype=float)
+        b = np.array([[0, 0, 0], [gamma, 0, 0], [delta, 1 - delta, 0]], dtype=float)
     elif name == "IMEXRK443":
-        a = np.array([[0, 0, 0, 0, 0],
-                      [0, 1 / 2, 0, 0, 0],
-                      [0, 1 / 6, 1 / 2, 0, 0],
-                      [0, -1 / 2, 1 / 2, 1 / 2, 0],
-                      [0, 3 / 2, -3 / 2, 1 / 2, 1 / 2]], dtype=float)
-        b = np.array([[0, 0, 0, 0, 0],
-                      [1 / 2, 0, 0, 0, 0],
-                      [11 / 18, 1 / 18, 0, 0, 0],
-                      [5 / 6, -5 / 6, 1 / 2, 0, 0],
-                      [1 / 4, 7 / 4, 3 / 4, -7 / 4, 0]], dtype=float)
+        a = np.array(
+            [
+                [0, 0, 0, 0, 0],
+                [0, 1 / 2, 0, 0, 0],
+                [0, 1 / 6, 1 / 2, 0, 0],
+                [0, -1 / 2, 1 / 2, 1 / 2, 0],
+                [0, 3 / 2, -3 / 2, 1 / 2, 1 / 2],
+            ],
+            dtype=float,
+        )
+        b = np.array(
+            [
+                [0, 0, 0, 0, 0],
+                [1 / 2, 0, 0, 0, 0],
+                [11 / 18, 1 / 18, 0, 0, 0],
+                [5 / 6, -5 / 6, 1 / 2, 0, 0],
+                [1 / 4, 7 / 4, 3 / 4, -7 / 4, 0],
+            ],
+            dtype=float,
+        )
     else:
         raise ValueError("scheme must be IMEXRK111, IMEXRK222, or IMEXRK443")
     return a, b

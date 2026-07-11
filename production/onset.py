@@ -21,8 +21,9 @@ object exposing ``growth_rate(ky, kz) -> float``.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,7 @@ def lattice_wavenumbers(
 def growth_over_lattice(
     op: Any, *, n_y: int, n_z: int, Ly: float, Lz: float, include_ky_zero: bool = True
 ) -> list[LatticeMode]:
-    """Evaluate ``op.growth_rate(k_y, k_z)`` over the lattice, sorted most-unstable first."""
+    """Evaluate growth over the lattice, sorted most-unstable first."""
 
     out = [
         LatticeMode(n, m, ky, kz, float(op.growth_rate(ky, kz)))

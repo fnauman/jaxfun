@@ -11,7 +11,7 @@ from jaxfun.la.matrixprotocol import BaseMatrix, _CacheBox
 if TYPE_CHECKING:
     from jaxfun.galerkin import JAXFunction
     from jaxfun.la import DiaMatrix
-    from jaxfun.la.pinned import PinnedSystem
+    from jaxfun.la.pinned import PinnedMatrix
 
 Array = jax.Array
 
@@ -117,6 +117,24 @@ class Matrix(BaseMatrix):
         y_moved = y2d.reshape((n,) + rest_shape)
         return jnp.moveaxis(y_moved, 0, axis)
 
+    def rmatvec(self, x: Array, axis: int = 0) -> Array:
+        """Multiply ``x`` along ``axis`` by the transpose ``A^T``.
+
+        Args:
+            x:    Input array.  ``x.shape[axis]`` must equal ``n``.
+            axis: The axis of ``x`` along which the matrix acts.  The output
+                  has the same shape as ``x`` except ``shape[axis]`` becomes
+                  ``m``.
+
+        Examples::
+
+            A.rmatvec(x)  # x shape (n,)      → (m,)
+            A.rmatvec(X, axis=0)  # X shape (n, k)    → (m, k)
+            A.rmatvec(X, axis=1)  # X shape (k, n)    → (k, m)
+            A.rmatvec(T, axis=2)  # T shape (a, b, n) → (a, b, m)
+        """
+        return self.T.matvec(x, axis=axis)
+
     def lu_factor(self) -> LUFactors:
         """Compute the LU factorisation of this (square) matrix.
 
@@ -215,6 +233,8 @@ class Matrix(BaseMatrix):
 
     def diagonal_or_none(self) -> Array | None:
         """Return the main diagonal only when this matrix is purely diagonal."""
+        from jaxfun.utils import ulp
+
         cached: _DiagonalCache | None = getattr(self, "_diagonal_cache", None)
         if cached is not None:
             return cached.value
@@ -222,7 +242,7 @@ class Matrix(BaseMatrix):
         if n != m:
             return None
         diag = jnp.diag(self.data)
-        if bool(jnp.allclose(self.data, jnp.diag(diag), atol=1e-12)):
+        if bool(jnp.allclose(self.data, jnp.diag(diag), atol=ulp(1000))):
             object.__setattr__(self, "_diagonal_cache", _CacheBox(diag))
             return diag
         return None
@@ -318,7 +338,7 @@ class Matrix(BaseMatrix):
     def __len__(self) -> int:
         return min(self.shape)
 
-    def __add__(self, other) -> Matrix:
+    def __add__(self, other: DiaMatrix | Matrix) -> Matrix:
         from jaxfun.la import DiaMatrix
 
         if isinstance(other, Matrix):
@@ -327,6 +347,28 @@ class Matrix(BaseMatrix):
         if isinstance(other, DiaMatrix):
             self._check_same_shape(other)
             return Matrix(self.data + other.todense())
+        return NotImplemented
+
+    def __sub__(self, other: DiaMatrix | Matrix) -> Matrix:
+        from jaxfun.la import DiaMatrix
+
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(self.data - other.data)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            return Matrix(self.data - other.todense())
+        return NotImplemented
+
+    def __rsub__(self, other: DiaMatrix | Matrix) -> Matrix:
+        from jaxfun.la import DiaMatrix
+
+        if isinstance(other, Matrix):
+            self._check_same_shape(other)
+            return Matrix(other.data - self.data)
+        if isinstance(other, DiaMatrix):
+            self._check_same_shape(other)
+            return Matrix(other.todense() - self.data)
         return NotImplemented
 
     def __getitem__(self, idx: int | slice | tuple | Array) -> Array:
@@ -402,14 +444,14 @@ class Matrix(BaseMatrix):
 
     def pin(
         self, constraints: dict[int, float] | tuple[tuple[int, float], ...]
-    ) -> PinnedSystem:
+    ) -> PinnedMatrix:
         """Return a :class:`PinnedSystem` with the given DOFs fixed."""
-        from jaxfun.la.pinned import PinnedSystem
+        from jaxfun.la.pinned import PinnedMatrix
 
         if isinstance(constraints, dict):
             constraints = tuple(sorted(constraints.items()))
         norm_constraints, data = self._pin(constraints)
-        return PinnedSystem(
+        return PinnedMatrix(
             Matrix(data), tuple((int(i), float(j)) for i, j in norm_constraints)
         )
 

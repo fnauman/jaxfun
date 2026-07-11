@@ -1,10 +1,11 @@
 """FJ-09: pseudo-vacuum magnetic wall family for the primitive PCF-MRI DNS.
 
-Pseudo-vacuum enforces ``b_y = b_z = 0`` at the walls (Dirichlet) with the compatible
-normal condition ``d_x b_x = 0`` (Neumann), the physically distinct alternative to the
-perfect-conductor family (``b_x = 0``, ``d_x b_y = d_x b_z = 0``). These tests verify the
-basis actually imposes the boundary condition, keeps the field solenoidal, and conserves
-finiteness under a nonlinear step.
+Pseudo-vacuum enforces ``b_y = b_z = 0`` at the walls (Dirichlet) with the
+compatible normal condition ``d_x b_x = 0`` (Neumann), the physically distinct
+alternative to the perfect-conductor family (``b_x = 0``,
+``d_x b_y = d_x b_z = 0``). These tests verify the basis actually imposes the
+boundary condition, keeps the field solenoidal, and conserves finiteness under
+a nonlinear step.
 """
 
 from __future__ import annotations
@@ -39,8 +40,18 @@ def test_magnetic_bc_canonicalization():
 
 def _stepped(magnetic_bc):
     solver = PCFMRIDNSJax(
-        S=1.0, omega=2.0 / 3.0, B0=0.05, nu=2e-2, eta_mag=2e-2,
-        Nx=16, Ny=4, Nz=8, Ly=4.0, Lz=1.0, dt=1e-3, dealias=1.0,
+        S=1.0,
+        omega=2.0 / 3.0,
+        B0=0.05,
+        nu=2e-2,
+        eta_mag=2e-2,
+        Nx=16,
+        Ny=4,
+        Nz=8,
+        Ly=4.0,
+        Lz=1.0,
+        dt=1e-3,
+        dealias=1.0,
         magnetic_bc=magnetic_bc,
     )
     state = _seed_velocity_state(solver)

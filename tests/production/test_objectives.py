@@ -15,9 +15,9 @@ from examples.pcf_minimal_seed_jax import (
 from production.objectives import (
     _domain_weights,
     final_energy_objective,
-    maxwell_stress_objective,
     finite_difference_parameter_sensitivity,
     growth_rate_proxy_objective,
+    maxwell_stress_objective,
     minimal_seed_gain_objective,
     minimal_seed_value_and_projected_gradient,
     reynolds_stress_objective,

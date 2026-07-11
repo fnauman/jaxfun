@@ -46,8 +46,14 @@ def _vp_spec(**groups):
         },
         "domain": {"x": [-1.0, 1.0], "y_period": 4.0, "z_period": 1.0},
         "nondimensional_groups": {
-            "S": 1.0, "Omega": 2.0 / 3.0, "nu": 2e-2, "eta_mag": 2e-2,
-            "Re": 50.0, "Rm": 50.0, "Pm": 1.0, "B0": 0.05,
+            "S": 1.0,
+            "Omega": 2.0 / 3.0,
+            "nu": 2e-2,
+            "eta_mag": 2e-2,
+            "Re": 50.0,
+            "Rm": 50.0,
+            "Pm": 1.0,
+            "B0": 0.05,
         },
         "time": {"integrator": "IMEXRK222", "dt": 1e-3, "final_time": 0.01},
         "resolution": {"Nx": 17, "Ny": 8, "Nz": 16, "family": "L"},
@@ -59,7 +65,9 @@ def _vp_spec(**groups):
         },
     }
     spec["nondimensional_groups"].update(groups)
-    spec["forcing"]["B0"] = spec["nondimensional_groups"]["B0"]  # keep sources consistent
+    spec["forcing"]["B0"] = spec["nondimensional_groups"][
+        "B0"
+    ]  # keep sources consistent
     return spec
 
 
@@ -70,7 +78,13 @@ def test_vector_potential_oracle_is_solenoidal_by_construction():
     assert sc["representation"] == "vector_potential"
     # B = curl A -> div B = 0 to roundoff (the invariant the primitive path lacks)
     assert sc["divergence_b_l2"] < 1e-8
-    for key in ("kinetic_energy", "magnetic_energy", "total_stress", "alpha_Sh", "growth_rate"):
+    for key in (
+        "kinetic_energy",
+        "magnetic_energy",
+        "total_stress",
+        "alpha_Sh",
+        "growth_rate",
+    ):
         assert key in sc
     assert len(out["time_series"]) >= 2
 
@@ -92,9 +106,14 @@ def test_vector_potential_emits_flux_diagnostics():
     out = run_supported_spec(_vp_spec(), steps=3)
     sc = out["scalars"]
     for key in (
-        "mean_bx", "mean_by", "mean_bz",
-        "mag_energy_mean", "mag_energy_fluct",
-        "flux_drift_bx", "flux_drift_by", "flux_drift_bz",
+        "mean_bx",
+        "mean_by",
+        "mean_bz",
+        "mag_energy_mean",
+        "mag_energy_fluct",
+        "flux_drift_bx",
+        "flux_drift_by",
+        "flux_drift_bz",
     ):
         assert key in sc
 

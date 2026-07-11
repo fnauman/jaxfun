@@ -65,9 +65,7 @@ def cnab2_rhs(
     The returned tree is ``explicit_linear - N_ab`` where ``N_ab`` is the
     first-step IMEX-Euler nonlinear term or the AB2 extrapolation.
     """
-    nonlinear = ab2_extrapolate(
-        nonlinear_current, nonlinear_previous, have_previous
-    )
+    nonlinear = ab2_extrapolate(nonlinear_current, nonlinear_previous, have_previous)
     return jax.tree.map(lambda rhs, n: rhs - n, explicit_linear, nonlinear)
 
 

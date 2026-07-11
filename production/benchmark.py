@@ -17,8 +17,9 @@ measurements and a fitted cost model; it does not select a solver.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -193,7 +194,8 @@ def _solver_and_seed_builders(spec: dict[str, Any]):
         return (lambda: _primitive_solver_from_spec(spec)), seed
     raise ValueError(
         f"no benchmark solver factory for {spec.get('problem_id')!r} "
-        f"(geometry={geometry!r}, physics={physics!r}, representation={representation!r})"
+        f"(geometry={geometry!r}, physics={physics!r}, "
+        f"representation={representation!r})"
     )
 
 
@@ -297,9 +299,7 @@ def measure_spec(
         if not held:
             raise ValueError(f"holdout tier {holdout_tier!r} was not measured")
         if len(fit_rows) < 2:
-            raise ValueError(
-                "held-out validation needs >= 2 non-holdout tiers to fit"
-            )
+            raise ValueError("held-out validation needs >= 2 non-holdout tiers to fit")
         held_row = held[0]
         held_model = fit_cost_model(
             [m["dof"] for m in fit_rows], [m["warm_step_s"] for m in fit_rows]

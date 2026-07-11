@@ -70,7 +70,7 @@ def test_forward_backward_2d_spmd(space0, space1) -> None:
 )
 def test_scalar_product_2d_spmd(space0, space1) -> None:
     T = TensorProduct(space0(8), space1(8))
-    u = jax.device_put(jnp.ones(T.shape()), physical_sharding)
+    u = jax.device_put(jnp.ones(T.shape), physical_sharding)
     uh = T.scalar_product(u)
     assert uh.sharding == spectral_sharding
 
@@ -109,7 +109,7 @@ def test_forward_backward_3d_spmd(space0, space1, space2) -> None:
 )
 def test_scalar_product_3d_spmd(space0, space1, space2) -> None:
     T = TensorProduct(space0(8), space1(8), space2(8))
-    u = jax.device_put(jnp.ones(T.shape()), physical_sharding)
+    u = jax.device_put(jnp.ones(T.shape), physical_sharding)
     uh = T.scalar_product(u)
     assert uh.sharding == spectral_sharding
 
@@ -123,13 +123,13 @@ def test_backward_primitive_tps_2d(domain):
     f = sp.sin(x) * sp.cos(y)
     uf = JAXFunction(f, T)
     du = JAXFunction(sp.diff(f, x, y), T)
-    df = T.backward_primitive(uf.array, (1, 1))
+    df = T.backward_primitive(uf.get_array(), (1, 1))
     error = jnp.linalg.norm(df - du.backward())
 
     assert error < jnp.sqrt(ulp(100))
     if jax.config.jax_enable_x64:  # ty:ignore[unresolved-attribute]
         du = JAXFunction(sp.diff(f, x, 2, y, 1), T)
-        df = T.backward_primitive(uf.array, (2, 1))
+        df = T.backward_primitive(uf.get_array(), (2, 1))
         error = jnp.linalg.norm(df - du.backward())
         assert error < jnp.sqrt(ulp(100)), error
 
@@ -144,11 +144,11 @@ def test_backward_primitive_tps_3d(domain):
         f = sp.sin(x) * sp.cos(y) * sp.sin(z)
         uf = JAXFunction(f, T)
         du = JAXFunction(sp.diff(f, x, y, z), T)
-        df = T.backward_primitive(uf.array, (1, 1, 1))
+        df = T.backward_primitive(uf.get_array(), (1, 1, 1))
         error = jnp.linalg.norm(df - du.backward())
 
         assert error < jnp.sqrt(ulp(100))
         du = JAXFunction(sp.diff(f, x, 2, y, 1, z, 1), T)
-        df = T.backward_primitive(uf.array, (2, 1, 1))
+        df = T.backward_primitive(uf.get_array(), (2, 1, 1))
         error = jnp.linalg.norm(df - du.backward())
         assert error < jnp.sqrt(ulp(100)), error

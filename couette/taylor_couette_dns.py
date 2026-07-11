@@ -47,6 +47,7 @@ so incompressibility is enforced exactly (no fractional-step splitting error).
 The full 3D solver (azimuthal Fourier modes ``m != 0``) is a separate, later
 layer; this module is the axisymmetric first step.
 """
+
 from __future__ import annotations
 
 from _demo_utils import default_thread_cap
@@ -57,11 +58,22 @@ import argparse
 import math
 
 import numpy as np
-
-from shenfun import (FunctionSpace, TensorProductSpace, CompositeSpace,
-                     BlockMatrix, TrialFunction, TestFunction, inner, Dx,
-                     Array, Function, Project, comm, la, project)
-
+from shenfun import (
+    Array,
+    BlockMatrix,
+    CompositeSpace,
+    Dx,
+    Function,
+    FunctionSpace,
+    Project,
+    TensorProductSpace,
+    TestFunction,
+    TrialFunction,
+    comm,
+    inner,
+    la,
+    project,
+)
 from taylor_couette_linear import CircularCouette
 
 
@@ -85,7 +97,8 @@ def _require_resolved_m(m, Ntheta):
         raise ValueError(
             f"azimuthal mode |m|={abs(m)} is unresolved by Ntheta={Ntheta}: a real "
             f"m-mode needs the +/-m Fourier modes distinct and below Nyquist "
-            f"(2|m| < Ntheta).  Use Ntheta >= {2 * abs(m) + 1} or a smaller |m|.")
+            f"(2|m| < Ntheta).  Use Ntheta >= {2 * abs(m) + 1} or a smaller |m|."
+        )
 
 
 class AxisymmetricTCDNS:
@@ -110,8 +123,17 @@ class AxisymmetricTCDNS:
         (``1.0`` disables padding).
     """
 
-    def __init__(self, base: CircularCouette, nu=1.0e-2, Nr=48, Nz=32,
-                 Lz=None, dt=2.0e-3, family="L", dealias=1.5):
+    def __init__(
+        self,
+        base: CircularCouette,
+        nu=1.0e-2,
+        Nr=48,
+        Nz=32,
+        Lz=None,
+        dt=2.0e-3,
+        family="L",
+        dealias=1.5,
+    ):
         self.base = base
         self.nu = float(nu)
         self.Nr = int(Nr)
@@ -125,20 +147,21 @@ class AxisymmetricTCDNS:
 
         # ---- spaces -------------------------------------------------------
         self.F = FunctionSpace(self.Nz, "Fourier", dtype="d", domain=(0, self.Lz))
-        self.SD = FunctionSpace(self.Nr, family, bc=(0, 0), domain=dom)   # velocity
-        self.S0 = FunctionSpace(self.Nr, family, domain=dom)             # orthogonal
-        self.SP = FunctionSpace(self.Nr, family, domain=dom)             # pressure
+        self.SD = FunctionSpace(self.Nr, family, bc=(0, 0), domain=dom)  # velocity
+        self.S0 = FunctionSpace(self.Nr, family, domain=dom)  # orthogonal
+        self.SP = FunctionSpace(self.Nr, family, domain=dom)  # pressure
         self.SP.slice = lambda: slice(0, self.Nr - 2)
 
         self.TD = TensorProductSpace(comm, (self.F, self.SD), axes=(1, 0))
         self.T0 = TensorProductSpace(comm, (self.F, self.S0), axes=(1, 0))
-        self.TP = TensorProductSpace(comm, (self.F, self.SP), axes=(1, 0),
-                                     modify_spaces_inplace=True)
+        self.TP = TensorProductSpace(
+            comm, (self.F, self.SP), axes=(1, 0), modify_spaces_inplace=True
+        )
 
-        self.VV = CompositeSpace([self.TD, self.TD, self.TD])             # velocity
-        self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP])    # +pressure
+        self.VV = CompositeSpace([self.TD, self.TD, self.TD])  # velocity
+        self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP])  # +pressure
 
-        self.r = self.TD.coors.psi[1]                 # radial sympy symbol
+        self.r = self.TD.coors.psi[1]  # radial sympy symbol
         X = self.T0.local_mesh(True)
         self.rphys = X[1]
         self.zphys = X[0]
@@ -158,19 +181,21 @@ class AxisymmetricTCDNS:
         self._build_operators()
 
         # ---- fields -------------------------------------------------------
-        self.u_hat = Function(self.VV)        # (u_r, u_th, u_z) coefficients
+        self.u_hat = Function(self.VV)  # (u_r, u_th, u_z) coefficients
         self.p_hat = Function(self.TP)
         self.rhs = Function(self.VQ)
         self.sol = Function(self.VQ)
-        self.N_hat = Function(self.VV)         # inner(v, N^n)
-        self.N_old = Function(self.VV)         # inner(v, N^{n-1})
+        self.N_hat = Function(self.VV)  # inner(v, N^n)
+        self.N_old = Function(self.VV)  # inner(v, N^{n-1})
         self._have_old = False
         self.vts = TestFunction(self.TD)
 
         if comm.Get_rank() == 0:
             print(f"AxisymmetricTCDNS: {base.describe()}")
-            print(f"  nu={self.nu:g} Re={self.Re:.3f}  Nr={self.Nr} Nz={self.Nz} "
-                  f"Lz={self.Lz:.4f} dt={self.dt:g} family={family} dealias={self.dealias:g}")
+            print(
+                f"  nu={self.nu:g} Re={self.Re:.3f}  Nr={self.Nr} Nz={self.Nz} "
+                f"Lz={self.Lz:.4f} dt={self.dt:g} family={family} dealias={self.dealias:g}"
+            )
 
     # ------------------------------------------------------------------
     # operator assembly
@@ -187,7 +212,7 @@ class AxisymmetricTCDNS:
         # IMPORTANT: build Omega(r) in this space's radial symbol ``self.r`` (axis
         # 1 = ``y``).  base.Omega_sym is written in the linear solver's symbol
         # ``x``, which in this 2D space is the *axial* coordinate -> wrong axis.
-        Om = self.base.a + self.base.b / r**2     # a + b/r**2
+        Om = self.base.a + self.base.b / r**2  # a + b/r**2
         twoOm = 2 * Om
 
         # implicit coupled operator over VQ:  M/dt - 1/2 A + grad p ; div = 0
@@ -242,10 +267,16 @@ class AxisymmetricTCDNS:
         """field, d/dr, d/dz of one velocity component on the working grid."""
         pf = (self.dealias, self.dealias) if self.dealias > 1.0 else None
         f = comp_hat.backward(padding_factor=pf) if pf else comp_hat.backward()
-        fr = project(Dx(comp_hat, 1, 1), self.T0).backward(padding_factor=pf) if pf \
+        fr = (
+            project(Dx(comp_hat, 1, 1), self.T0).backward(padding_factor=pf)
+            if pf
             else project(Dx(comp_hat, 1, 1), self.T0).backward()
-        fz = project(Dx(comp_hat, 0, 1), self.T0).backward(padding_factor=pf) if pf \
+        )
+        fz = (
+            project(Dx(comp_hat, 0, 1), self.T0).backward(padding_factor=pf)
+            if pf
             else project(Dx(comp_hat, 0, 1), self.T0).backward()
+        )
         return np.asarray(f), np.asarray(fr), np.asarray(fz)
 
     def nonlinear(self, out):
@@ -261,11 +292,16 @@ class AxisymmetricTCDNS:
 
         if self.dealias > 1.0:
             # forward through the padded space -> dealiased coeffs -> standard grid
-            ar = self._dealias(n_r); at = self._dealias(n_t); az = self._dealias(n_z)
+            ar = self._dealias(n_r)
+            at = self._dealias(n_t)
+            az = self._dealias(n_z)
         else:
-            ar = Array(self.T0); ar[:] = n_r
-            at = Array(self.T0); at[:] = n_t
-            az = Array(self.T0); az[:] = n_z
+            ar = Array(self.T0)
+            ar[:] = n_r
+            at = Array(self.T0)
+            at[:] = n_t
+            az = Array(self.T0)
+            az[:] = n_z
         out[0] = inner(self.vts, ar)
         out[1] = inner(self.vts, at)
         out[2] = inner(self.vts, az)
@@ -278,8 +314,10 @@ class AxisymmetricTCDNS:
         truncated coefficients into a clean base-space ``Function`` and transform
         back to the standard quadrature grid.
         """
-        ap = Array(self.T0p); ap[:] = padded_values
-        g = Function(self.T0); g[:] = ap.forward()
+        ap = Array(self.T0p)
+        ap[:] = padded_values
+        g = Function(self.T0)
+        g[:] = ap.forward()
         return g.backward()
 
     # ------------------------------------------------------------------
@@ -298,7 +336,7 @@ class AxisymmetricTCDNS:
             if self._have_old:
                 self.rhs[i] = rhs_v[i] - (1.5 * self.N_hat[i] - 0.5 * self.N_old[i])
             else:
-                self.rhs[i] = rhs_v[i] - self.N_hat[i]      # IMEX-Euler bootstrap
+                self.rhs[i] = rhs_v[i] - self.N_hat[i]  # IMEX-Euler bootstrap
         self.rhs[3] = 0.0
 
         # coupled solve (fix the k=0 pressure null space)
@@ -335,14 +373,17 @@ class AxisymmetricTCDNS:
         rr = self.rphys
         zz = self.zphys
         arg = np.pi * (rr - R1) / d
-        g = np.sin(arg) ** 2                          # g = g' = 0 at both walls
+        g = np.sin(arg) ** 2  # g = g' = 0 at both walls
         gp = (2 * np.pi / d) * np.sin(arg) * np.cos(arg)
-        ur = amp * (kz / rr) * g * np.sin(kz * zz)    # = -(1/r) dpsi/dz
+        ur = amp * (kz / rr) * g * np.sin(kz * zz)  # = -(1/r) dpsi/dz
         uz = amp * (1.0 / rr) * gp * np.cos(kz * zz)  # =  (1/r) dpsi/dr
         ut = amp * np.sin(arg) * np.cos(kz * zz)
-        a_r = Array(self.TD); a_r[:] = ur
-        a_t = Array(self.TD); a_t[:] = ut
-        a_z = Array(self.TD); a_z[:] = uz
+        a_r = Array(self.TD)
+        a_r[:] = ur
+        a_t = Array(self.TD)
+        a_t[:] = ut
+        a_z = Array(self.TD)
+        a_z[:] = uz
         self.u_hat[0] = a_r.forward(Function(self.TD))
         self.u_hat[1] = a_t.forward(Function(self.TD))
         self.u_hat[2] = a_z.forward(Function(self.TD))
@@ -368,7 +409,7 @@ class AxisymmetricTCDNS:
         for comp in range(3):
             f = Function(self.TD)
             f[:] = 0.0
-            f[kz_mode, :n] = vec[comp * n:(comp + 1) * n] * amp
+            f[kz_mode, :n] = vec[comp * n : (comp + 1) * n] * amp
             self.u_hat[comp] = f
         self._have_old = False
         return complex(w[which])
@@ -389,8 +430,11 @@ class AxisymmetricTCDNS:
     # diagnostics
     # ------------------------------------------------------------------
     def velocity_physical(self):
-        return (self.u_hat[0].backward(), self.u_hat[1].backward(),
-                self.u_hat[2].backward())
+        return (
+            self.u_hat[0].backward(),
+            self.u_hat[1].backward(),
+            self.u_hat[2].backward(),
+        )
 
     def energy(self):
         ur, ut, uz = self.velocity_physical()
@@ -417,9 +461,16 @@ class AxisymmetricTCDNS:
     def wall_residual(self):
         ur, ut, uz = self.velocity_physical()
         # values at the radial-extreme quadrature points (closest to walls)
-        return float(max(np.abs(ur[:, 0]).max(), np.abs(ur[:, -1]).max(),
-                         np.abs(ut[:, 0]).max(), np.abs(ut[:, -1]).max(),
-                         np.abs(uz[:, 0]).max(), np.abs(uz[:, -1]).max()))
+        return float(
+            max(
+                np.abs(ur[:, 0]).max(),
+                np.abs(ur[:, -1]).max(),
+                np.abs(ut[:, 0]).max(),
+                np.abs(ut[:, -1]).max(),
+                np.abs(uz[:, 0]).max(),
+                np.abs(uz[:, -1]).max(),
+            )
+        )
 
     def torque_diagnostic(self):
         """Mean axial-z, azimuthally-averaged angular-momentum flux proxy.
@@ -433,7 +484,8 @@ class AxisymmetricTCDNS:
 
     def diagnostics(self, t, tstep):
         return {
-            "t": float(t), "tstep": int(tstep),
+            "t": float(t),
+            "tstep": int(tstep),
             "E": self.energy(),
             "div_linf": self.divergence_linf(),
             "wall": self.wall_residual(),
@@ -457,9 +509,11 @@ class AxisymmetricTCDNS:
                 if on_diag is not None:
                     on_diag(d)
                 elif moderror and comm.Get_rank() == 0:
-                    print(f"t={d['t']:8.4f} E={d['E']:.6e} "
-                          f"div={d['div_linf']:.2e} wall={d['wall']:.2e} "
-                          f"Eth={d['Eth']:.6e}")
+                    print(
+                        f"t={d['t']:8.4f} E={d['E']:.6e} "
+                        f"div={d['div_linf']:.2e} wall={d['wall']:.2e} "
+                        f"Eth={d['Eth']:.6e}"
+                    )
         return self.diagnostics(self._t, self._tstep)
 
     def growth_rate(self, t0, t1, restart=True, amp=1e-6, kz_mode=1, seed=0):
@@ -532,8 +586,18 @@ class TaylorCouetteDNS:
     results bit-for-bit.
     """
 
-    def __init__(self, base: CircularCouette, nu=1.0e-2, Nr=40, Ntheta=16, Nz=32,
-                 Lz=None, dt=2.0e-3, family="L", dealias=1.5):
+    def __init__(
+        self,
+        base: CircularCouette,
+        nu=1.0e-2,
+        Nr=40,
+        Ntheta=16,
+        Nz=32,
+        Lz=None,
+        dt=2.0e-3,
+        family="L",
+        dealias=1.5,
+    ):
         self.base = base
         self.nu = float(nu)
         self.Nr = int(Nr)
@@ -547,22 +611,25 @@ class TaylorCouetteDNS:
         dom = (base.R1, base.R2)
 
         # theta: complex Fourier;  z: real Fourier;  r: Dirichlet / orthogonal
-        self.Ft = FunctionSpace(self.Ntheta, "Fourier", dtype="D", domain=(0, 2 * math.pi))
+        self.Ft = FunctionSpace(
+            self.Ntheta, "Fourier", dtype="D", domain=(0, 2 * math.pi)
+        )
         self.Fz = FunctionSpace(self.Nz, "Fourier", dtype="d", domain=(0, self.Lz))
         self.SD = FunctionSpace(self.Nr, family, bc=(0, 0), domain=dom)
         self.S0 = FunctionSpace(self.Nr, family, domain=dom)
         self.SP = FunctionSpace(self.Nr, family, domain=dom)
         self.SP.slice = lambda: slice(0, self.Nr - 2)
 
-        ax = (2, 0, 1)                         # radial (axis 2) is the solve axis
+        ax = (2, 0, 1)  # radial (axis 2) is the solve axis
         self.TD = TensorProductSpace(comm, (self.Ft, self.Fz, self.SD), axes=ax)
         self.T0 = TensorProductSpace(comm, (self.Ft, self.Fz, self.S0), axes=ax)
-        self.TP = TensorProductSpace(comm, (self.Ft, self.Fz, self.SP), axes=ax,
-                                     modify_spaces_inplace=True)
+        self.TP = TensorProductSpace(
+            comm, (self.Ft, self.Fz, self.SP), axes=ax, modify_spaces_inplace=True
+        )
         self.VV = CompositeSpace([self.TD, self.TD, self.TD])
         self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP])
 
-        self.r = self.TD.coors.psi[2]          # radial symbol (axis 2)
+        self.r = self.TD.coors.psi[2]  # radial symbol (axis 2)
         X = self.T0.local_mesh(True)
         self.rphys = X[2]
         self.inv_r = 1.0 / self.rphys
@@ -586,14 +653,17 @@ class TaylorCouetteDNS:
 
         if comm.Get_rank() == 0:
             print(f"TaylorCouetteDNS(3D): {base.describe()}")
-            print(f"  nu={self.nu:g} Re={self.Re:.3f}  Nr={self.Nr} Ntheta={self.Ntheta} "
-                  f"Nz={self.Nz} Lz={self.Lz:.4f} dt={self.dt:g} dealias={self.dealias:g}")
+            print(
+                f"  nu={self.nu:g} Re={self.Re:.3f}  Nr={self.Nr} Ntheta={self.Ntheta} "
+                f"Nz={self.Nz} Lz={self.Lz:.4f} dt={self.dt:g} dealias={self.dealias:g}"
+            )
 
     # ------------------------------------------------------------------
     def _lap(self, u):
         r = self.r
-        return (Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1)
-                + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2))
+        return (
+            Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
+        )
 
     def _avv_terms(self, ur, ut, uz, vr, vt, vz, sign):
         """Velocity-velocity linear operator A (viscous + all couplings),
@@ -607,14 +677,14 @@ class TaylorCouetteDNS:
         out += _as_list(inner(vr, sign * nu * self._lap(ur)))
         out += _as_list(inner(vr, sign * (-nu) * (1 / r**2) * ur))
         out += _as_list(inner(vr, sign * (-nu) * (2 / r**2) * Dx(ut, 0, 1)))
-        out += _as_list(inner(vr, sign * (-Om) * Dx(ur, 0, 1)))      # -Omega d/dtheta
-        out += _as_list(inner(vr, sign * (2 * Om) * ut))             # +2 Omega u_theta
+        out += _as_list(inner(vr, sign * (-Om) * Dx(ur, 0, 1)))  # -Omega d/dtheta
+        out += _as_list(inner(vr, sign * (2 * Om) * ut))  # +2 Omega u_theta
         # theta-momentum
         out += _as_list(inner(vt, sign * nu * self._lap(ut)))
         out += _as_list(inner(vt, sign * (-nu) * (1 / r**2) * ut))
         out += _as_list(inner(vt, sign * nu * (2 / r**2) * Dx(ur, 0, 1)))
         out += _as_list(inner(vt, sign * (-Om) * Dx(ut, 0, 1)))
-        out += _as_list(inner(vt, sign * (-2 * a) * ur))             # -2a u_r
+        out += _as_list(inner(vt, sign * (-2 * a) * ur))  # -2a u_r
         # z-momentum
         out += _as_list(inner(vz, sign * nu * self._lap(uz)))
         out += _as_list(inner(vz, sign * (-Om) * Dx(uz, 0, 1)))
@@ -658,17 +728,26 @@ class TaylorCouetteDNS:
     def _phys(self, comp_hat):
         """field and d/dr, d/dtheta, d/dz on the (padded) working grid."""
         pf = (self.dealias,) * 3 if self.dealias > 1.0 else None
+
         def bw(expr_hat):
             f = project(expr_hat, self.T0)
             return np.asarray(f.backward(padding_factor=pf) if pf else f.backward())
-        field = np.asarray(comp_hat.backward(padding_factor=pf) if pf
-                           else comp_hat.backward())
-        return (field, bw(Dx(comp_hat, 2, 1)), bw(Dx(comp_hat, 0, 1)),
-                bw(Dx(comp_hat, 1, 1)))
+
+        field = np.asarray(
+            comp_hat.backward(padding_factor=pf) if pf else comp_hat.backward()
+        )
+        return (
+            field,
+            bw(Dx(comp_hat, 2, 1)),
+            bw(Dx(comp_hat, 0, 1)),
+            bw(Dx(comp_hat, 1, 1)),
+        )
 
     def _dealias(self, padded_values):
-        ap = Array(self.T0p); ap[:] = padded_values
-        g = Function(self.T0); g[:] = ap.forward()
+        ap = Array(self.T0p)
+        ap[:] = padded_values
+        g = Function(self.T0)
+        g[:] = ap.forward()
         return g.backward()
 
     def nonlinear(self, out):
@@ -680,11 +759,16 @@ class TaylorCouetteDNS:
         n_t = ur * utr + (ut * invr) * utt + uz * utz + ur * ut * invr
         n_z = ur * uzr + (ut * invr) * uzt + uz * uzz
         if self.dealias > 1.0:
-            ar = self._dealias(n_r); at = self._dealias(n_t); az = self._dealias(n_z)
+            ar = self._dealias(n_r)
+            at = self._dealias(n_t)
+            az = self._dealias(n_z)
         else:
-            ar = Array(self.T0); ar[:] = n_r
-            at = Array(self.T0); at[:] = n_t
-            az = Array(self.T0); az[:] = n_z
+            ar = Array(self.T0)
+            ar[:] = n_r
+            at = Array(self.T0)
+            at[:] = n_t
+            az = Array(self.T0)
+            az[:] = n_z
         out[0] = inner(self.vts, ar)
         out[1] = inner(self.vts, at)
         out[2] = inner(self.vts, az)
@@ -735,10 +819,11 @@ class TaylorCouetteDNS:
         for comp in range(3):
             fr = Function(lin.SD)
             fr[:] = 0.0
-            fr[lin.SD.slice()] = V[comp * n:(comp + 1) * n, which]
+            fr[lin.SD.slice()] = V[comp * n : (comp + 1) * n, which]
             prof = np.asarray(fr.eval(rpts))
             field = (amp * prof[None, None, :] * phase).real
-            a = Array(self.TD); a[:] = field
+            a = Array(self.TD)
+            a[:] = field
             self.u_hat[comp] = a.forward(Function(self.TD))
         self._have_old = False
         return complex(w[which])
@@ -754,7 +839,8 @@ class TaylorCouetteDNS:
         shape = np.sin(np.pi * (rr - R1) / d)
         base_field = amp * shape * np.cos(m * th) * np.cos(kz * zz)
         for comp in range(3):
-            a = Array(self.TD); a[:] = base_field
+            a = Array(self.TD)
+            a[:] = base_field
             self.u_hat[comp] = a.forward(Function(self.TD))
         self._have_old = False
 
@@ -771,8 +857,11 @@ class TaylorCouetteDNS:
 
     # ------------------------------------------------------------------
     def velocity_physical(self):
-        return (self.u_hat[0].backward(), self.u_hat[1].backward(),
-                self.u_hat[2].backward())
+        return (
+            self.u_hat[0].backward(),
+            self.u_hat[1].backward(),
+            self.u_hat[2].backward(),
+        )
 
     def energy(self):
         ur, ut, uz = self.velocity_physical()
@@ -788,8 +877,12 @@ class TaylorCouetteDNS:
         return float(np.abs(div).max())
 
     def diagnostics(self, t, tstep):
-        return {"t": float(t), "tstep": int(tstep), "E": self.energy(),
-                "div_linf": self.divergence_linf()}
+        return {
+            "t": float(t),
+            "tstep": int(tstep),
+            "E": self.energy(),
+            "div_linf": self.divergence_linf(),
+        }
 
     def run(self, end_time, moderror=0, on_diag=None, assert_finite=True):
         # time accumulates across successive run() calls (lazy-init)
@@ -839,8 +932,19 @@ class AxisymmetricMRIDNS:
     (Robin), ``b_z' = 0`` (Neumann) -- the same radial bases as the eigensolver.
     """
 
-    def __init__(self, base: CircularCouette, B0=0.2, nu=1e-3, eta_mag=1e-3,
-                 Nr=48, Nz=32, Lz=None, dt=2.0e-3, family="L", dealias=1.5):
+    def __init__(
+        self,
+        base: CircularCouette,
+        B0=0.2,
+        nu=1e-3,
+        eta_mag=1e-3,
+        Nr=48,
+        Nz=32,
+        Lz=None,
+        dt=2.0e-3,
+        family="L",
+        dealias=1.5,
+    ):
         self.base = base
         self.B0 = float(B0)
         self.nu = float(nu)
@@ -854,34 +958,44 @@ class AxisymmetricMRIDNS:
         self.Re = base.Omega1 * base.R1 * base.gap / self.nu
         self.Rm = base.Omega1 * base.R1 * base.gap / self.eta_mag
         self.Pm = self.nu / self.eta_mag
-        self.S = self.B0 * base.gap / self.eta_mag           # Lundquist number
+        self.S = self.B0 * base.gap / self.eta_mag  # Lundquist number
         dom = (base.R1, base.R2)
         Jm = 0.5 * (base.R2 - base.R1)
 
         self.F = FunctionSpace(self.Nz, "Fourier", dtype="d", domain=(0, self.Lz))
-        self.SD = FunctionSpace(self.Nr, family, bc=(0, 0), domain=dom)   # u, b_r
-        self.S0 = FunctionSpace(self.Nr, family, domain=dom)             # orthogonal
+        self.SD = FunctionSpace(self.Nr, family, bc=(0, 0), domain=dom)  # u, b_r
+        self.S0 = FunctionSpace(self.Nr, family, domain=dom)  # orthogonal
         self.SP = FunctionSpace(self.Nr, family, domain=dom)
         self.SP.slice = lambda: slice(0, self.Nr - 2)
-        self.Sbt = FunctionSpace(self.Nr, family, domain=dom,            # b_theta Robin
-                                 bc={"left": {"R": (base.R1 / Jm, 0)},
-                                     "right": {"R": (base.R2 / Jm, 0)}})
-        self.Sbz = FunctionSpace(self.Nr, family, domain=dom,            # b_z Neumann
-                                 bc={"left": {"N": 0}, "right": {"N": 0}})
+        self.Sbt = FunctionSpace(
+            self.Nr,
+            family,
+            domain=dom,  # b_theta Robin
+            bc={"left": {"R": (base.R1 / Jm, 0)}, "right": {"R": (base.R2 / Jm, 0)}},
+        )
+        self.Sbz = FunctionSpace(
+            self.Nr,
+            family,
+            domain=dom,  # b_z Neumann
+            bc={"left": {"N": 0}, "right": {"N": 0}},
+        )
 
         ax = (1, 0)
         self.TD = TensorProductSpace(comm, (self.F, self.SD), axes=ax)
         self.T0 = TensorProductSpace(comm, (self.F, self.S0), axes=ax)
-        self.TP = TensorProductSpace(comm, (self.F, self.SP), axes=ax,
-                                     modify_spaces_inplace=True)
+        self.TP = TensorProductSpace(
+            comm, (self.F, self.SP), axes=ax, modify_spaces_inplace=True
+        )
         self.Tbt = TensorProductSpace(comm, (self.F, self.Sbt), axes=ax)
         self.Tbz = TensorProductSpace(comm, (self.F, self.Sbz), axes=ax)
 
         # u_r,u_th,u_z, Pi, b_r,b_th,b_z   and the 6 evolving fields (no pressure)
-        self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP,
-                                  self.TD, self.Tbt, self.Tbz])
-        self.VE = CompositeSpace([self.TD, self.TD, self.TD,
-                                  self.TD, self.Tbt, self.Tbz])
+        self.VQ = CompositeSpace(
+            [self.TD, self.TD, self.TD, self.TP, self.TD, self.Tbt, self.Tbz]
+        )
+        self.VE = CompositeSpace(
+            [self.TD, self.TD, self.TD, self.TD, self.Tbt, self.Tbz]
+        )
 
         self.r = self.TD.coors.psi[1]
         X = self.T0.local_mesh(True)
@@ -896,7 +1010,7 @@ class AxisymmetricMRIDNS:
 
         self._build_operators()
 
-        self.x = Function(self.VE)            # (u_r,u_th,u_z, b_r,b_th,b_z)
+        self.x = Function(self.VE)  # (u_r,u_th,u_z, b_r,b_th,b_z)
         self.p_hat = Function(self.TP)
         self.rhs = Function(self.VQ)
         self.sol = Function(self.VQ)
@@ -923,18 +1037,22 @@ class AxisymmetricMRIDNS:
         # evaluate stale fields.  Likewise ``self._eps[k][:] = ...`` below.
         self._Pdr = [Project(Dx(self.x[i], 1, 1), self.T0) for i in range(6)]
         self._Pdz = [Project(Dx(self.x[i], 0, 1), self.T0) for i in range(6)]
-        self._eps = [Function(self.T0) for _ in range(3)]   # EMF eps_r, eps_t, eps_z
-        self._Petz = Project(Dx(self._eps[1], 0, 1), self.T0)   # d eps_t / dz
-        self._Perz = Project(Dx(self._eps[0], 0, 1), self.T0)   # d eps_r / dz
-        self._Pezr = Project(Dx(self._eps[2], 1, 1), self.T0)   # d eps_z / dr
-        self._Petr = Project(Dx(self._eps[1], 1, 1), self.T0)   # d eps_t / dr
+        self._eps = [Function(self.T0) for _ in range(3)]  # EMF eps_r, eps_t, eps_z
+        self._Petz = Project(Dx(self._eps[1], 0, 1), self.T0)  # d eps_t / dz
+        self._Perz = Project(Dx(self._eps[0], 0, 1), self.T0)  # d eps_r / dz
+        self._Pezr = Project(Dx(self._eps[2], 1, 1), self.T0)  # d eps_z / dr
+        self._Petr = Project(Dx(self._eps[1], 1, 1), self.T0)  # d eps_t / dr
 
         if comm.Get_rank() == 0:
             print(f"AxisymmetricMRIDNS: {base.describe()}")
-            print(f"  B0={self.B0:g} nu={self.nu:g} eta={self.eta_mag:g} "
-                  f"Re={self.Re:.2f} Rm={self.Rm:.2f} Pm={self.Pm:g} S={self.S:.3f}")
-            print(f"  Nr={self.Nr} Nz={self.Nz} Lz={self.Lz:.4f} dt={self.dt:g} "
-                  f"dealias={self.dealias:g}")
+            print(
+                f"  B0={self.B0:g} nu={self.nu:g} eta={self.eta_mag:g} "
+                f"Re={self.Re:.2f} Rm={self.Rm:.2f} Pm={self.Pm:g} S={self.S:.3f}"
+            )
+            print(
+                f"  Nr={self.Nr} Nz={self.Nz} Lz={self.Lz:.4f} dt={self.dt:g} "
+                f"dealias={self.dealias:g}"
+            )
 
     # ------------------------------------------------------------------
     def _lap(self, u):
@@ -947,7 +1065,7 @@ class AxisymmetricMRIDNS:
         nu, eta, B0 = self.nu, self.eta_mag, self.B0
         a = self.base.a
         Om = self.base.a + self.base.b / r**2
-        rOmp = -2 * self.base.b / r**2                  # r dOmega/dr
+        rOmp = -2 * self.base.b / r**2  # r dOmega/dr
         dz = lambda f: Dx(f, 0, 1)
         out = []
         # r-momentum:  nu(L-1/r^2)u_r + 2 Om u_theta + B0 db_r/dz
@@ -988,9 +1106,9 @@ class AxisymmetricMRIDNS:
         for vv, uu in ((vr, ur), (vt, ut), (vz, uz), (cr, br), (ct, bt), (cz, bz)):
             imp += _as_list(inner(vv, uu * (1.0 / dt)))
         imp += self._Lxx(ur, ut, uz, br, bt, bz, vr, vt, vz, cr, ct, cz, sign=-0.5)
-        imp += _as_list(inner(vr, Dx(p, 1, 1)))         # +dPi/dr
-        imp += _as_list(inner(vz, Dx(p, 0, 1)))         # +dPi/dz
-        imp += _as_list(inner(q, Dx(ur, 1, 1)))         # continuity
+        imp += _as_list(inner(vr, Dx(p, 1, 1)))  # +dPi/dr
+        imp += _as_list(inner(vz, Dx(p, 0, 1)))  # +dPi/dz
+        imp += _as_list(inner(q, Dx(ur, 1, 1)))  # continuity
         imp += _as_list(inner(q, (1 / r) * ur))
         imp += _as_list(inner(q, Dx(uz, 0, 1)))
         self.Limp = la.BlockMatrixSolver(imp)
@@ -1000,29 +1118,40 @@ class AxisymmetricMRIDNS:
         eur, eut, euz, ebr, ebt, ebz = ue
         tur, tut, tuz, tbr, tbt, tbz = ve
         exp = []
-        for vv, uu in ((tur, eur), (tut, eut), (tuz, euz),
-                       (tbr, ebr), (tbt, ebt), (tbz, ebz)):
+        for vv, uu in (
+            (tur, eur),
+            (tut, eut),
+            (tuz, euz),
+            (tbr, ebr),
+            (tbt, ebt),
+            (tbz, ebz),
+        ):
             exp += _as_list(inner(vv, uu * (1.0 / dt)))
-        exp += self._Lxx(eur, eut, euz, ebr, ebt, ebz,
-                         tur, tut, tuz, tbr, tbt, tbz, sign=0.5)
+        exp += self._Lxx(
+            eur, eut, euz, ebr, ebt, ebz, tur, tut, tuz, tbr, tbt, tbz, sign=0.5
+        )
         self.Lexp = BlockMatrix(exp)
 
     # ------------------------------------------------------------------
     def _phys(self, i):
         """field, d/dr, d/dz of evolving-field component ``i`` (cached projects)."""
         pf = (self.dealias, self.dealias) if self.dealias > 1.0 else None
+
         def bw(f):
             return np.asarray(f.backward(padding_factor=pf) if pf else f.backward())
+
         field = bw(self.x[i])
         return field, bw(self._Pdr[i]()), bw(self._Pdz[i]())
 
     def _set_hat(self, k, padded_values):
         """Dealias a working-grid product into the spectral buffer ``_eps[k]``."""
         if self.dealias > 1.0:
-            ap = Array(self.T0p); ap[:] = padded_values
+            ap = Array(self.T0p)
+            ap[:] = padded_values
             self._eps[k][:] = ap.forward()
         else:
-            ar = Array(self.T0); ar[:] = padded_values
+            ar = Array(self.T0)
+            ar[:] = padded_values
             self._eps[k][:] = ar.forward(Function(self.T0))
 
     def nonlinear(self, out):
@@ -1046,13 +1175,15 @@ class AxisymmetricMRIDNS:
         # _eps[0,1,2], so the EMF-curl terms (nb_*) must be fully materialised into
         # numpy arrays *before* _eps is reused for the momentum dealiasing below.
         # Do not move the momentum-dealiasing block above the nb_* lines.
-        self._set_hat(0, ut * bz - uz * bt)       # eps_r
-        self._set_hat(1, uz * br - ur * bz)       # eps_t
-        self._set_hat(2, ur * bt - ut * br)       # eps_z
+        self._set_hat(0, ut * bz - uz * bt)  # eps_r
+        self._set_hat(1, uz * br - ur * bz)  # eps_t
+        self._set_hat(2, ur * bt - ut * br)  # eps_z
         et_phys = np.asarray(self._eps[1].backward())
         # N_b = -curl(eps):  (curl)_r=-d_z e_t, _t=d_z e_r-d_r e_z, _z=d_r e_t+e_t/r
-        nb_r = np.asarray(self._Petz().backward())                        # +d_z e_t
-        nb_t = -np.asarray(self._Perz().backward()) + np.asarray(self._Pezr().backward())
+        nb_r = np.asarray(self._Petz().backward())  # +d_z e_t
+        nb_t = -np.asarray(self._Perz().backward()) + np.asarray(
+            self._Pezr().backward()
+        )
         nb_z = -np.asarray(self._Petr().backward()) - et_phys * self.inv_r
         # dealias the momentum products onto the standard grid (REUSES _eps -- the
         # EMF-curl terms above are already materialised, so this is safe)
@@ -1063,9 +1194,11 @@ class AxisymmetricMRIDNS:
             nu_t = np.asarray(self._eps[1].backward())
             nu_z = np.asarray(self._eps[2].backward())
         ar = Array(self.T0)
+
         def proj(test, vals):
             ar[:] = vals
             return inner(test, ar)
+
         out[0] = proj(self.vu, nu_r)
         out[1] = proj(self.vu, nu_t)
         out[2] = proj(self.vu, nu_z)
@@ -1110,18 +1243,30 @@ class AxisymmetricMRIDNS:
         from taylor_couette_mri import TaylorCouetteMRI
 
         kz = 2 * np.pi * kz_mode / self.Lz
-        lin = TaylorCouetteMRI(self.base, B0=self.B0, nu=self.nu,
-                               eta_mag=self.eta_mag, N=self.Nr, family=self.family)
+        lin = TaylorCouetteMRI(
+            self.base,
+            B0=self.B0,
+            nu=self.nu,
+            eta_mag=self.eta_mag,
+            N=self.Nr,
+            family=self.family,
+        )
         w, V = lin.eigs(0, kz, n_return=which + 1)
         n = lin.n
         vec = V[:, which]
         # VE field comp -> eigenvector block and target space
-        blocks = [(0, 0, self.TD), (1, 1, self.TD), (2, 2, self.TD),
-                  (3, 4, self.TD), (4, 5, self.Tbt), (5, 6, self.Tbz)]
+        blocks = [
+            (0, 0, self.TD),
+            (1, 1, self.TD),
+            (2, 2, self.TD),
+            (3, 4, self.TD),
+            (4, 5, self.Tbt),
+            (5, 6, self.Tbz),
+        ]
         for ve_i, blk, space in blocks:
             f = Function(space)
             f[:] = 0.0
-            f[kz_mode, :n] = vec[blk * n:(blk + 1) * n] * amp
+            f[kz_mode, :n] = vec[blk * n : (blk + 1) * n] * amp
             self.x[ve_i] = f
         self._have_old = False
         return complex(w[which])
@@ -1149,29 +1294,33 @@ class AxisymmetricMRIDNS:
         X = self.T0.local_mesh(True)
         zz, rr = X[0], X[1]
         arg = np.pi * (rr - R1) / d
-        g = np.sin(arg) ** 2                               # g = g' = 0 at walls
+        g = np.sin(arg) ** 2  # g = g' = 0 at walls
         gp = (2 * np.pi / d) * np.sin(arg) * np.cos(arg)
-        ur = np.zeros_like(rr); uz = np.zeros_like(rr); ut = np.zeros_like(rr)
+        ur = np.zeros_like(rr)
+        uz = np.zeros_like(rr)
+        ut = np.zeros_like(rr)
         for k in range(1, max(1, self.Nz // 3) + 1):
             kz = 2 * np.pi * k / self.Lz
             ak, bk = rng.standard_normal(), rng.standard_normal()
             phase = ak * np.cos(kz * zz) + bk * np.sin(kz * zz)
             dphase = kz * (-ak * np.sin(kz * zz) + bk * np.cos(kz * zz))
-            ur += -(1.0 / rr) * g * dphase                 # = -(1/r) dpsi/dz
-            uz += (1.0 / rr) * gp * phase                  # =  (1/r) dpsi/dr
-            ut += np.sin(arg) * phase                      # wall-vanishing swirl
-        scale = amp / max(np.abs(ur).max(), np.abs(uz).max(),
-                          np.abs(ut).max(), 1e-30)
+            ur += -(1.0 / rr) * g * dphase  # = -(1/r) dpsi/dz
+            uz += (1.0 / rr) * gp * phase  # =  (1/r) dpsi/dr
+            ut += np.sin(arg) * phase  # wall-vanishing swirl
+        scale = amp / max(np.abs(ur).max(), np.abs(uz).max(), np.abs(ut).max(), 1e-30)
         for i, fld in ((0, ur), (1, ut), (2, uz)):
-            a = Array(self.TD); a[:] = scale * fld
+            a = Array(self.TD)
+            a[:] = scale * fld
             self.x[i] = a.forward(Function(self.TD))
         # magnetic: b_r = b_z = 0; toroidal b_theta random (solenoidal for axisym)
-        z3 = Array(self.TD); z3[:] = 0.0
+        z3 = Array(self.TD)
+        z3[:] = 0.0
         self.x[3] = z3.forward(Function(self.TD))
         bt = Array(self.Tbt)
         bt[:] = amp * np.sin(arg) * rng.standard_normal(bt.shape) if magnetic else 0.0
         self.x[4] = bt.forward(Function(self.Tbt))
-        z5 = Array(self.Tbz); z5[:] = 0.0
+        z5 = Array(self.Tbz)
+        z5[:] = 0.0
         self.x[5] = z5.forward(Function(self.Tbz))
         self._have_old = False
 
@@ -1181,8 +1330,8 @@ class AxisymmetricMRIDNS:
 
     def energy(self):
         f = self.fields_physical()
-        ek = 0.5 * inner(1, (f[0]**2 + f[1]**2 + f[2]**2) * self.rphys)
-        em = 0.5 * inner(1, (f[3]**2 + f[4]**2 + f[5]**2) * self.rphys)
+        ek = 0.5 * inner(1, (f[0] ** 2 + f[1] ** 2 + f[2] ** 2) * self.rphys)
+        em = 0.5 * inner(1, (f[3] ** 2 + f[4] ** 2 + f[5] ** 2) * self.rphys)
         return float(ek), float(em)
 
     def _div(self, fr_hat, fz_hat):
@@ -1197,8 +1346,15 @@ class AxisymmetricMRIDNS:
     def diagnostics(self, t, tstep):
         ek, em = self.energy()
         du, db = self.divergences()
-        return {"t": float(t), "tstep": int(tstep), "Ekin": ek, "Emag": em,
-                "E": ek + em, "divu": du, "divb": db}
+        return {
+            "t": float(t),
+            "tstep": int(tstep),
+            "Ekin": ek,
+            "Emag": em,
+            "E": ek + em,
+            "divu": du,
+            "divb": db,
+        }
 
     def run(self, end_time, moderror=0, on_diag=None, assert_finite=True):
         # time accumulates across successive run() calls (lazy-init)
@@ -1214,8 +1370,10 @@ class AxisymmetricMRIDNS:
                 if on_diag is not None:
                     on_diag(d)
                 elif moderror and comm.Get_rank() == 0:
-                    print(f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
-                          f"divu={d['divu']:.1e} divb={d['divb']:.1e}")
+                    print(
+                        f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
+                        f"divu={d['divu']:.1e} divb={d['divb']:.1e}"
+                    )
         return self.diagnostics(self._t, self._tstep)
 
     # ------------------------------------------------------------------
@@ -1284,9 +1442,20 @@ class TaylorCouetteMRIDNS:
     MRI results.
     """
 
-    def __init__(self, base: CircularCouette, B0=0.1, nu=1e-3, eta_mag=1e-3,
-                 Nr=40, Ntheta=8, Nz=32, Lz=None, dt=2.0e-3, family="L",
-                 dealias=1.5):
+    def __init__(
+        self,
+        base: CircularCouette,
+        B0=0.1,
+        nu=1e-3,
+        eta_mag=1e-3,
+        Nr=40,
+        Ntheta=8,
+        Nz=32,
+        Lz=None,
+        dt=2.0e-3,
+        family="L",
+        dealias=1.5,
+    ):
         self.base = base
         self.B0 = float(B0)
         self.nu = float(nu)
@@ -1301,38 +1470,50 @@ class TaylorCouetteMRIDNS:
         self.Re = base.Omega1 * base.R1 * base.gap / self.nu
         self.Rm = base.Omega1 * base.R1 * base.gap / self.eta_mag
         self.Pm = self.nu / self.eta_mag
-        self.S = self.B0 * base.gap / self.eta_mag           # Lundquist number
+        self.S = self.B0 * base.gap / self.eta_mag  # Lundquist number
         dom = (base.R1, base.R2)
         Jm = 0.5 * (base.R2 - base.R1)
 
         # theta: complex Fourier;  z: real Fourier;  r: Dirichlet / conducting
-        self.Ft = FunctionSpace(self.Ntheta, "Fourier", dtype="D", domain=(0, 2 * math.pi))
+        self.Ft = FunctionSpace(
+            self.Ntheta, "Fourier", dtype="D", domain=(0, 2 * math.pi)
+        )
         self.Fz = FunctionSpace(self.Nz, "Fourier", dtype="d", domain=(0, self.Lz))
-        self.SD = FunctionSpace(self.Nr, family, bc=(0, 0), domain=dom)   # u, b_r
-        self.S0 = FunctionSpace(self.Nr, family, domain=dom)             # orthogonal
+        self.SD = FunctionSpace(self.Nr, family, bc=(0, 0), domain=dom)  # u, b_r
+        self.S0 = FunctionSpace(self.Nr, family, domain=dom)  # orthogonal
         self.SP = FunctionSpace(self.Nr, family, domain=dom)
         self.SP.slice = lambda: slice(0, self.Nr - 2)
-        self.Sbt = FunctionSpace(self.Nr, family, domain=dom,            # b_theta Robin
-                                 bc={"left": {"R": (base.R1 / Jm, 0)},
-                                     "right": {"R": (base.R2 / Jm, 0)}})
-        self.Sbz = FunctionSpace(self.Nr, family, domain=dom,            # b_z Neumann
-                                 bc={"left": {"N": 0}, "right": {"N": 0}})
+        self.Sbt = FunctionSpace(
+            self.Nr,
+            family,
+            domain=dom,  # b_theta Robin
+            bc={"left": {"R": (base.R1 / Jm, 0)}, "right": {"R": (base.R2 / Jm, 0)}},
+        )
+        self.Sbz = FunctionSpace(
+            self.Nr,
+            family,
+            domain=dom,  # b_z Neumann
+            bc={"left": {"N": 0}, "right": {"N": 0}},
+        )
 
-        ax = (2, 0, 1)                         # radial (axis 2) is the solve axis
+        ax = (2, 0, 1)  # radial (axis 2) is the solve axis
         self.TD = TensorProductSpace(comm, (self.Ft, self.Fz, self.SD), axes=ax)
         self.T0 = TensorProductSpace(comm, (self.Ft, self.Fz, self.S0), axes=ax)
-        self.TP = TensorProductSpace(comm, (self.Ft, self.Fz, self.SP), axes=ax,
-                                     modify_spaces_inplace=True)
+        self.TP = TensorProductSpace(
+            comm, (self.Ft, self.Fz, self.SP), axes=ax, modify_spaces_inplace=True
+        )
         self.Tbt = TensorProductSpace(comm, (self.Ft, self.Fz, self.Sbt), axes=ax)
         self.Tbz = TensorProductSpace(comm, (self.Ft, self.Fz, self.Sbz), axes=ax)
 
         # u_r,u_th,u_z, Pi, b_r,b_th,b_z   and the 6 evolving fields (no pressure)
-        self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP,
-                                  self.TD, self.Tbt, self.Tbz])
-        self.VE = CompositeSpace([self.TD, self.TD, self.TD,
-                                  self.TD, self.Tbt, self.Tbz])
+        self.VQ = CompositeSpace(
+            [self.TD, self.TD, self.TD, self.TP, self.TD, self.Tbt, self.Tbz]
+        )
+        self.VE = CompositeSpace(
+            [self.TD, self.TD, self.TD, self.TD, self.Tbt, self.Tbz]
+        )
 
-        self.r = self.TD.coors.psi[2]          # radial symbol (axis 2)
+        self.r = self.TD.coors.psi[2]  # radial symbol (axis 2)
         X = self.T0.local_mesh(True)
         self.rphys = X[2]
         self.inv_r = 1.0 / self.rphys
@@ -1345,7 +1526,7 @@ class TaylorCouetteMRIDNS:
 
         self._build_operators()
 
-        self.x = Function(self.VE)            # (u_r,u_th,u_z, b_r,b_th,b_z)
+        self.x = Function(self.VE)  # (u_r,u_th,u_z, b_r,b_th,b_z)
         self.p_hat = Function(self.TP)
         self.rhs = Function(self.VQ)
         self.sol = Function(self.VQ)
@@ -1365,29 +1546,36 @@ class TaylorCouetteMRIDNS:
         # -- never a rebind that allocates a fresh array -- or the cached Projects
         # would evaluate stale data.
         self._Pdr = [Project(Dx(self.x[i], 2, 1), self.T0) for i in range(6)]  # d/dr
-        self._Pdt = [Project(Dx(self.x[i], 0, 1), self.T0) for i in range(6)]  # d/dtheta
+        self._Pdt = [
+            Project(Dx(self.x[i], 0, 1), self.T0) for i in range(6)
+        ]  # d/dtheta
         self._Pdz = [Project(Dx(self.x[i], 1, 1), self.T0) for i in range(6)]  # d/dz
-        self._eps = [Function(self.T0) for _ in range(3)]   # EMF eps_r, eps_t, eps_z
+        self._eps = [Function(self.T0) for _ in range(3)]  # EMF eps_r, eps_t, eps_z
         # EMF-curl pieces (3D adds the azimuthal d/dtheta terms _Pezt, _Pert)
-        self._Petz = Project(Dx(self._eps[1], 1, 1), self.T0)   # d eps_t / dz
-        self._Petr = Project(Dx(self._eps[1], 2, 1), self.T0)   # d eps_t / dr
-        self._Perz = Project(Dx(self._eps[0], 1, 1), self.T0)   # d eps_r / dz
-        self._Pezr = Project(Dx(self._eps[2], 2, 1), self.T0)   # d eps_z / dr
-        self._Pezt = Project(Dx(self._eps[2], 0, 1), self.T0)   # d eps_z / dtheta
-        self._Pert = Project(Dx(self._eps[0], 0, 1), self.T0)   # d eps_r / dtheta
+        self._Petz = Project(Dx(self._eps[1], 1, 1), self.T0)  # d eps_t / dz
+        self._Petr = Project(Dx(self._eps[1], 2, 1), self.T0)  # d eps_t / dr
+        self._Perz = Project(Dx(self._eps[0], 1, 1), self.T0)  # d eps_r / dz
+        self._Pezr = Project(Dx(self._eps[2], 2, 1), self.T0)  # d eps_z / dr
+        self._Pezt = Project(Dx(self._eps[2], 0, 1), self.T0)  # d eps_z / dtheta
+        self._Pert = Project(Dx(self._eps[0], 0, 1), self.T0)  # d eps_r / dtheta
 
         if comm.Get_rank() == 0:
             print(f"TaylorCouetteMRIDNS(3D): {base.describe()}")
-            print(f"  B0={self.B0:g} nu={self.nu:g} eta={self.eta_mag:g} "
-                  f"Re={self.Re:.2f} Rm={self.Rm:.2f} Pm={self.Pm:g} S={self.S:.3f}")
-            print(f"  Nr={self.Nr} Ntheta={self.Ntheta} Nz={self.Nz} Lz={self.Lz:.4f} "
-                  f"dt={self.dt:g} dealias={self.dealias:g}")
+            print(
+                f"  B0={self.B0:g} nu={self.nu:g} eta={self.eta_mag:g} "
+                f"Re={self.Re:.2f} Rm={self.Rm:.2f} Pm={self.Pm:g} S={self.S:.3f}"
+            )
+            print(
+                f"  Nr={self.Nr} Ntheta={self.Ntheta} Nz={self.Nz} Lz={self.Lz:.4f} "
+                f"dt={self.dt:g} dealias={self.dealias:g}"
+            )
 
     # ------------------------------------------------------------------
     def _lap(self, u):
         r = self.r
-        return (Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1)
-                + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2))
+        return (
+            Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
+        )
 
     def _Lxx(self, ur, ut, uz, br, bt, bz, vr, vt, vz, cr, ct, cz, sign):
         """3D evolving-field linear MHD operator (no pressure/continuity), x sign."""
@@ -1395,23 +1583,23 @@ class TaylorCouetteMRIDNS:
         nu, eta, B0 = self.nu, self.eta_mag, self.B0
         a = self.base.a
         Om = self.base.a + self.base.b / r**2
-        rOmp = -2 * self.base.b / r**2                  # r dOmega/dr
-        dz = lambda f: Dx(f, 1, 1)                       # axis 1 = z
-        dth = lambda f: Dx(f, 0, 1)                      # axis 0 = theta
+        rOmp = -2 * self.base.b / r**2  # r dOmega/dr
+        dz = lambda f: Dx(f, 1, 1)  # axis 1 = z
+        dth = lambda f: Dx(f, 0, 1)  # axis 0 = theta
         out = []
         # r-momentum
         out += _as_list(inner(vr, sign * nu * self._lap(ur)))
         out += _as_list(inner(vr, sign * (-nu) * (1 / r**2) * ur))
         out += _as_list(inner(vr, sign * (-nu) * (2 / r**2) * dth(ut)))
-        out += _as_list(inner(vr, sign * (-Om) * dth(ur)))           # -Omega d/dtheta
-        out += _as_list(inner(vr, sign * (2 * Om) * ut))             # +2 Omega u_theta
-        out += _as_list(inner(vr, sign * B0 * dz(br)))               # +B0 db_r/dz
+        out += _as_list(inner(vr, sign * (-Om) * dth(ur)))  # -Omega d/dtheta
+        out += _as_list(inner(vr, sign * (2 * Om) * ut))  # +2 Omega u_theta
+        out += _as_list(inner(vr, sign * B0 * dz(br)))  # +B0 db_r/dz
         # theta-momentum
         out += _as_list(inner(vt, sign * nu * self._lap(ut)))
         out += _as_list(inner(vt, sign * (-nu) * (1 / r**2) * ut))
         out += _as_list(inner(vt, sign * nu * (2 / r**2) * dth(ur)))
         out += _as_list(inner(vt, sign * (-Om) * dth(ut)))
-        out += _as_list(inner(vt, sign * (-2 * a) * ur))             # -2a u_r
+        out += _as_list(inner(vt, sign * (-2 * a) * ur))  # -2a u_r
         out += _as_list(inner(vt, sign * B0 * dz(bt)))
         # z-momentum
         out += _as_list(inner(vz, sign * nu * self._lap(uz)))
@@ -1421,14 +1609,14 @@ class TaylorCouetteMRIDNS:
         out += _as_list(inner(cr, sign * eta * self._lap(br)))
         out += _as_list(inner(cr, sign * (-eta) * (1 / r**2) * br))
         out += _as_list(inner(cr, sign * (-eta) * (2 / r**2) * dth(bt)))
-        out += _as_list(inner(cr, sign * (-Om) * dth(br)))           # -Omega d/dtheta
-        out += _as_list(inner(cr, sign * B0 * dz(ur)))               # +B0 du_r/dz
+        out += _as_list(inner(cr, sign * (-Om) * dth(br)))  # -Omega d/dtheta
+        out += _as_list(inner(cr, sign * B0 * dz(ur)))  # +B0 du_r/dz
         # b_theta induction
         out += _as_list(inner(ct, sign * eta * self._lap(bt)))
         out += _as_list(inner(ct, sign * (-eta) * (1 / r**2) * bt))
         out += _as_list(inner(ct, sign * eta * (2 / r**2) * dth(br)))
         out += _as_list(inner(ct, sign * (-Om) * dth(bt)))
-        out += _as_list(inner(ct, sign * rOmp * br))                 # r Omega' b_r
+        out += _as_list(inner(ct, sign * rOmp * br))  # r Omega' b_r
         out += _as_list(inner(ct, sign * B0 * dz(ut)))
         # b_z induction
         out += _as_list(inner(cz, sign * eta * self._lap(bz)))
@@ -1447,10 +1635,10 @@ class TaylorCouetteMRIDNS:
         for vv, uu in ((vr, ur), (vt, ut), (vz, uz), (cr, br), (ct, bt), (cz, bz)):
             imp += _as_list(inner(vv, uu * (1.0 / dt)))
         imp += self._Lxx(ur, ut, uz, br, bt, bz, vr, vt, vz, cr, ct, cz, sign=-0.5)
-        imp += _as_list(inner(vr, Dx(p, 2, 1)))         # +dPi/dr
-        imp += _as_list(inner(vt, (1 / r) * Dx(p, 0, 1)))   # +(1/r) dPi/dtheta
-        imp += _as_list(inner(vz, Dx(p, 1, 1)))         # +dPi/dz
-        imp += _as_list(inner(q, Dx(ur, 2, 1)))         # continuity
+        imp += _as_list(inner(vr, Dx(p, 2, 1)))  # +dPi/dr
+        imp += _as_list(inner(vt, (1 / r) * Dx(p, 0, 1)))  # +(1/r) dPi/dtheta
+        imp += _as_list(inner(vz, Dx(p, 1, 1)))  # +dPi/dz
+        imp += _as_list(inner(q, Dx(ur, 2, 1)))  # continuity
         imp += _as_list(inner(q, (1 / r) * ur))
         imp += _as_list(inner(q, (1 / r) * Dx(ut, 0, 1)))
         imp += _as_list(inner(q, Dx(uz, 1, 1)))
@@ -1461,29 +1649,40 @@ class TaylorCouetteMRIDNS:
         eur, eut, euz, ebr, ebt, ebz = ue
         tur, tut, tuz, tbr, tbt, tbz = ve
         exp = []
-        for vv, uu in ((tur, eur), (tut, eut), (tuz, euz),
-                       (tbr, ebr), (tbt, ebt), (tbz, ebz)):
+        for vv, uu in (
+            (tur, eur),
+            (tut, eut),
+            (tuz, euz),
+            (tbr, ebr),
+            (tbt, ebt),
+            (tbz, ebz),
+        ):
             exp += _as_list(inner(vv, uu * (1.0 / dt)))
-        exp += self._Lxx(eur, eut, euz, ebr, ebt, ebz,
-                         tur, tut, tuz, tbr, tbt, tbz, sign=0.5)
+        exp += self._Lxx(
+            eur, eut, euz, ebr, ebt, ebz, tur, tut, tuz, tbr, tbt, tbz, sign=0.5
+        )
         self.Lexp = BlockMatrix(exp)
 
     # ------------------------------------------------------------------
     def _phys(self, i):
         """field, d/dr, d/dtheta, d/dz of evolving component ``i`` (padded grid)."""
         pf = (self.dealias,) * 3 if self.dealias > 1.0 else None
+
         def bw(f):
             return np.asarray(f.backward(padding_factor=pf) if pf else f.backward())
+
         field = bw(self.x[i])
         return field, bw(self._Pdr[i]()), bw(self._Pdt[i]()), bw(self._Pdz[i]())
 
     def _set_hat(self, k, padded_values):
         """Dealias a working-grid product into the spectral buffer ``_eps[k]``."""
         if self.dealias > 1.0:
-            ap = Array(self.T0p); ap[:] = padded_values
+            ap = Array(self.T0p)
+            ap[:] = padded_values
             self._eps[k][:] = ap.forward()
         else:
-            ar = Array(self.T0); ar[:] = padded_values
+            ar = Array(self.T0)
+            ar[:] = padded_values
             self._eps[k][:] = ar.forward(Function(self.T0))
 
     def nonlinear(self, out):
@@ -1507,19 +1706,26 @@ class TaylorCouetteMRIDNS:
         # symbolic references to _eps, so the EMF-curl terms (nb_*) must be fully
         # materialised into numpy arrays *before* _eps is reused for the momentum
         # dealiasing below.  Do not move the momentum block above the nb_* lines.
-        self._set_hat(0, ut * bz - uz * bt)       # eps_r
-        self._set_hat(1, uz * br - ur * bz)       # eps_t
-        self._set_hat(2, ur * bt - ut * br)       # eps_z
-        et_phys = np.asarray(self._eps[1].backward())   # eps_t on the std grid
-        ir0 = self.inv_r                                 # std-grid 1/r (eps live on T0)
+        self._set_hat(0, ut * bz - uz * bt)  # eps_r
+        self._set_hat(1, uz * br - ur * bz)  # eps_t
+        self._set_hat(2, ur * bt - ut * br)  # eps_z
+        et_phys = np.asarray(self._eps[1].backward())  # eps_t on the std grid
+        ir0 = self.inv_r  # std-grid 1/r (eps live on T0)
         # N_b = -curl(eps), 3D cylindrical:
         #   (curl)_r = (1/r) d_th e_z - d_z e_t
         #   (curl)_t = d_z e_r - d_r e_z
         #   (curl)_z = d_r e_t + e_t/r - (1/r) d_th e_r
-        nb_r = -ir0 * np.asarray(self._Pezt().backward()) + np.asarray(self._Petz().backward())
-        nb_t = -np.asarray(self._Perz().backward()) + np.asarray(self._Pezr().backward())
-        nb_z = (-np.asarray(self._Petr().backward()) - et_phys * ir0
-                + ir0 * np.asarray(self._Pert().backward()))
+        nb_r = -ir0 * np.asarray(self._Pezt().backward()) + np.asarray(
+            self._Petz().backward()
+        )
+        nb_t = -np.asarray(self._Perz().backward()) + np.asarray(
+            self._Pezr().backward()
+        )
+        nb_z = (
+            -np.asarray(self._Petr().backward())
+            - et_phys * ir0
+            + ir0 * np.asarray(self._Pert().backward())
+        )
         # dealias the momentum products onto the standard grid (REUSES _eps -- the
         # EMF-curl terms above are already materialised, so this is safe)
         if self.dealias > 1.0:
@@ -1529,9 +1735,11 @@ class TaylorCouetteMRIDNS:
             nu_t = np.asarray(self._eps[1].backward())
             nu_z = np.asarray(self._eps[2].backward())
         ar = Array(self.T0)
+
         def proj(test, vals):
             ar[:] = vals
             return inner(test, ar)
+
         out[0] = proj(self.vu, nu_r)
         out[1] = proj(self.vu, nu_t)
         out[2] = proj(self.vu, nu_z)
@@ -1578,8 +1786,14 @@ class TaylorCouetteMRIDNS:
 
         _require_resolved_m(m, self.Ntheta)
         kz = 2 * math.pi * kz_mode / self.Lz
-        lin = TaylorCouetteMRI(self.base, B0=self.B0, nu=self.nu,
-                               eta_mag=self.eta_mag, N=self.Nr, family=self.family)
+        lin = TaylorCouetteMRI(
+            self.base,
+            B0=self.B0,
+            nu=self.nu,
+            eta_mag=self.eta_mag,
+            N=self.Nr,
+            family=self.family,
+        )
         w, V = lin.eigs(m, kz, n_return=which + 1)
         n = lin.n
         X = self.TD.local_mesh(True)
@@ -1587,9 +1801,14 @@ class TaylorCouetteMRIDNS:
         rpts = np.asarray(rr[0, 0, :])
         phase = np.exp(1j * (m * th + kz * zz))
         # (VE component, eigenvector block, radial eval space, target TPS)
-        blocks = [(0, 0, lin.SDv, self.TD), (1, 1, lin.SDv, self.TD),
-                  (2, 2, lin.SDv, self.TD), (3, 4, lin.SDv, self.TD),
-                  (4, 5, lin.Sbt, self.Tbt), (5, 6, lin.Sbz, self.Tbz)]
+        blocks = [
+            (0, 0, lin.SDv, self.TD),
+            (1, 1, lin.SDv, self.TD),
+            (2, 2, lin.SDv, self.TD),
+            (3, 4, lin.SDv, self.TD),
+            (4, 5, lin.Sbt, self.Tbt),
+            (5, 6, lin.Sbz, self.Tbz),
+        ]
         for ve_i, blk, rspace, space in blocks:
             # The radial-only ``rspace`` is real-dtype, so the complex eigenvector
             # block must be evaluated real/imag separately and recombined --
@@ -1597,14 +1816,17 @@ class TaylorCouetteMRIDNS:
             # imaginary part.  The MRI eigenvector is genuinely complex even for
             # m=0 (u and b are out of phase), and dropping Im(q) destroys the
             # radial/axial balance that makes the mode divergence-free.
-            block = V[blk * n:(blk + 1) * n, which]
-            fr_re = Function(rspace); fr_re[:] = 0.0
-            fr_im = Function(rspace); fr_im[:] = 0.0
+            block = V[blk * n : (blk + 1) * n, which]
+            fr_re = Function(rspace)
+            fr_re[:] = 0.0
+            fr_im = Function(rspace)
+            fr_im[:] = 0.0
             fr_re[rspace.slice()] = block.real
             fr_im[rspace.slice()] = block.imag
             prof = np.asarray(fr_re.eval(rpts)) + 1j * np.asarray(fr_im.eval(rpts))
             field = (amp * prof[None, None, :] * phase).real
-            a = Array(space); a[:] = field
+            a = Array(space)
+            a[:] = field
             self.x[ve_i] = a.forward(Function(space))
         self._have_old = False
         return complex(w[which])
@@ -1636,24 +1858,27 @@ class TaylorCouetteMRIDNS:
         X = self.TD.local_mesh(True)
         zz, rr = X[1], X[2]
         arg = np.pi * (rr - R1) / d
-        g = np.sin(arg) ** 2                               # g = g' = 0 at walls
+        g = np.sin(arg) ** 2  # g = g' = 0 at walls
         gp = (2 * np.pi / d) * np.sin(arg) * np.cos(arg)
-        ur = np.zeros_like(rr); uz = np.zeros_like(rr); ut = np.zeros_like(rr)
-        for k in range(1, max(1, self.Nz // 3) + 1):       # a few resolved kz modes
+        ur = np.zeros_like(rr)
+        uz = np.zeros_like(rr)
+        ut = np.zeros_like(rr)
+        for k in range(1, max(1, self.Nz // 3) + 1):  # a few resolved kz modes
             kz = 2 * np.pi * k / self.Lz
             ak, bk = rng.standard_normal(), rng.standard_normal()
             phase = ak * np.cos(kz * zz) + bk * np.sin(kz * zz)
             dphase = kz * (-ak * np.sin(kz * zz) + bk * np.cos(kz * zz))
-            ur += -(1.0 / rr) * g * dphase                 # = -(1/r) dpsi/dz
-            uz += (1.0 / rr) * gp * phase                  # =  (1/r) dpsi/dr
-            ut += np.sin(arg) * phase                      # wall-vanishing swirl
-        scale = amp / max(np.abs(ur).max(), np.abs(uz).max(),
-                          np.abs(ut).max(), 1e-30)
+            ur += -(1.0 / rr) * g * dphase  # = -(1/r) dpsi/dz
+            uz += (1.0 / rr) * gp * phase  # =  (1/r) dpsi/dr
+            ut += np.sin(arg) * phase  # wall-vanishing swirl
+        scale = amp / max(np.abs(ur).max(), np.abs(uz).max(), np.abs(ut).max(), 1e-30)
         for i, fld in ((0, ur), (1, ut), (2, uz)):
-            a = Array(self.TD); a[:] = scale * fld
+            a = Array(self.TD)
+            a[:] = scale * fld
             self.x[i] = a.forward(Function(self.TD))
         for i, space in ((3, self.TD), (4, self.Tbt), (5, self.Tbz)):
-            z = Array(space); z[:] = 0.0                   # b = 0
+            z = Array(space)
+            z[:] = 0.0  # b = 0
             self.x[i] = z.forward(Function(space))
         self._have_old = False
 
@@ -1663,8 +1888,8 @@ class TaylorCouetteMRIDNS:
 
     def energy(self):
         f = self.fields_physical()
-        ek = 0.5 * inner(1, (f[0]**2 + f[1]**2 + f[2]**2) * self.rphys)
-        em = 0.5 * inner(1, (f[3]**2 + f[4]**2 + f[5]**2) * self.rphys)
+        ek = 0.5 * inner(1, (f[0] ** 2 + f[1] ** 2 + f[2] ** 2) * self.rphys)
+        em = 0.5 * inner(1, (f[3] ** 2 + f[4] ** 2 + f[5] ** 2) * self.rphys)
         return float(ek), float(em)
 
     def _div(self, fr_hat, ft_hat, fz_hat):
@@ -1675,14 +1900,23 @@ class TaylorCouetteMRIDNS:
         return float(np.abs(dfr + fr * self.inv_r + dft * self.inv_r + dfz).max())
 
     def divergences(self):
-        return (self._div(self.x[0], self.x[1], self.x[2]),
-                self._div(self.x[3], self.x[4], self.x[5]))
+        return (
+            self._div(self.x[0], self.x[1], self.x[2]),
+            self._div(self.x[3], self.x[4], self.x[5]),
+        )
 
     def diagnostics(self, t, tstep):
         ek, em = self.energy()
         du, db = self.divergences()
-        return {"t": float(t), "tstep": int(tstep), "Ekin": ek, "Emag": em,
-                "E": ek + em, "divu": du, "divb": db}
+        return {
+            "t": float(t),
+            "tstep": int(tstep),
+            "Ekin": ek,
+            "Emag": em,
+            "E": ek + em,
+            "divu": du,
+            "divb": db,
+        }
 
     def run(self, end_time, moderror=0, on_diag=None, assert_finite=True):
         # time accumulates across successive run() calls (lazy-init)
@@ -1698,8 +1932,10 @@ class TaylorCouetteMRIDNS:
                 if on_diag is not None:
                     on_diag(d)
                 elif moderror and comm.Get_rank() == 0:
-                    print(f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
-                          f"divu={d['divu']:.1e} divb={d['divb']:.1e}")
+                    print(
+                        f"t={d['t']:8.4f} Ekin={d['Ekin']:.4e} Emag={d['Emag']:.4e} "
+                        f"divu={d['divu']:.1e} divb={d['divb']:.1e}"
+                    )
         return self.diagnostics(self._t, self._tstep)
 
 
@@ -1726,11 +1962,19 @@ def _run_linear_analysis(args, base):
         from taylor_couette_mri import TaylorCouetteMRI
 
         if args.magnetic_bc == "insulating" and m != 0:
-            raise SystemExit("insulating-wall MRI linear analysis is m=0 only; "
-                             "use --magnetic-bc conducting for m!=0")
-        solver = TaylorCouetteMRI(base, B0=args.B0, nu=args.nu,
-                                  eta_mag=args.eta_mag, N=args.Nr,
-                                  family=args.family, magnetic_bc=args.magnetic_bc)
+            raise SystemExit(
+                "insulating-wall MRI linear analysis is m=0 only; "
+                "use --magnetic-bc conducting for m!=0"
+            )
+        solver = TaylorCouetteMRI(
+            base,
+            B0=args.B0,
+            nu=args.nu,
+            eta_mag=args.eta_mag,
+            N=args.Nr,
+            family=args.family,
+            magnetic_bc=args.magnetic_bc,
+        )
         label = f"Taylor-Couette MHD/MRI ({args.magnetic_bc} walls)"
         nonmodal_kw = dict(energy=args.energy)
     else:
@@ -1747,26 +1991,35 @@ def _run_linear_analysis(args, base):
             print_eigenvalues(w)
         return 0
 
-    rows = solver.nonmodal_growth(m, kz, parse_times(args.times),
-                                  n_modes=args.n_modes, **nonmodal_kw)
+    rows = solver.nonmodal_growth(
+        m, kz, parse_times(args.times), n_modes=args.n_modes, **nonmodal_kw
+    )
     if comm.Get_rank() == 0:
         norm = f", {args.energy} energy" if args.mhd else ""
-        print(f"{label} non-modal transient growth: m={m}, kz={kz:g}, N={args.Nr}{norm}")
+        print(
+            f"{label} non-modal transient growth: m={m}, kz={kz:g}, N={args.Nr}{norm}"
+        )
         print_transient_growth(rows)
     return 0
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Taylor-Couette hydro DNS "
-                                "(axisymmetric by default; --Ntheta>0 for full 3D)")
+    p = argparse.ArgumentParser(
+        description="Taylor-Couette hydro DNS "
+        "(axisymmetric by default; --Ntheta>0 for full 3D)"
+    )
     p.add_argument("--R1", type=float, default=1.0)
     p.add_argument("--R2", type=float, default=2.0)
     p.add_argument("--Omega1", type=float, default=1.0)
     p.add_argument("--Omega2", type=float, default=0.0)
     p.add_argument("--nu", type=float, default=1.0e-2)
     p.add_argument("--Nr", type=int, default=48)
-    p.add_argument("--Ntheta", type=int, default=0,
-                   help="azimuthal Fourier resolution; 0 -> axisymmetric solver")
+    p.add_argument(
+        "--Ntheta",
+        type=int,
+        default=0,
+        help="azimuthal Fourier resolution; 0 -> axisymmetric solver",
+    )
     p.add_argument("--Nz", type=int, default=32)
     p.add_argument("--Lz", type=float, default=None)
     p.add_argument("--dt", type=float, default=2.0e-3)
@@ -1774,32 +2027,60 @@ def main(argv=None):
     p.add_argument("--family", choices=["L", "C"], default="L")
     p.add_argument("--dealias", type=float, default=1.5)
     p.add_argument("--amp", type=float, default=1.0e-3)
-    p.add_argument("--m", type=int, default=None,
-                   help="azimuthal wavenumber; DNS 3D seed defaults to 1, "
-                        "--linear-analysis defaults to 0 (both honour an explicit value)")
+    p.add_argument(
+        "--m",
+        type=int,
+        default=None,
+        help="azimuthal wavenumber; DNS 3D seed defaults to 1, "
+        "--linear-analysis defaults to 0 (both honour an explicit value)",
+    )
     p.add_argument("--kz-mode", type=int, default=1)
     p.add_argument("--moderror", type=int, default=50)
     p.add_argument("--seed-random", action="store_true")
-    p.add_argument("--mhd", action="store_true",
-                   help="MHD/MRI solver (imposed axial field B0); axisymmetric "
-                        "by default, --Ntheta>0 selects the full 3D MRI solver")
+    p.add_argument(
+        "--mhd",
+        action="store_true",
+        help="MHD/MRI solver (imposed axial field B0); axisymmetric "
+        "by default, --Ntheta>0 selects the full 3D MRI solver",
+    )
     p.add_argument("--B0", type=float, default=0.1, help="imposed axial field (MHD)")
     p.add_argument("--eta-mag", type=float, default=1.0e-3, help="resistivity (MHD)")
-    p.add_argument("--linear-analysis", choices=["none", "eigs", "nonmodal"], default="none",
-                   help="run a linear eigenvalue or non-modal analysis and exit")
-    p.add_argument("--magnetic-bc", choices=["conducting", "insulating"],
-                   default="conducting",
-                   help="magnetic wall BC for --mhd --linear-analysis "
-                        "(insulating is m=0 only)")
-    p.add_argument("--energy", choices=["total", "kinetic", "magnetic"],
-                   default="total",
-                   help="energy norm for --mhd --linear-analysis nonmodal")
-    p.add_argument("--kz", type=float, default=None,
-                   help="axial wavenumber for --linear-analysis; overrides --Lz/--kz-mode")
-    p.add_argument("--times", type=str, default="1,5,10,20",
-                   help="comma-separated times for --linear-analysis nonmodal")
-    p.add_argument("--n-modes", type=int, default=None,
-                   help="number of finite eigenmodes retained for non-modal analysis")
+    p.add_argument(
+        "--linear-analysis",
+        choices=["none", "eigs", "nonmodal"],
+        default="none",
+        help="run a linear eigenvalue or non-modal analysis and exit",
+    )
+    p.add_argument(
+        "--magnetic-bc",
+        choices=["conducting", "insulating"],
+        default="conducting",
+        help="magnetic wall BC for --mhd --linear-analysis (insulating is m=0 only)",
+    )
+    p.add_argument(
+        "--energy",
+        choices=["total", "kinetic", "magnetic"],
+        default="total",
+        help="energy norm for --mhd --linear-analysis nonmodal",
+    )
+    p.add_argument(
+        "--kz",
+        type=float,
+        default=None,
+        help="axial wavenumber for --linear-analysis; overrides --Lz/--kz-mode",
+    )
+    p.add_argument(
+        "--times",
+        type=str,
+        default="1,5,10,20",
+        help="comma-separated times for --linear-analysis nonmodal",
+    )
+    p.add_argument(
+        "--n-modes",
+        type=int,
+        default=None,
+        help="number of finite eigenmodes retained for non-modal analysis",
+    )
     args = p.parse_args(argv)
 
     base = CircularCouette(args.R1, args.R2, args.Omega1, args.Omega2)
@@ -1809,45 +2090,80 @@ def main(argv=None):
     m_seed = args.m if args.m is not None else 1
     if args.mhd:
         if args.Ntheta > 0:
-            dns = TaylorCouetteMRIDNS(base, B0=args.B0, nu=args.nu,
-                                      eta_mag=args.eta_mag, Nr=args.Nr,
-                                      Ntheta=args.Ntheta, Nz=args.Nz, Lz=args.Lz,
-                                      dt=args.dt, family=args.family,
-                                      dealias=args.dealias)
-            seed = lambda: dns.seed_linear_eigenmode(m=m_seed, kz_mode=args.kz_mode,
-                                                     amp=args.amp)
+            dns = TaylorCouetteMRIDNS(
+                base,
+                B0=args.B0,
+                nu=args.nu,
+                eta_mag=args.eta_mag,
+                Nr=args.Nr,
+                Ntheta=args.Ntheta,
+                Nz=args.Nz,
+                Lz=args.Lz,
+                dt=args.dt,
+                family=args.family,
+                dealias=args.dealias,
+            )
+            seed = lambda: dns.seed_linear_eigenmode(
+                m=m_seed, kz_mode=args.kz_mode, amp=args.amp
+            )
         else:
-            dns = AxisymmetricMRIDNS(base, B0=args.B0, nu=args.nu,
-                                     eta_mag=args.eta_mag, Nr=args.Nr, Nz=args.Nz,
-                                     Lz=args.Lz, dt=args.dt, family=args.family,
-                                     dealias=args.dealias)
-            seed = lambda: dns.seed_linear_eigenmode(kz_mode=args.kz_mode,
-                                                     amp=args.amp)
+            dns = AxisymmetricMRIDNS(
+                base,
+                B0=args.B0,
+                nu=args.nu,
+                eta_mag=args.eta_mag,
+                Nr=args.Nr,
+                Nz=args.Nz,
+                Lz=args.Lz,
+                dt=args.dt,
+                family=args.family,
+                dealias=args.dealias,
+            )
+            seed = lambda: dns.seed_linear_eigenmode(kz_mode=args.kz_mode, amp=args.amp)
         if args.seed_random:
             dns.set_random(amp=args.amp)
         else:
             seed()
         d0 = dns.diagnostics(0.0, 0)
         if comm.Get_rank() == 0:
-            print(f"initial: Ekin={d0['Ekin']:.4e} Emag={d0['Emag']:.4e} "
-                  f"divu={d0['divu']:.1e} divb={d0['divb']:.1e}")
+            print(
+                f"initial: Ekin={d0['Ekin']:.4e} Emag={d0['Emag']:.4e} "
+                f"divu={d0['divu']:.1e} divb={d0['divb']:.1e}"
+            )
         final = dns.run(args.end_time, moderror=args.moderror)
         if comm.Get_rank() == 0:
-            print(f"final:   Ekin={final['Ekin']:.4e} Emag={final['Emag']:.4e} "
-                  f"divu={final['divu']:.1e} divb={final['divb']:.1e}")
+            print(
+                f"final:   Ekin={final['Ekin']:.4e} Emag={final['Emag']:.4e} "
+                f"divu={final['divu']:.1e} divb={final['divb']:.1e}"
+            )
         return 0
     if args.Ntheta > 0:
-        dns = TaylorCouetteDNS(base, nu=args.nu, Nr=args.Nr, Ntheta=args.Ntheta,
-                               Nz=args.Nz, Lz=args.Lz, dt=args.dt,
-                               family=args.family, dealias=args.dealias)
+        dns = TaylorCouetteDNS(
+            base,
+            nu=args.nu,
+            Nr=args.Nr,
+            Ntheta=args.Ntheta,
+            Nz=args.Nz,
+            Lz=args.Lz,
+            dt=args.dt,
+            family=args.family,
+            dealias=args.dealias,
+        )
         if args.seed_random:
             dns.set_random(amp=args.amp)
         else:
             dns.set_perturbation(amp=args.amp, m=m_seed, kz_mode=args.kz_mode)
     else:
-        dns = AxisymmetricTCDNS(base, nu=args.nu, Nr=args.Nr, Nz=args.Nz,
-                                Lz=args.Lz, dt=args.dt, family=args.family,
-                                dealias=args.dealias)
+        dns = AxisymmetricTCDNS(
+            base,
+            nu=args.nu,
+            Nr=args.Nr,
+            Nz=args.Nz,
+            Lz=args.Lz,
+            dt=args.dt,
+            family=args.family,
+            dealias=args.dealias,
+        )
         if args.seed_random:
             dns.set_random(amp=args.amp)
         else:

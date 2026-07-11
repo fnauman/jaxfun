@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
 
-from production.compare_devices import _backend_check, _summary, compare_final_diagnostics, main
+from production.compare_devices import (
+    _backend_check,
+    _summary,
+    compare_final_diagnostics,
+    main,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,7 +87,9 @@ def test_same_backend_device_comparison_is_flagged(tmp_path):
             encoding="utf-8",
         )
 
-    check = _backend_check(tmp_path / "left", tmp_path / "right", allow_same_backend=False)
+    check = _backend_check(
+        tmp_path / "left", tmp_path / "right", allow_same_backend=False
+    )
 
     assert check["same_backend"] is True
     assert check["passed"] is False

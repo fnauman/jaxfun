@@ -535,7 +535,6 @@ def pcf_fluctuation_reference(
     )
 
 
-
 def _pcf_primitive_reference(
     *,
     class_name: str,
@@ -589,7 +588,6 @@ def _pcf_primitive_reference(
     )
 
 
-
 def pcf_primitive_axisymmetric_reference(
     *,
     steps: tuple[int, ...] = (10,),
@@ -621,7 +619,6 @@ def pcf_primitive_axisymmetric_reference(
         amp=amp,
         include_coefficients=include_coefficients,
     )
-
 
 
 def pcf_primitive_3d_reference(
@@ -659,7 +656,6 @@ def pcf_primitive_3d_reference(
         amp=amp,
         include_coefficients=include_coefficients,
     )
-
 
 
 def pcf_mhd_reference(

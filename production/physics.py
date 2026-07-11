@@ -117,7 +117,9 @@ def _single_b0(spec: dict[str, Any]) -> float:
     if group_b0 is not None and forcing_b0 is not None:
         gb = _b0_magnitude(group_b0, "nondimensional_groups.B0")
         fb = _b0_magnitude(forcing_b0, "forcing.B0")
-        if not math.isclose(gb, fb, rel_tol=_CONSISTENCY_RTOL, abs_tol=_CONSISTENCY_ATOL):
+        if not math.isclose(
+            gb, fb, rel_tol=_CONSISTENCY_RTOL, abs_tol=_CONSISTENCY_ATOL
+        ):
             raise ProblemSpecError(
                 f"imposed field disagrees: nondimensional_groups.B0={gb:g} vs "
                 f"forcing.B0={fb:g}; state a single value"
@@ -144,9 +146,7 @@ def _resolve_coefficient(
     """
 
     if supplied is None and group is None:
-        raise ProblemSpecError(
-            f"must supply {coeff_label} or {group_label}"
-        )
+        raise ProblemSpecError(f"must supply {coeff_label} or {group_label}")
     if supplied is not None and group is not None:
         coeff = _positive(supplied, coeff_label)
         grp = _positive(group, group_label)
@@ -165,7 +165,9 @@ def _resolve_coefficient(
     return scale / grp, grp
 
 
-def resolve_physics(spec: dict[str, Any], *, precision: str = "float64") -> ResolvedPhysics:
+def resolve_physics(
+    spec: dict[str, Any], *, precision: str = "float64"
+) -> ResolvedPhysics:
     """Resolve one canonical physics object from a validated spec.
 
     Raises :class:`ProblemSpecError` on inconsistent or under-specified inputs so
