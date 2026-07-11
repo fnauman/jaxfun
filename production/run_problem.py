@@ -28,14 +28,15 @@ try:
         compare_to_golden,
         load_golden,
         resolve_golden,
-        validate_golden,
         scalar_hash,
+        validate_golden,
     )
     from .device import capture_device_record, configure_production_dtype
     from .oracles import (
         ProductionOracleNotImplementedError,
         load_resume_checkpoint,
         run_supported_spec,
+        select_qualified_parent_checkpoint,
         validate_resume_checkpoint,
     )
     from .problem_spec import ProblemSpecError, UnsupportedSpecError, load_spec
@@ -51,8 +52,8 @@ except ImportError:  # pragma: no cover - direct script mode
         compare_to_golden,
         load_golden,
         resolve_golden,
-        validate_golden,
         scalar_hash,
+        validate_golden,
     )  # type: ignore
     from production.device import (  # type: ignore
         capture_device_record,
@@ -62,14 +63,15 @@ except ImportError:  # pragma: no cover - direct script mode
         ProductionOracleNotImplementedError,
         load_resume_checkpoint,
         run_supported_spec,
+        select_qualified_parent_checkpoint,
         validate_resume_checkpoint,
     )  # type: ignore
     from production.problem_spec import (  # type: ignore
         ProblemSpecError,
         UnsupportedSpecError,
+        load_spec,  # type: ignore
     )
     from production.provenance import ReleaseCleanlinessError  # type: ignore
-    from production.problem_spec import load_spec  # type: ignore
     from production.quench import (  # type: ignore
         QuenchError,
         burn_in_horizon,
@@ -138,7 +140,9 @@ def run_problem(
         )
 
         device_record = (
-            capture_device_record(device) if capture_device else {"capture_skipped": True}
+            capture_device_record(device)
+            if capture_device
+            else {"capture_skipped": True}
         )
         _assert_precision_matches_spec(config.spec, device_record)
         if resume_record is not None:
@@ -230,7 +234,7 @@ def run_problem(
                 solver_started_at, solver_start, solver_steps=solver_steps
             )
             metadata["execution"] = {
-                # FJ-06: distinguish nan_inf / blew_up / walltime from a generic failure.
+                # FJ-06: distinguish health failures from a generic failure.
                 "status": _operational_status(exc),
                 "solver_execution_wired": True,
                 "execution_kind": _execution_kind(config.spec),
@@ -247,7 +251,8 @@ def run_problem(
         _write_diagnostics(
             out_dir / "diagnostics.jsonl",
             diagnostics,
-            append=resume_record is not None and (out_dir / "diagnostics.jsonl").exists(),
+            append=resume_record is not None
+            and (out_dir / "diagnostics.jsonl").exists(),
         )
         close_partial(keep=False)
         partial_stream["closed"] = True
@@ -687,8 +692,7 @@ def _assert_required_saturation_checks(metadata: dict[str, Any]) -> None:
             details.append(f"{key}={value}")
     if checks.get("stationarity_check_passed") is not True:
         details.append(
-            "stationarity_check_passed="
-            f"{checks.get('stationarity_check_passed')}"
+            f"stationarity_check_passed={checks.get('stationarity_check_passed')}"
         )
     if not checks.get("present"):
         state = "missing"
@@ -772,9 +776,7 @@ def _executed_solver_steps(
         return None
     target_steps = _steps_from_spec_metadata(spec, steps=steps)
     start_step = (
-        int(getattr(resume_record, "tstep", 0))
-        if resume_record is not None
-        else 0
+        int(getattr(resume_record, "tstep", 0)) if resume_record is not None else 0
     )
     return max(0, target_steps - start_step)
 
@@ -996,7 +998,9 @@ def _resolve_resume_or_quench(
         raise ProblemSpecError("--quench-step requires --quench")
     if quench_from is not None:
         source = Path(quench_from)
-        record = load_resume_checkpoint(source, step=quench_step)
+        parent_entry = select_qualified_parent_checkpoint(source, step=quench_step)
+        selected_step = int(parent_entry["tstep"])
+        record = load_resume_checkpoint(source, step=selected_step)
         parent_spec = load_spec(source / "spec.json")
         diff = validate_quench(parent_spec, config.spec)  # raises on illegal change
         tstep0 = int(getattr(record, "tstep", 0))
@@ -1007,6 +1011,9 @@ def _resolve_resume_or_quench(
             "child_spec_hash": config.spec["spec_hash"],
             "selected_tstep": tstep0,
             "requested_quench_step": quench_step,
+            "parent_plateau_qualified": True,
+            "parent_plateau_window_stats": parent_entry["plateau_window_stats"],
+            "parent_checkpoint_sha256": parent_entry.get("file_sha256"),
             "mutable_diff": {k: list(v) for k, v in diff["changed"].items()},
             **burn_in_horizon(tstep0=tstep0, burn_in_steps=burn_in_steps),
         }
@@ -1057,10 +1064,10 @@ def _integrator_provenance(spec: dict[str, Any]) -> dict[str, Any]:
     if representation == "vector_potential":
         # curl family dispatches to PlaneCouetteMRIShearpyJax, which runs IMEXRK222.
         actual = "IMEXRK222"
-    elif (
-        oracle in _PRIMITIVE_SATURATION_ORACLES
-        and spec.get("physics") in {"mhd", "mri"}
-    ):
+    elif oracle in _PRIMITIVE_SATURATION_ORACLES and spec.get("physics") in {
+        "mhd",
+        "mri",
+    }:
         actual = "CNAB2"  # hard-coded in PCFMRIDNSJax
     return {
         "requested": requested,
@@ -1185,7 +1192,12 @@ def _assert_precision_matches_spec(
     active = device_record.get("production_run_dtype")
     if active is None:
         return
-    alias = {"single": "float32", "fp32": "float32", "double": "float64", "fp64": "float64"}
+    alias = {
+        "single": "float32",
+        "fp32": "float32",
+        "double": "float64",
+        "fp64": "float64",
+    }
     declared_norm = alias.get(str(declared).lower(), str(declared).lower())
     if declared_norm != str(active).lower():
         raise ProblemSpecError(
@@ -1199,7 +1211,9 @@ def _operational_status(exc: BaseException) -> str:
     try:
         from .classify import operational_status_from_exception
     except ImportError:  # pragma: no cover - direct script mode
-        from production.classify import operational_status_from_exception  # type: ignore
+        from production.classify import (
+            operational_status_from_exception,  # type: ignore
+        )
     return operational_status_from_exception(exc).value
 
 
@@ -1240,6 +1254,7 @@ def _classification_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
         noise_floor=noise_floor,
         stationary=bool(stationary) if stationary is not None else None,
         underresolved=bool(underresolved) if underresolved is not None else False,
+        correlation_time=scalars.get("correlation_time_total_stress"),
     )
     result["underresolved"] = underresolved
     return result
@@ -1329,7 +1344,9 @@ def _golden_tolerance_model(
         if key == "stationarity_relative_change":
             scalar_tolerances[key] = float(stationarity_tol)
         elif key in {"stationarity_previous_mean", "stationarity_current_mean"}:
-            scalar_tolerances[key] = max(abs(float(value)) * float(stationarity_tol), 1.0e-30)
+            scalar_tolerances[key] = max(
+                abs(float(value)) * float(stationarity_tol), 1.0e-30
+            )
         elif key == "stationarity_window_samples":
             scalar_tolerances[key] = 1.0
         else:

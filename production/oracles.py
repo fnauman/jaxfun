@@ -57,6 +57,86 @@ def load_checkpoint_bank_index(run_dir: str | Path) -> list[dict[str, Any]]:
     return json.loads(index_path.read_text(encoding="utf-8"))
 
 
+def select_qualified_parent_checkpoint(
+    run_dir: str | Path, *, step: int | None = None
+) -> dict[str, Any]:
+    """Select a stationary, independently sampled parent-bank entry.
+
+    Cadence checkpoints are retained for audit and exact resume, but only an
+    explicitly plateau-qualified entry may seed a quench.  With no requested
+    step, the newest qualified parent is selected.
+    """
+
+    from .quench import QuenchError, file_sha256
+
+    entries = load_checkpoint_bank_index(run_dir)
+    if not entries:
+        raise QuenchError(
+            "quench requires a checkpoint bank with plateau qualification; "
+            "run the parent with --checkpoint-bank and diagnostics cadence"
+        )
+    candidates = entries
+    if step is not None:
+        candidates = [
+            entry for entry in entries if int(entry.get("tstep", -1)) == int(step)
+        ]
+        if not candidates:
+            raise QuenchError(
+                f"checkpoint bank has no entry for requested tstep={int(step)}"
+            )
+    rejection_reasons: dict[str, list[str]] = {}
+    qualified = []
+    for entry in candidates:
+        stats = entry.get("plateau_window_stats", {})
+        reasons = []
+        if entry.get("plateau_qualified") is not True:
+            reasons.append("entry is quarantined")
+        if stats.get("plateau_qualified") is not True:
+            reasons.extend(stats.get("qualification_reasons", []))
+            if not stats.get("qualification_reasons"):
+                reasons.append("missing plateau qualification")
+        if stats.get("stationary") is not True:
+            reasons.append("stationarity gate did not pass")
+        if stats.get("diagnostics_current") is not True:
+            reasons.append("diagnostics do not reach the checkpoint time")
+        if stats.get("persistent_stress") is not True:
+            reasons.append("persistent-stress gate did not pass")
+        if stats.get("checkpoint_health_underresolved") is not False:
+            reasons.append("checkpoint resolution-health gate did not pass")
+        tau = stats.get("correlation_time_total_stress")
+        if not isinstance(tau, (int, float)) or not math.isfinite(tau) or tau <= 0.0:
+            reasons.append("finite positive stress correlation time is missing")
+        independent = stats.get("effective_independent_samples")
+        required = stats.get("required_independent_samples")
+        if (
+            not isinstance(independent, (int, float))
+            or not isinstance(required, (int, float))
+            or independent < required
+        ):
+            reasons.append("independent-sample gate did not pass")
+        expected_path = _bank_checkpoint_path(
+            Path(run_dir), int(entry.get("tstep", -1))
+        )
+        actual_path = Path(str(entry.get("checkpoint_path", "")))
+        if actual_path.resolve() != expected_path.resolve() or not actual_path.exists():
+            reasons.append(
+                "checkpoint path is missing or outside the selected bank slot"
+            )
+        elif entry.get("file_sha256") != file_sha256(str(actual_path)):
+            reasons.append("checkpoint SHA256 does not match the bank manifest")
+        if reasons:
+            rejection_reasons[str(entry.get("tstep"))] = reasons
+        else:
+            qualified.append(entry)
+    if not qualified:
+        requested = "latest" if step is None else str(int(step))
+        raise QuenchError(
+            f"checkpoint-bank parent {requested} is not plateau-qualified: "
+            f"{rejection_reasons}"
+        )
+    return max(qualified, key=lambda entry: int(entry["tstep"]))
+
+
 def validate_resume_checkpoint(
     record: Any,
     spec: dict[str, Any],
@@ -80,8 +160,14 @@ def validate_resume_checkpoint(
         dtype_json = dtype_json.decode()
     dtype_metadata = json.loads(dtype_json or "{}")
     expected_dtype = dtype_metadata.get("production_run_dtype")
-    active_dtype = None if device_record is None else device_record.get("production_run_dtype")
-    if active_dtype is not None and expected_dtype is not None and active_dtype != expected_dtype:
+    active_dtype = (
+        None if device_record is None else device_record.get("production_run_dtype")
+    )
+    if (
+        active_dtype is not None
+        and expected_dtype is not None
+        and active_dtype != expected_dtype
+    ):
         raise ValueError(
             "resume checkpoint production dtype "
             f"{expected_dtype!r} does not match active dtype {active_dtype!r}"
@@ -1193,6 +1279,7 @@ def _run_pcf_primitive_mhd_saturation(
     target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
     )
+    health_observations: list[dict[str, float]] = []
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -1207,7 +1294,11 @@ def _run_pcf_primitive_mhd_saturation(
         on_diagnostics_row=collect_diagnostics,
         t0=t0,
         tstep0=tstep0,
+        health_block=_PRODUCTION_HEALTH_BLOCK,
+        health_scalars_fn=health.primitive_health_scalars,
+        health_observations=health_observations,
         checkpoint_bank=checkpoint_bank,
+        plateau_rows=diagnostic_rows,
     )
     final = _pcf_primitive_3d_scalars(solver, out)
     # Growth is measured from the evolved baseline over the steps actually taken
@@ -1264,7 +1355,10 @@ def _run_pcf_primitive_mhd_saturation(
     series = _dedupe_time_rows([first, *diagnostic_rows, last])
     # FJ-05: exclude the post-quench burn-in window from the fitted history.
     analysis_rows, analysis_start = _analysis_window(
-        diagnostic_rows, t0=t0, dt=float(spec["time"]["dt"]), burn_in_steps=burn_in_steps
+        diagnostic_rows,
+        t0=t0,
+        dt=float(spec["time"]["dt"]),
+        burn_in_steps=burn_in_steps,
     )
     fit_series = (
         series if analysis_start is None else _dedupe_time_rows([*analysis_rows, last])
@@ -1273,12 +1367,17 @@ def _run_pcf_primitive_mhd_saturation(
     if analysis_start is not None:
         scalars["analysis_burn_in_steps"] = int(burn_in_steps)
         scalars["analysis_t_start"] = float(analysis_start)
-    # Review round 3: resolution/stability health contract (budget residual is
-    # curl-family only; the primitive path reports CFL/tails/occupancy).
-    scalars.update(health.primitive_health_scalars(solver, out))
+    # Resolution health is enforced every compiled block; report the maximum
+    # observed load, not merely a potentially benign final value.
+    scalars.update(_max_health_observations(health_observations))
     tau = health.correlation_time(analysis_rows)
     if tau is not None:
         scalars["correlation_time_total_stress"] = float(tau)
+        independent = health.effective_independent_samples(
+            analysis_rows, correlation=tau
+        )
+        if independent is not None:
+            scalars["effective_independent_samples_total_stress"] = float(independent)
     return {"scalars": scalars, "time_series": series}
 
 
@@ -1370,7 +1469,9 @@ def _curl_solver_from_spec(spec: dict[str, Any]):
         background_b=(0.0, 0.0, physics.B0),
         dt=float(spec["time"]["dt"]),
         family=resolution.get("family", "L"),
-        padding_factor=_padding_factor(resolution, solver_family="pcf_vector_potential"),
+        padding_factor=_padding_factor(
+            resolution, solver_family="pcf_vector_potential"
+        ),
         perturbation_amplitude=float(initial.get("velocity_amplitude", 0.05)),
         magnetic_amplitude=float(initial.get("magnetic_amplitude", 0.0)),
     )
@@ -1433,7 +1534,9 @@ def _run_pcf_vector_potential_mhd_saturation(
     checkpoint_bank: bool = False,
     burn_in_steps: int = 0,
 ) -> dict[str, Any]:
-    """FJ-03: curl/vector-potential PCF-MRI DNS (B = curl A, solenoidal by construction).
+    """FJ-03: curl/vector-potential PCF-MRI DNS.
+
+    The magnetic field is ``B = curl A`` and is solenoidal by construction.
 
     The zero-net-flux workhorse. MHDState (KMM flow block + A coefficients)
     checkpoint, snapshot, resume-exact, and quench continuation run through the
@@ -1492,6 +1595,7 @@ def _run_pcf_vector_potential_mhd_saturation(
         if on_row is not None:
             on_row(row)
 
+    health_observations: list[dict[str, float]] = []
     out = _solve_with_optional_checkpoints(
         solver,
         state,
@@ -1506,8 +1610,11 @@ def _run_pcf_vector_potential_mhd_saturation(
         on_diagnostics_row=collect,
         t0=t0,
         tstep0=tstep0,
-        health_block=_CURL_HEALTH_BLOCK,
+        health_block=_PRODUCTION_HEALTH_BLOCK,
+        health_scalars_fn=health.curl_health_scalars,
+        health_observations=health_observations,
         checkpoint_bank=checkpoint_bank,
+        plateau_rows=rows,
     )
     final_scalars = _pcf_curl_scalars(solver, out)
     elapsed = target_steps * float(spec["time"]["dt"])
@@ -1536,7 +1643,8 @@ def _run_pcf_vector_potential_mhd_saturation(
         ),
     )
     flux_drift = {
-        f"flux_drift_b{axis}": final_scalars[f"mean_b{axis}"] - first_scalars[f"mean_b{axis}"]
+        f"flux_drift_b{axis}": final_scalars[f"mean_b{axis}"]
+        - first_scalars[f"mean_b{axis}"]
         for axis in ("x", "y", "z")
     }
     scalars = {
@@ -1576,11 +1684,17 @@ def _run_pcf_vector_potential_mhd_saturation(
     if analysis_start is not None:
         scalars["analysis_burn_in_steps"] = int(burn_in_steps)
         scalars["analysis_t_start"] = float(analysis_start)
-    # Review round 3: resolution/stability health contract for the workhorse.
-    scalars.update(health.curl_health_scalars(solver, out))
+    # Resolution health is enforced every compiled block; report maxima over
+    # the trajectory so a transient violation cannot disappear at final time.
+    scalars.update(_max_health_observations(health_observations))
     tau = health.correlation_time(analysis_rows)
     if tau is not None:
         scalars["correlation_time_total_stress"] = float(tau)
+        independent = health.effective_independent_samples(
+            analysis_rows, correlation=tau
+        )
+        if independent is not None:
+            scalars["effective_independent_samples_total_stress"] = float(independent)
     budget = health.energy_budget_residual(
         analysis_rows,
         shear_rate=float(solver.shear_rate),
@@ -2043,7 +2157,10 @@ def _solve_with_optional_checkpoints(
     t0: float = 0.0,
     tstep0: int = 0,
     health_block: int | None = None,
+    health_scalars_fn: Any | None = None,
+    health_observations: list[dict[str, float]] | None = None,
     checkpoint_bank: bool = False,
+    plateau_rows: list[dict[str, Any]] | None = None,
 ) -> Any:
     if checkpoint_every is not None and checkpoint_every <= 0:
         raise ValueError("checkpoint_every must be positive")
@@ -2052,7 +2169,9 @@ def _solve_with_optional_checkpoints(
     if diagnostics_every is not None and diagnostics_every <= 0:
         raise ValueError("diagnostics_every must be positive")
     if (checkpoint_every is not None or snapshot_every is not None) and out_dir is None:
-        raise ValueError("out_dir is required when checkpoint or snapshot output is set")
+        raise ValueError(
+            "out_dir is required when checkpoint or snapshot output is set"
+        )
 
     monitor_every = _monitor_every(
         steps,
@@ -2078,8 +2197,36 @@ def _solve_with_optional_checkpoints(
         diagnostics_path = out_path / "diagnostics.jsonl"
         snapshot_path = out_path / "snapshots" / "snapshots.h5"
 
+    health_cache: dict[int, dict[str, float]] = {}
+
+    def evaluate_health(t: float, tstep: int, candidate_state: Any) -> dict[str, float]:
+        cached = health_cache.get(int(tstep))
+        if cached is not None:
+            return cached
+        if health_scalars_fn is None:
+            return {}
+        values = {
+            str(key): float(value)
+            for key, value in health_scalars_fn(solver, candidate_state).items()
+        }
+        health_cache[int(tstep)] = values
+        if health_observations is not None:
+            health_observations.append(values)
+        _raise_on_resolution_health(
+            values,
+            t=t,
+            tstep=tstep,
+            enforce_spectral=(int(tstep) - int(tstep0))
+            >= health.EARLY_ABORT_STARTUP_STEPS,
+        )
+        return values
+
     def on_checkpoint(t: float, tstep: int, checkpoint_state: Any) -> None:
         assert checkpoint_path is not None
+        # Callback ordering writes checkpoints before should_stop.  Enforce the
+        # resolution guard here as well so a rejected state is never promoted
+        # into a selectable parent bank.
+        checkpoint_health = evaluate_health(t, tstep, checkpoint_state)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"state": _checkpoint_payload(checkpoint_state)}
         write_production_checkpoint(
@@ -2102,6 +2249,11 @@ def _solve_with_optional_checkpoints(
                 state_kind=state_kind,
                 device_record=device_record,
                 diagnostics_path=diagnostics_path,
+                plateau_stats=_checkpoint_plateau_stats(
+                    plateau_rows or [],
+                    checkpoint_time=float(t),
+                    health_scalars=checkpoint_health,
+                ),
             )
 
     def on_snapshot(t: float, tstep: int, snapshot_state: Any) -> None:
@@ -2148,6 +2300,7 @@ def _solve_with_optional_checkpoints(
         _raise_on_divergence_drift(
             solver, candidate_state, t=t, tstep=tstep, diagnostics=diag
         )
+        evaluate_health(t, tstep, candidate_state)
         return False
 
     cadence = Cadence(
@@ -2202,7 +2355,9 @@ def _stationarity_scalars(
     key: str,
     tolerance: float = 5.0e-2,
 ) -> dict[str, Any]:
-    values = [float(row[key]) for row in rows if key in row and math.isfinite(float(row[key]))]
+    values = [
+        float(row[key]) for row in rows if key in row and math.isfinite(float(row[key]))
+    ]
     samples = len(values)
     if samples < 4:
         return {
@@ -2281,8 +2436,78 @@ _DIVERGENCE_GUARD_LIMIT = 1.0e-2
 
 _ENERGY_RUNAWAY_LIMIT = 1.0e30
 
-# Cap on how many steps the curl path advances between per-block health checks.
-_CURL_HEALTH_BLOCK = 50
+# Cap on how many steps either production PCF family advances between full
+# CFL/spectral/occupancy checks.
+_PRODUCTION_HEALTH_BLOCK = 50
+
+
+def _raise_on_resolution_health(
+    scalars: dict[str, float],
+    *,
+    t: float,
+    tstep: int,
+    enforce_spectral: bool = True,
+) -> None:
+    """Abort as soon as CFL, spectral tails, or occupancy violate policy."""
+
+    offenders = []
+    if (
+        enforce_spectral
+        and scalars.get("spectral_tail_max", 0.0)
+        > health.EARLY_ABORT_SPECTRAL_TAIL_LIMIT
+    ):
+        offenders.append(
+            f"spectral_tail_max={scalars['spectral_tail_max']:.6g} > "
+            f"{health.EARLY_ABORT_SPECTRAL_TAIL_LIMIT:g}"
+        )
+    if scalars.get("cfl_total", 0.0) > health.CFL_LIMIT:
+        offenders.append(f"cfl_total={scalars['cfl_total']:.6g} > {health.CFL_LIMIT:g}")
+    if (
+        enforce_spectral
+        and scalars.get("mode_occupancy", 0.0) > health.EARLY_ABORT_MODE_OCCUPANCY_LIMIT
+    ):
+        offenders.append(
+            f"mode_occupancy={scalars['mode_occupancy']:.6g} > "
+            f"{health.EARLY_ABORT_MODE_OCCUPANCY_LIMIT:g}"
+        )
+    if not offenders:
+        return
+    raise RuntimeError(
+        f"underresolved health guard failed at tstep={int(tstep)} t={float(t):g}: "
+        + ", ".join(offenders)
+    )
+
+
+def _max_health_observations(
+    observations: list[dict[str, float]],
+) -> dict[str, float]:
+    """Maximum finite value of each health component over checked blocks."""
+
+    keys = {key for row in observations for key in row}
+    return {
+        key: max(float(row[key]) for row in observations if key in row)
+        for key in sorted(keys)
+    }
+
+
+def _checkpoint_plateau_stats(
+    rows: list[dict[str, Any]],
+    *,
+    checkpoint_time: float,
+    health_scalars: dict[str, float],
+) -> dict[str, Any]:
+    """Combine stationarity/sampling and strict resolution health for banking."""
+
+    stats = health.plateau_window_stats(rows, checkpoint_time=checkpoint_time)
+    underresolved = health.underresolved_from_scalars(health_scalars)
+    stats["checkpoint_health"] = dict(health_scalars)
+    stats["checkpoint_health_underresolved"] = underresolved
+    if underresolved is not False:
+        stats["plateau_qualified"] = False
+        stats["qualification_reasons"].append(
+            "checkpoint failed strict CFL/spectral-tail/occupancy health"
+        )
+    return stats
 
 
 def _raise_on_energy_runaway(
@@ -2411,9 +2636,7 @@ def _snapshot_step_path(snapshot_path: Path, tstep: int) -> Path:
     return snapshot_path.parent / "steps" / f"snapshot_{int(tstep):08d}.h5"
 
 
-def _update_snapshot_index(
-    snapshot_path: Path, *, step_path: Path, tstep: int
-) -> None:
+def _update_snapshot_index(snapshot_path: Path, *, step_path: Path, tstep: int) -> None:
     import h5py
 
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2451,7 +2674,9 @@ def _update_snapshot_index(
 
 def _snapshot_payload(solver: Any, state: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     def real_fields(names: tuple[str, ...], values: tuple[Any, ...]) -> dict[str, Any]:
-        return {name: jnp.real(value) for name, value in zip(names, values, strict=True)}
+        return {
+            name: jnp.real(value) for name, value in zip(names, values, strict=True)
+        }
 
     def spaces_for(names: tuple[str, ...]) -> dict[str, Any]:
         space = _snapshot_space(solver)
@@ -2521,6 +2746,7 @@ def _write_bank_checkpoint(
     state_kind: str,
     device_record: dict[str, Any] | None,
     diagnostics_path: Path | None,
+    plateau_stats: dict[str, Any],
 ) -> None:
     """FJ-05: retain an immutable per-step bank entry + manifest.
 
@@ -2554,6 +2780,7 @@ def _write_bank_checkpoint(
         numerics_contract_version=int(spec.get("numerics_contract_version", 0)),
         checkpoint_path=str(target),
         file_sha256=file_sha256(str(target)),
+        plateau_stats=plateau_stats,
     )
     index_path = bank_dir / "index.json"
     entries: list[dict[str, Any]] = []

@@ -40,8 +40,23 @@ import numpy as np
 # scientific-class inference (classified inconclusive) instead of trusted.
 SPECTRAL_TAIL_LIMIT = 1.0e-3
 CFL_LIMIT = 1.0
+MODE_OCCUPANCY_LIMIT = 0.99
+# Runtime aborts target catastrophic underresolution.  The stricter limits
+# above still quarantine completed results from scientific inference; using a
+# separate abort ceiling avoids killing a seeded startup transient that is
+# actively shedding its high-mode content.
+EARLY_ABORT_SPECTRAL_TAIL_LIMIT = 1.0e-1
+EARLY_ABORT_MODE_OCCUPANCY_LIMIT = 0.999
+EARLY_ABORT_STARTUP_STEPS = 50
 # Mode counts as occupied when its |c|^2 exceeds this fraction of the peak.
 OCCUPANCY_RELATIVE_FLOOR = 1.0e-20
+
+# A stationary-looking trace is not a plateau unless its averaging window spans
+# several correlation times.  These constants are shared by parent-bank
+# qualification and the sustained-state classifier.
+MIN_CORRELATION_SAMPLES = 8
+MIN_INDEPENDENT_SAMPLES = 5.0
+PLATEAU_STATIONARITY_TOLERANCE = 5.0e-2
 
 # Native coefficient-axis kinds per PCF solver family (see production/axes.py
 # for the native orders; jaxfun keeps both periodic axes as full complex
@@ -110,6 +125,8 @@ def _cfl_scalars(
     dt: float,
     nu: float,
     eta: float,
+    rotation_rate: float,
+    shear_rate: float,
 ) -> dict[str, float]:
     out: dict[str, float] = {}
     directional_total = 0.0
@@ -120,9 +137,19 @@ def _cfl_scalars(
         out[f"cfl_alfven_{label}"] = alf
         directional_total = max(directional_total, adv + alf)
     out["cfl_diffusive"] = max(nu, eta) * dt / min(spacings) ** 2
+    # Rotation and the linear shear-source coupling are rates rather than
+    # grid-crossing speeds, but they constrain an explicit step in the same
+    # nondimensional way.  Keep them separate so timestep calibration can see
+    # which part of the operator is limiting.
+    out["cfl_rotation"] = 2.0 * abs(rotation_rate) * dt
+    out["cfl_shear_source"] = abs(shear_rate) * dt
     # Explicit-terms CFL; diffusion is implicit in both families and reported
     # separately above.
-    out["cfl_total"] = directional_total
+    out["cfl_total"] = max(
+        directional_total,
+        out["cfl_rotation"],
+        out["cfl_shear_source"],
+    )
     return out
 
 
@@ -148,6 +175,8 @@ def curl_health_scalars(solver: Any, state: Any) -> dict[str, float]:
         dt=float(solver.dt),
         nu=float(solver.nu),
         eta=float(solver.eta),
+        rotation_rate=float(solver.omega),
+        shear_rate=float(solver.shear_rate),
     )
     coefficients = list(state.flow.u) + list(B)
     tail_x, tail_y, tail_z = spectral_tail_fractions(coefficients, _CURL_AXIS_KINDS)
@@ -192,6 +221,8 @@ def primitive_health_scalars(solver: Any, state: Any) -> dict[str, float]:
         dt=float(solver.dt),
         nu=float(solver.nu),
         eta=float(solver.eta_mag),
+        rotation_rate=float(solver.omega),
+        shear_rate=float(solver.S),
     )
     coefficients = list(state.x)
     tail_y, tail_z, tail_x = spectral_tail_fractions(
@@ -224,7 +255,7 @@ def correlation_time(
         for row in rows
         if key in row and "t" in row and math.isfinite(float(row[key]))
     ]
-    if len(samples) < 8:
+    if len(samples) < MIN_CORRELATION_SAMPLES:
         return None
     times = np.asarray([s[0] for s in samples])
     values = np.asarray([s[1] for s in samples])
@@ -244,6 +275,128 @@ def correlation_time(
             break
         acf_sum += rho
     return dt_row * (1.0 + 2.0 * acf_sum)
+
+
+def effective_independent_samples(
+    rows: Sequence[dict[str, Any]],
+    *,
+    correlation: float | None,
+    key: str = "total_stress",
+) -> float | None:
+    """Number of correlation-time-sized samples covered by a cadence window."""
+
+    if (
+        correlation is None
+        or not math.isfinite(float(correlation))
+        or correlation <= 0.0
+    ):
+        return None
+    times = [
+        float(row["t"])
+        for row in rows
+        if key in row
+        and "t" in row
+        and math.isfinite(float(row[key]))
+        and math.isfinite(float(row["t"]))
+    ]
+    if len(times) < 2:
+        return None
+    duration = max(times) - min(times)
+    if duration <= 0.0:
+        return None
+    return float(duration / float(correlation))
+
+
+def plateau_window_stats(
+    rows: Sequence[dict[str, Any]],
+    *,
+    checkpoint_time: float,
+    energy_key: str = "total_energy",
+    stress_key: str = "total_stress",
+    max_samples: int = 512,
+    min_independent_samples: float = MIN_INDEPENDENT_SAMPLES,
+    stationarity_tolerance: float = PLATEAU_STATIONARITY_TOLERANCE,
+) -> dict[str, Any]:
+    """Qualify a retained checkpoint from its trailing canonical diagnostics.
+
+    A checkpoint is selectable as a quench parent only when its diagnostic
+    window reaches the checkpoint, has enough samples for a finite stress
+    correlation estimate, spans the declared number of independent samples,
+    and has stationary energy and persistent finite stress.
+    """
+
+    usable = [
+        row
+        for row in rows
+        if all(key in row for key in ("t", energy_key, stress_key))
+        and all(math.isfinite(float(row[key])) for key in ("t", energy_key, stress_key))
+        and float(row["t"]) <= float(checkpoint_time) + 1.0e-12
+    ][-max(1, int(max_samples)) :]
+    reasons: list[str] = []
+    samples = len(usable)
+    current = bool(
+        usable and abs(float(usable[-1]["t"]) - float(checkpoint_time)) <= 1.0e-12
+    )
+    if not current:
+        reasons.append("no diagnostic sample at checkpoint time")
+    if samples < MIN_CORRELATION_SAMPLES:
+        reasons.append(
+            f"need at least {MIN_CORRELATION_SAMPLES} plateau samples, got {samples}"
+        )
+
+    energies = [float(row[energy_key]) for row in usable]
+    relative_change: float | None = None
+    stationary = False
+    if samples >= 4:
+        quarter = max(1, samples // 4)
+        previous_mean = float(np.mean(energies[-2 * quarter : -quarter]))
+        current_mean = float(np.mean(energies[-quarter:]))
+        denom = max(abs(previous_mean), abs(current_mean), 1.0e-300)
+        relative_change = abs(current_mean - previous_mean) / denom
+        stationary = relative_change <= float(stationarity_tolerance)
+        if not stationary:
+            reasons.append(
+                f"energy window is not stationary ({relative_change:.3e} > "
+                f"{stationarity_tolerance:.3e})"
+            )
+    else:
+        reasons.append("insufficient samples for stationarity check")
+
+    tau = correlation_time(usable, key=stress_key)
+    independent = effective_independent_samples(usable, correlation=tau, key=stress_key)
+    if tau is None:
+        reasons.append("finite stress correlation time unavailable")
+    if independent is None or independent < float(min_independent_samples):
+        actual = "unavailable" if independent is None else f"{independent:.3g}"
+        reasons.append(
+            f"need {min_independent_samples:g} independent stress samples, got {actual}"
+        )
+
+    mean_energy = float(np.mean(energies)) if energies else None
+    stresses = [float(row[stress_key]) for row in usable]
+    mean_stress = float(np.mean(stresses)) if stresses else None
+    persistent_stress = mean_stress is not None and abs(mean_stress) > 0.0
+    if not persistent_stress:
+        reasons.append("persistent nonzero stress unavailable")
+
+    return {
+        "samples": samples,
+        "window_start_t": float(usable[0]["t"]) if usable else None,
+        "window_end_t": float(usable[-1]["t"]) if usable else None,
+        "checkpoint_time": float(checkpoint_time),
+        "diagnostics_current": current,
+        "mean_total_energy": mean_energy,
+        "mean_total_stress": mean_stress,
+        "stationarity_relative_change": relative_change,
+        "stationarity_tolerance": float(stationarity_tolerance),
+        "stationary": stationary,
+        "correlation_time_total_stress": tau,
+        "effective_independent_samples": independent,
+        "required_independent_samples": float(min_independent_samples),
+        "persistent_stress": persistent_stress,
+        "plateau_qualified": not reasons,
+        "qualification_reasons": reasons,
+    }
 
 
 def energy_budget_residual(
@@ -274,8 +427,14 @@ def energy_budget_residual(
         dt_pair = float(second["t"]) - float(first["t"])
         if dt_pair <= 0.0:
             continue
-        lhs = 0.5 * (float(second["total_energy"]) - float(first["total_energy"])) / dt_pair
-        stress_mid = 0.5 * (float(first["total_stress"]) + float(second["total_stress"]))
+        lhs = (
+            0.5
+            * (float(second["total_energy"]) - float(first["total_energy"]))
+            / dt_pair
+        )
+        stress_mid = 0.5 * (
+            float(first["total_stress"]) + float(second["total_stress"])
+        )
         dissipation_mid = 0.5 * (
             float(first["dissipation_kinetic"])
             + float(first["dissipation_magnetic"])
@@ -295,11 +454,14 @@ def underresolved_from_scalars(scalars: dict[str, Any]) -> bool | None:
 
     tail = scalars.get("spectral_tail_max")
     cfl = scalars.get("cfl_total")
-    if tail is None and cfl is None:
+    occupancy = scalars.get("mode_occupancy")
+    if tail is None and cfl is None and occupancy is None:
         return None
     flagged = False
     if tail is not None and float(tail) > SPECTRAL_TAIL_LIMIT:
         flagged = True
     if cfl is not None and float(cfl) > CFL_LIMIT:
+        flagged = True
+    if occupancy is not None and float(occupancy) > MODE_OCCUPANCY_LIMIT:
         flagged = True
     return flagged

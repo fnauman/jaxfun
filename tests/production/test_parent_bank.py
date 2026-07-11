@@ -12,7 +12,9 @@ from production.oracles import (
     load_checkpoint_bank_index,
     load_resume_checkpoint,
     run_supported_spec,
+    select_qualified_parent_checkpoint,
 )
+from production.quench import QuenchError
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,8 +34,14 @@ def _vp_spec(**groups):
         },
         "domain": {"x": [-1.0, 1.0], "y_period": 4.0, "z_period": 1.0},
         "nondimensional_groups": {
-            "S": 1.0, "Omega": 2.0 / 3.0, "nu": 2e-2, "eta_mag": 2e-2,
-            "Re": 50.0, "Rm": 50.0, "Pm": 1.0, "B0": 0.05,
+            "S": 1.0,
+            "Omega": 2.0 / 3.0,
+            "nu": 2e-2,
+            "eta_mag": 2e-2,
+            "Re": 50.0,
+            "Rm": 50.0,
+            "Pm": 1.0,
+            "B0": 0.05,
         },
         "time": {"integrator": "IMEXRK222", "dt": 1e-3, "final_time": 0.01},
         "resolution": {"Nx": 17, "Ny": 8, "Nz": 16, "family": "L"},
@@ -65,6 +73,12 @@ def test_checkpoint_bank_retains_multiple_plateau_times(tmp_path):
         assert entry["representation"] == "vector_potential"
         assert entry["file_sha256"]
         assert Path(entry["checkpoint_path"]).exists()
+        assert entry["plateau_qualified"] is False
+        assert entry["selection_status"] == "quarantined"
+        assert entry["plateau_window_stats"]["qualification_reasons"]
+
+    with pytest.raises(QuenchError, match="not plateau-qualified"):
+        select_qualified_parent_checkpoint(run_dir, step=2)
 
     # The latest file still resumes to the final step; step= selects a banked
     # plateau instead.
@@ -102,28 +116,41 @@ def test_quench_from_banked_plateau_applies_burn_in_to_fits(tmp_path):
     # ...but the stationarity fit window excluded the burn-in rows: its sample
     # count matches the post-burn-in rows only.
     fit_rows = [
-        r
-        for r in out["time_series"]
-        if r["t"] >= sc["analysis_t_start"] - 1e-12
+        r for r in out["time_series"] if r["t"] >= sc["analysis_t_start"] - 1e-12
     ]
     assert sc["stationarity_window_samples"] <= len(fit_rows)
 
 
-def test_cli_parent_bank_quench_workflow(tmp_path):
+def test_cli_parent_bank_quench_workflow(tmp_path, monkeypatch):
     """End-to-end: parent runs with --checkpoint-bank, child quenches from a
     selected plateau step with a burn-in horizon."""
     jax.config.update("jax_enable_x64", True)
+    monkeypatch.setenv("JAXFUN_PRODUCTION_DTYPE", "float64")
     from production.run_problem import main
+
+    parent_config = json.loads(
+        (ROOT / "production" / "runs" / "exp_pcf_mri_vector_potential.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    parent_config["resolution"] = {
+        "Nx": 17,
+        "Ny": 8,
+        "Nz": 16,
+        "family": "L",
+        "dealias": {"x": 1.0, "y": 1.0, "z": 1.0},
+    }
+    parent_config["time"]["dt"] = 1e-3
+    parent_config_path = tmp_path / "parent_config.json"
+    parent_config_path.write_text(json.dumps(parent_config), encoding="utf-8")
 
     parent_dir = tmp_path / "parent"
     rc = main(
         [
             "--config",
-            str(ROOT / "production" / "runs" / "exp_pcf_mri_vector_potential.json"),
+            str(parent_config_path),
             "--out",
             str(parent_dir),
-            "--resolution-tier",
-            "smoke",
             "--steps",
             "4",
             "--checkpoint-every",
@@ -133,6 +160,27 @@ def test_cli_parent_bank_quench_workflow(tmp_path):
     )
     assert rc == 0
     assert (parent_dir / "checkpoints" / "bank" / "checkpoint_00000002.h5").exists()
+
+    # A four-step smoke cannot establish a plateau.  Promote the synthetic test
+    # entry explicitly so this test exercises the positive CLI/provenance path;
+    # the rejection path is covered above against the unmodified manifest.
+    index_path = parent_dir / "checkpoints" / "bank" / "index.json"
+    bank = json.loads(index_path.read_text(encoding="utf-8"))
+    entry = next(item for item in bank if item["tstep"] == 2)
+    entry["plateau_qualified"] = True
+    entry["selection_status"] = "eligible"
+    entry["plateau_window_stats"] = {
+        "plateau_qualified": True,
+        "diagnostics_current": True,
+        "effective_independent_samples": 5.0,
+        "required_independent_samples": 5.0,
+        "correlation_time_total_stress": 1.0,
+        "stationary": True,
+        "persistent_stress": True,
+        "checkpoint_health_underresolved": False,
+        "qualification_reasons": [],
+    }
+    index_path.write_text(json.dumps(bank), encoding="utf-8")
 
     # Child spec: the same materialized smoke spec with only Rm/eta/Pm changed.
     parent_spec = json.loads((parent_dir / "spec.json").read_text(encoding="utf-8"))
@@ -168,5 +216,7 @@ def test_cli_parent_bank_quench_workflow(tmp_path):
     assert metadata["quench"]["mode"] == "quench"
     assert metadata["quench"]["selected_tstep"] == 2
     assert metadata["quench"]["requested_quench_step"] == 2
+    assert metadata["quench"]["parent_plateau_qualified"] is True
+    assert metadata["quench"]["parent_plateau_window_stats"]["stationary"] is True
     assert metadata["quench"]["burn_in_steps"] == 2
     assert metadata["quench"]["classification_valid_after_tstep"] == 4

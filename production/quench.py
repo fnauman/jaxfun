@@ -118,6 +118,9 @@ def checkpoint_bank_entry(
 ) -> dict[str, Any]:
     """Build one checkpoint-bank manifest entry (FJ-05)."""
 
+    stats = plateau_stats or {}
+    qualified = stats.get("plateau_qualified") is True
+
     return {
         "parent_run_id": parent_run_id,
         "child_run_id": child_run_id,
@@ -128,7 +131,9 @@ def checkpoint_bank_entry(
         "numerics_contract_version": int(numerics_contract_version),
         "checkpoint_path": checkpoint_path,
         "file_sha256": file_sha256,
-        "plateau_window_stats": plateau_stats or {},
+        "plateau_qualified": qualified,
+        "selection_status": "eligible" if qualified else "quarantined",
+        "plateau_window_stats": stats,
     }
 
 
@@ -140,9 +145,7 @@ def file_sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def burn_in_horizon(
-    *, tstep0: int, burn_in_steps: int
-) -> dict[str, Any]:
+def burn_in_horizon(*, tstep0: int, burn_in_steps: int) -> dict[str, Any]:
     """Return the post-quench burn-in window during which inherited growth/class
     history is quarantined (FJ-05)."""
 

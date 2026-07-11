@@ -27,7 +27,11 @@ def _vp_spec(**groups):
         },
         "domain": {"x": [-1.0, 1.0], "y_period": 4.0, "z_period": 1.0},
         "nondimensional_groups": {
-            "S": 1.0, "Omega": 2.0 / 3.0, "nu": 2e-2, "eta_mag": 2e-2, "B0": 0.05,
+            "S": 1.0,
+            "Omega": 2.0 / 3.0,
+            "nu": 2e-2,
+            "eta_mag": 2e-2,
+            "B0": 0.05,
         },
         "time": {"integrator": "IMEXRK222", "dt": 1e-3, "final_time": 0.04},
         "resolution": {"Nx": 17, "Ny": 8, "Nz": 16, "family": "L"},
@@ -79,15 +83,31 @@ def test_correlation_time_of_oscillation_is_finite_and_positive():
 def test_underresolved_flag_thresholds():
     assert health.underresolved_from_scalars({}) is None
     assert (
-        health.underresolved_from_scalars(
-            {"spectral_tail_max": 1e-6, "cfl_total": 0.1}
-        )
+        health.underresolved_from_scalars({"spectral_tail_max": 1e-6, "cfl_total": 0.1})
         is False
     )
-    assert (
-        health.underresolved_from_scalars({"spectral_tail_max": 5e-3}) is True
-    )
+    assert health.underresolved_from_scalars({"spectral_tail_max": 5e-3}) is True
     assert health.underresolved_from_scalars({"cfl_total": 2.0}) is True
+    assert health.underresolved_from_scalars({"mode_occupancy": 0.999}) is True
+
+
+def test_plateau_requires_stationarity_and_independent_samples():
+    rows = [
+        {
+            "t": float(i),
+            "total_energy": 2.0,
+            "total_stress": 1.0 if i % 2 else 2.0,
+        }
+        for i in range(8)
+    ]
+    stats = health.plateau_window_stats(rows, checkpoint_time=7.0)
+    assert stats["plateau_qualified"] is True
+    assert stats["effective_independent_samples"] >= 5.0
+
+    transient = [dict(row, total_energy=math.exp(0.5 * row["t"])) for row in rows]
+    stats = health.plateau_window_stats(transient, checkpoint_time=7.0)
+    assert stats["plateau_qualified"] is False
+    assert any("not stationary" in reason for reason in stats["qualification_reasons"])
 
 
 def test_curl_run_emits_health_scalars_and_budget_closes():
@@ -97,16 +117,28 @@ def test_curl_run_emits_health_scalars_and_budget_closes():
     out = run_supported_spec(_vp_spec(), steps=20, diagnostics_every=2)
     sc = out["scalars"]
     for key in (
-        "cfl_advective_x", "cfl_advective_y", "cfl_advective_z",
-        "cfl_alfven_x", "cfl_alfven_y", "cfl_alfven_z",
-        "cfl_diffusive", "cfl_total",
-        "spectral_tail_x", "spectral_tail_y", "spectral_tail_z",
-        "spectral_tail_max", "mode_occupancy",
+        "cfl_advective_x",
+        "cfl_advective_y",
+        "cfl_advective_z",
+        "cfl_alfven_x",
+        "cfl_alfven_y",
+        "cfl_alfven_z",
+        "cfl_rotation",
+        "cfl_shear_source",
+        "cfl_diffusive",
+        "cfl_total",
+        "spectral_tail_x",
+        "spectral_tail_y",
+        "spectral_tail_z",
+        "spectral_tail_max",
+        "mode_occupancy",
     ):
         assert key in sc and math.isfinite(sc[key]), key
     assert 0.0 <= sc["spectral_tail_max"] <= 1.0
     assert 0.0 < sc["mode_occupancy"] <= 1.0
     assert sc["cfl_total"] < 1.0  # this smoke run is comfortably stable
+    assert sc["cfl_rotation"] == pytest.approx(2.0 * (2.0 / 3.0) * 1e-3)
+    assert sc["cfl_shear_source"] == pytest.approx(1e-3)
     assert sc["energy_budget_residual"] < 1e-2
     # dissipation streams in the cadence rows for the budget
     row = next(r for r in out["time_series"] if "dissipation_kinetic" in r)
@@ -128,3 +160,14 @@ def test_underresolved_run_is_quarantined_from_classification():
     assert result["underresolved"] is True
     assert result["scientific_class"] == "inconclusive"
     assert "under-resolved" in result["reason"]
+
+
+def test_runtime_health_guard_aborts_obvious_underresolution():
+    from production.oracles import _raise_on_resolution_health
+
+    with pytest.raises(RuntimeError, match="spectral_tail_max"):
+        _raise_on_resolution_health(
+            {"spectral_tail_max": 0.5, "cfl_total": 0.1, "mode_occupancy": 0.5},
+            t=1.0,
+            tstep=50,
+        )

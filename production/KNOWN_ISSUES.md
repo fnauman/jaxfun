@@ -77,3 +77,16 @@ The total-field mean/split semantics, `energy_convention`/`box_volume` stamps,
 and health scalars were applied to the two PCF MHD families (the campaign
 workhorses). The Taylor-Couette runners still report their original
 diagnostics; align them before any TC campaign.
+
+## KI-8: three-geometry MRI comparison is not claim-ready
+
+The target study compares rotating plane Couette and Taylor-Couette in this
+repository with the shear-periodic solver in
+`/home/nauman/cfd/shearpy-jimenez`. The normalization, common outputs, curvature
+ladder, and campaign order are fixed in `PLAN_comparison_design.md`.
+
+This remains open because KI-2--KI-7 apply to at least one local leg, shearpy's
+MRI production-requirements artifact still lacks measured net-flux saturation
+and a ZNF survival ensemble, and neither repository has an accepted immutable
+campaign release. Close only after all three legs produce the common diagnostic
+schema at two resolutions and half timestep from clean immutable releases.

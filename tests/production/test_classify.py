@@ -46,9 +46,24 @@ def test_decaying_run_classified_decayed():
 
 def test_flat_with_stress_and_stationarity_is_sustained():
     out = classify_scientific(
-        _exp_series(0.0, stress=1e-2), stationary=True, stress_floor=1e-6
+        _exp_series(0.0, stress=1e-2),
+        stationary=True,
+        stress_floor=1e-6,
+        correlation_time=0.1,
     )
     assert out["scientific_class"] == ScientificClass.SUSTAINED.value
+
+
+def test_finite_correlation_time_without_enough_independent_samples_is_not_sustained():
+    out = classify_scientific(
+        _exp_series(0.0, stress=1e-2),
+        stationary=True,
+        stress_floor=1e-6,
+        correlation_time=10.0,
+    )
+    assert out["scientific_class"] == ScientificClass.MARGINAL.value
+    assert out["independently_sampled"] is False
+    assert "independent samples" in out["reason"]
 
 
 def test_flat_without_stress_is_marginal():
@@ -87,6 +102,10 @@ def test_operational_status_mapping():
     assert (
         operational_status_from_exception(RuntimeError("energy runaway ceiling"))
         == OperationalStatus.BLEW_UP
+    )
+    assert (
+        operational_status_from_exception(RuntimeError("cfl_total health guard"))
+        == OperationalStatus.UNDERRESOLVED
     )
     assert (
         operational_status_from_exception(ValueError("something else"))
