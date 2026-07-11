@@ -57,6 +57,25 @@ def load_checkpoint_bank_index(run_dir: str | Path) -> list[dict[str, Any]]:
     return json.loads(index_path.read_text(encoding="utf-8"))
 
 
+def _resolve_bank_entry_path(run_dir: Path, entry: dict[str, Any]) -> Path:
+    """Resolve portable and legacy bank-manifest checkpoint paths."""
+
+    tstep = int(entry.get("tstep", -1))
+    expected = _bank_checkpoint_path(run_dir, tstep)
+    recorded = Path(str(entry.get("checkpoint_path", "")))
+    if recorded.is_absolute():
+        return recorded
+
+    # New manifests store ``checkpoints/bank/<file>`` relative to the parent
+    # run.  Legacy manifests may contain an out-dir-prefixed relative path such
+    # as ``runs/foo/checkpoints/bank/<file>``; its canonical three-part suffix
+    # still identifies the same immutable bank slot.
+    canonical_suffix = Path("checkpoints") / "bank" / expected.name
+    if len(recorded.parts) >= 3 and Path(*recorded.parts[-3:]) == canonical_suffix:
+        return run_dir / canonical_suffix
+    return run_dir / recorded
+
+
 def select_qualified_parent_checkpoint(
     run_dir: str | Path, *, step: int | None = None
 ) -> dict[str, Any]:
@@ -117,7 +136,7 @@ def select_qualified_parent_checkpoint(
         expected_path = _bank_checkpoint_path(
             Path(run_dir), int(entry.get("tstep", -1))
         )
-        actual_path = Path(str(entry.get("checkpoint_path", "")))
+        actual_path = _resolve_bank_entry_path(Path(run_dir), entry)
         if actual_path.resolve() != expected_path.resolve() or not actual_path.exists():
             reasons.append(
                 "checkpoint path is missing or outside the selected bank slot"
@@ -2778,7 +2797,7 @@ def _write_bank_checkpoint(
         spec_hash=str(spec["spec_hash"]),
         representation=str(spec.get("representation", "primitive")),
         numerics_contract_version=int(spec.get("numerics_contract_version", 0)),
-        checkpoint_path=str(target),
+        checkpoint_path=str(target.relative_to(checkpoint_dir.parent)),
         file_sha256=file_sha256(str(target)),
         plateau_stats=plateau_stats,
     )

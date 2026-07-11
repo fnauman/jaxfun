@@ -14,7 +14,7 @@ from production.oracles import (
     run_supported_spec,
     select_qualified_parent_checkpoint,
 )
-from production.quench import QuenchError
+from production.quench import QuenchError, file_sha256
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -72,7 +72,7 @@ def test_checkpoint_bank_retains_multiple_plateau_times(tmp_path):
         assert entry["spec_hash"] == "vp-bank-spec-hash"
         assert entry["representation"] == "vector_potential"
         assert entry["file_sha256"]
-        assert Path(entry["checkpoint_path"]).exists()
+        assert (run_dir / entry["checkpoint_path"]).exists()
         assert entry["plateau_qualified"] is False
         assert entry["selection_status"] == "quarantined"
         assert entry["plateau_window_stats"]["qualification_reasons"]
@@ -84,6 +84,39 @@ def test_checkpoint_bank_retains_multiple_plateau_times(tmp_path):
     # plateau instead.
     assert load_resume_checkpoint(run_dir).tstep == 4
     assert load_resume_checkpoint(run_dir, step=2).tstep == 2
+
+
+def test_qualified_relative_bank_path_resolves_from_parent_run(tmp_path, monkeypatch):
+    run_dir = tmp_path / "runs" / "parent"
+    bank_dir = run_dir / "checkpoints" / "bank"
+    bank_dir.mkdir(parents=True)
+    target = bank_dir / "checkpoint_00000002.h5"
+    target.write_bytes(b"immutable checkpoint payload")
+    stats = {
+        "plateau_qualified": True,
+        "diagnostics_current": True,
+        "stationary": True,
+        "persistent_stress": True,
+        "checkpoint_health_underresolved": False,
+        "correlation_time_total_stress": 1.0,
+        "effective_independent_samples": 5.0,
+        "required_independent_samples": 5.0,
+        "qualification_reasons": [],
+    }
+    entry = {
+        "tstep": 2,
+        "plateau_qualified": True,
+        "checkpoint_path": "checkpoints/bank/checkpoint_00000002.h5",
+        "file_sha256": file_sha256(str(target)),
+        "plateau_window_stats": stats,
+    }
+    (bank_dir / "index.json").write_text(json.dumps([entry]), encoding="utf-8")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    selected = select_qualified_parent_checkpoint(run_dir, step=2)
+    assert selected["tstep"] == 2
 
 
 def test_quench_from_banked_plateau_applies_burn_in_to_fits(tmp_path):

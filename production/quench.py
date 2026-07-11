@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any
 
 # Only the resistive/viscous coefficients (and their nondimensional labels) may change
@@ -37,6 +38,17 @@ _IMMUTABLE_REQUIRED: tuple[str, ...] = (
     "physics",
     "numerics_contract_version",
     "representation",
+)
+
+_QUENCH_DECREASING_GROUPS: frozenset[str] = frozenset(
+    {"nondimensional_groups.Re", "nondimensional_groups.Rm"}
+)
+_QUENCH_INCREASING_DIFFUSIVITIES: frozenset[str] = frozenset(
+    {
+        "nondimensional_groups.nu",
+        "nondimensional_groups.eta",
+        "nondimensional_groups.eta_mag",
+    }
 )
 
 
@@ -100,7 +112,46 @@ def validate_quench(
         raise QuenchError(
             "quench child is identical to parent; use resume-exact instead"
         )
-    return {"changed": changed, "mutable_allowlist": sorted(allow)}
+    _validate_quench_direction(changed)
+    return {
+        "changed": changed,
+        "mutable_allowlist": sorted(allow),
+        "direction_policy": "Re/Rm nonincreasing; nu/eta nondecreasing",
+    }
+
+
+def _validate_quench_direction(changed: dict[str, tuple[Any, Any]]) -> None:
+    """Reject continuations that move toward less dissipative parameters."""
+
+    directional_keys = [
+        *sorted(_QUENCH_DECREASING_GROUPS & changed.keys()),
+        *sorted(_QUENCH_INCREASING_DIFFUSIVITIES & changed.keys()),
+    ]
+    for key in directional_keys:
+        parent_value, child_value = changed[key]
+        try:
+            parent_number = float(parent_value)
+            child_number = float(child_value)
+        except (TypeError, ValueError) as exc:
+            raise QuenchError(
+                f"quench direction requires numeric values for {key!r}: "
+                f"{parent_value!r} -> {child_value!r}"
+            ) from exc
+        if not (math.isfinite(parent_number) and math.isfinite(child_number)):
+            raise QuenchError(
+                f"quench direction requires finite values for {key!r}: "
+                f"{parent_value!r} -> {child_value!r}"
+            )
+        if key in _QUENCH_DECREASING_GROUPS and child_number > parent_number:
+            raise QuenchError(
+                f"quench cannot increase {key.rsplit('.', 1)[-1]}: "
+                f"{parent_number:g} -> {child_number:g}"
+            )
+        if key in _QUENCH_INCREASING_DIFFUSIVITIES and child_number < parent_number:
+            raise QuenchError(
+                f"quench cannot decrease {key.rsplit('.', 1)[-1]}: "
+                f"{parent_number:g} -> {child_number:g}"
+            )
 
 
 def checkpoint_bank_entry(
