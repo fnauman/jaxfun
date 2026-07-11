@@ -38,7 +38,9 @@ NUMERICS_CONTRACT_VERSION = 2
 
 JAXFUN_IMPLEMENTED_ORACLES = {
     "channel_poiseuille_hydro_v1": {"plane_poiseuille_laminar"},
+    "exp_pcf_mri_pseudo_vacuum": {"mri_saturation_ladder"},
     "exp_pcf_mri_shearbox_growth": {"mri_saturation_ladder"},
+    "exp_pcf_mri_vector_potential": {"mri_saturation_ladder"},
     "pcf_fluct_re400": {"gpu_generated_saturated_dns"},
     "pcf_hydro_laminar_v1": {"plane_couette_laminar"},
     "pcf_hydro_primitive_dns_v1": {"pcf_hydro_dns_decay"},
@@ -456,10 +458,21 @@ def _reject_shenfun_unsupported_subcases(
         raise UnsupportedSpecError(
             "MRI production specs are supported only for pcf and Taylor-Couette"
         )
-    if geometry == "pcf" and physics in {"mhd", "mri"} and magnetic_bc != "conducting":
-        raise UnsupportedSpecError(
-            "PCF MHD/MRI production specs support conducting magnetic walls only"
-        )
+    if geometry == "pcf" and physics in {"mhd", "mri"}:
+        if magnetic_bc not in {"conducting", "pseudo_vacuum"}:
+            raise UnsupportedSpecError(
+                "PCF MHD/MRI production specs support conducting or pseudo-vacuum "
+                "magnetic walls only"
+            )
+        if (
+            magnetic_bc == "pseudo_vacuum"
+            and data.get("representation") == "vector_potential"
+        ):
+            raise UnsupportedSpecError(
+                "pseudo-vacuum magnetic walls are wired for the primitive-b "
+                "family only (FJ-09); the vector-potential (curl) form needs "
+                "A-formulation boundary conditions"
+            )
     if (
         geometry == "taylor_couette"
         and physics in {"mhd", "mri"}

@@ -33,6 +33,21 @@ CONVENTIONS: dict[str, Any] = {
     "atlas_note": "the h=1 operator is built directly; do NOT use an a=0.5 atlas helper",
     "imposed_field": "B0 = bz (vertical Alfven speed, rho = mu0 = 1)",
     "ideal_mri_cutoff": "(k_z v_A)^2 < 2 q Omega^2 (Balbus-Hawley vertical field)",
+    "energy_convention": {
+        "pcf_primitive": "half_integral_abs2: E = 0.5 * volume integral of |field|^2 "
+        "(couette/pcf_mri_primitive.py reference convention)",
+        "pcf_vector_potential": "integral_abs2: E = volume integral of |field|^2 "
+        "(couette/pcf_mhd_mri_shearpy.py reference convention; 2x the physical energy)",
+        "note": "oracle rows/goldens stamp `energy_convention`; never compare E* "
+        "scalars across families without converting",
+    },
+    "magnetic_bcs": {
+        "conducting": "b_x = 0 (Dirichlet), d_x b_y = d_x b_z = 0 (Neumann)",
+        "pseudo_vacuum": "d_x b_x = 0 (Neumann), b_y = b_z = 0 (Dirichlet); "
+        "primitive-b family only (FJ-09)",
+    },
+    "workhorse_continuation": "vector-potential (curl) MHDState checkpoint / "
+    "resume-exact / quench are wired (state_kind pcf_vector_potential_mhd_saturation)",
 }
 
 

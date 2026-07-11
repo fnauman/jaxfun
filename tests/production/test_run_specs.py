@@ -11,6 +11,8 @@ EXECUTABLE_RUNS = {
     "pcf_fluct_re400": [3],
     "pcf_mhd_divfree": [3],
     "exp_pcf_mri_shearbox_growth": [1, 2, 3],
+    "exp_pcf_mri_pseudo_vacuum": [1, 2, 3],
+    "exp_pcf_mri_vector_potential": [1, 2, 3],
     "tc_supercritical_saturation": [2, 3],
     "tc_mri_nonlinear_saturation": [1, 2, 3],
 }

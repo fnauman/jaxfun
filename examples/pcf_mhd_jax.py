@@ -285,6 +285,12 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
         )
         return jnp.sqrt(jnp.real(integrate(jnp.conj(divb) * divb, self.TC)))
 
+    def fields_physical(self, state: MHDState) -> tuple[Array, ...]:
+        """Physical (u_x, u_y, u_z, b_x, b_y, b_z) perturbation fields."""
+        up = self._backward_velocity(state.flow.u)
+        bp = self._backward_B(self.update_B_from_A(state.A))
+        return (*up, *bp)
+
     def diagnostics(self, state: MHDState) -> dict[str, Array]:
         flow_diag = super().diagnostics(state.flow)
         B = self.update_B_from_A(state.A)

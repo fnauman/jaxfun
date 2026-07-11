@@ -3,6 +3,9 @@
 
 # Avoid bloating the repo
 runs/
+# ... but production problem specs live in production/runs/ and are tracked
+!production/runs/
+!production/runs/*.json
 *.gif
 
 # Sandbox — local experiments, not for the repo (exceptions tracked explicitly)

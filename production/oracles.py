@@ -142,6 +142,14 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             nonlinear_old=tuple(payload["nonlinear_old"]),
             have_old=payload["have_old"],
         )
+    if state_kind == "pcf_vector_potential_mhd_saturation":
+        from examples.channelflow_kmm import KMMState
+        from examples.pcf_mhd_jax import MHDState
+
+        return MHDState(
+            flow=KMMState(u=tuple(payload["flow_u"]), g=payload["flow_g"]),
+            A=tuple(payload["A"]),
+        )
     raise ValueError(f"unsupported resume state_kind {state_kind!r}")
 
 
@@ -186,8 +194,14 @@ def run_supported_spec(
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
     quench: bool = False,
+    on_row: Any | None = None,
 ) -> dict[str, Any]:
-    """Run a supported production spec and return canonical diagnostics."""
+    """Run a supported production spec and return canonical diagnostics.
+
+    ``on_row`` is an optional host-side callback invoked with each canonical
+    cadence row as it is produced (FJ-07 live telemetry); the materialized
+    ``time_series`` stays the source of truth.
+    """
 
     if (
         spec["geometry"] == "taylor_couette"
@@ -203,6 +217,7 @@ def run_supported_spec(
             diagnostics_every=diagnostics_every,
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
+            on_row=on_row,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -233,6 +248,7 @@ def run_supported_spec(
             diagnostics_every=diagnostics_every,
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
+            on_row=on_row,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -294,6 +310,7 @@ def run_supported_spec(
             diagnostics_every=diagnostics_every,
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
+            on_row=on_row,
         )
     if (
         spec["geometry"] == "pcf"
@@ -310,10 +327,10 @@ def run_supported_spec(
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
             quench=quench,
+            on_row=on_row,
         )
     if (
-        spec["problem_id"] == "pcf_mhd_divfree"
-        and spec["geometry"] == "pcf"
+        spec["geometry"] == "pcf"
         and spec["physics"] == "mhd"
         and spec["expected_oracle"]["type"] == "gpu_generated_saturated_dns"
     ):
@@ -327,10 +344,10 @@ def run_supported_spec(
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
             quench=quench,
+            on_row=on_row,
         )
     if (
-        spec["problem_id"] == "exp_pcf_mri_shearbox_growth"
-        and spec["geometry"] == "pcf"
+        spec["geometry"] == "pcf"
         and spec["physics"] == "mri"
         and spec["expected_oracle"]["type"] == "mri_saturation_ladder"
     ):
@@ -344,6 +361,7 @@ def run_supported_spec(
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
             quench=quench,
+            on_row=on_row,
         )
     if (
         spec["geometry"] == "pipe"
@@ -629,6 +647,7 @@ def _run_taylor_couette_hydro_saturation(
     diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
+    on_row: Any | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
 
@@ -659,14 +678,15 @@ def _run_taylor_couette_hydro_saturation(
     diagnostic_rows: list[dict[str, Any]] = []
 
     def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
-        diagnostic_rows.append(
-            {
-                "t": float(t),
-                "kinetic_energy": float(diag["E"]),
-                "divergence_l2": float(diag.get("continuity_l2", diag["div_linf"])),
-                "divergence_linf": float(diag["div_linf"]),
-            }
-        )
+        row = {
+            "t": float(t),
+            "kinetic_energy": float(diag["E"]),
+            "divergence_l2": float(diag.get("continuity_l2", diag["div_linf"])),
+            "divergence_linf": float(diag["div_linf"]),
+        }
+        diagnostic_rows.append(row)
+        if on_row is not None:
+            on_row(row)
 
     state, tstep0, t0 = _resume_or_initial_state(
         resume_checkpoint,
@@ -841,23 +861,32 @@ def _run_pcf_primitive_dns(
 ) -> dict[str, Any]:
     from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
 
-    resolution = spec["resolution"]
-    groups = spec["nondimensional_groups"]
+    resolution = _selected_resolution(spec)
     is_hydro = spec["physics"] == "hydro"
+    # FJ-00: coefficients come from the single resolved-physics object, so a
+    # Re/Rm-only spec runs identically to a nu/eta one instead of KeyError'ing.
+    physics = _resolved_physics(spec)
+    if not is_hydro:
+        magnetic_bc = _magnetic_bc(spec)
+        if magnetic_bc != "conducting":
+            raise ProductionOracleNotImplementedError(
+                "the axisymmetric primitive DNS runner is wired for conducting "
+                f"magnetic walls only, got {magnetic_bc!r}; pseudo-vacuum runs "
+                "use the 3-D primitive saturation family (FJ-09)"
+            )
     solver = AxisymmetricPCFMRIDNSJax(
-        S=float(groups.get("S", 1.0)),
-        omega=float(groups.get("Omega", 0.0)),
-        B0=0.0
-        if is_hydro
-        else float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
-        nu=float(groups["nu"]),
-        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        S=physics.S,
+        omega=physics.Omega,
+        B0=0.0 if is_hydro else physics.B0,
+        nu=physics.nu,
+        eta_mag=physics.nu if physics.eta is None else physics.eta,
         Nx=int(resolution.get("Nx", resolution.get("N", 40))),
         Nz=int(resolution.get("Nz", 16)),
         Lz=float(spec["domain"]["z_period"]),
         dt=float(spec["time"]["dt"]),
         family=resolution.get("family", "C"),
-        dealias=1.0,
+        # FJ-01: honor the spec's dealias contract on the 2-D (z, x) layout.
+        dealias=_axisymmetric_dealias(resolution),
     )
     seed = solver.seed_hydro_eigenmode if is_hydro else solver.seed_linear_eigenmode
     state, eigenvalue = seed(
@@ -899,6 +928,7 @@ def _run_pcf_primitive_dns(
         "growth_rate": growth_rate,
         "growth_rate_linear": float(eigenvalue.real),
         "divergence_u": float(final["divu"]),
+        "energy_convention": "half_integral_abs2",
     }
     first = {
         "t": 0.0,
@@ -933,6 +963,7 @@ def _run_pcf_fluctuation_saturation(
     diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
+    on_row: Any | None = None,
 ) -> dict[str, Any]:
     from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 
@@ -962,15 +993,16 @@ def _run_pcf_fluctuation_saturation(
     diagnostic_rows: list[dict[str, Any]] = []
 
     def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
-        diagnostic_rows.append(
-            {
-                "t": float(t),
-                "kinetic_energy": float(diag["Epert"]),
-                "total_kinetic_energy": float(diag["Etot"]),
-                "divergence_l2": float(diag["divL2"]),
-                "mean_shear": float(diag["mean_shear"]),
-            }
-        )
+        row = {
+            "t": float(t),
+            "kinetic_energy": float(diag["Epert"]),
+            "total_kinetic_energy": float(diag["Etot"]),
+            "divergence_l2": float(diag["divL2"]),
+            "mean_shear": float(diag["mean_shear"]),
+        }
+        diagnostic_rows.append(row)
+        if on_row is not None:
+            on_row(row)
 
     state, tstep0, t0 = _resume_or_initial_state(
         resume_checkpoint,
@@ -1062,33 +1094,16 @@ def _run_pcf_primitive_mhd_saturation(
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
     quench: bool = False,
+    on_row: Any | None = None,
 ) -> dict[str, Any]:
-    from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
-
     magnetic_bc = _magnetic_bc(spec)
-    if magnetic_bc != "conducting":
+    if magnetic_bc not in {"conducting", "pseudo_vacuum"}:
         raise ProductionOracleNotImplementedError(
-            "PCF primitive-b saturation runner is wired only for conducting walls, "
-            f"got {magnetic_bc!r}"
+            "PCF primitive-b saturation runner is wired for conducting or "
+            f"pseudo-vacuum walls, got {magnetic_bc!r}"
         )
     _assert_pcf_half_gap_domain(spec)
-    resolution = _selected_resolution(spec)
-    physics = _resolved_physics(spec)
-    solver = PCFMRIDNSJax(
-        S=physics.S,
-        omega=physics.Omega,
-        B0=physics.B0,
-        nu=physics.nu,
-        eta_mag=physics.eta,
-        Nx=int(resolution.get("Nx", resolution.get("N", 32))),
-        Ny=int(resolution.get("Ny", 8)),
-        Nz=int(resolution.get("Nz", 16)),
-        Ly=float(spec["domain"]["y_period"]),
-        Lz=float(spec["domain"]["z_period"]),
-        dt=float(spec["time"]["dt"]),
-        family=resolution.get("family", "L"),
-        dealias=_padding_factor(resolution, solver_family="pcf_primitive"),
-    )
+    solver = _primitive_solver_from_spec(spec)
     if spec["physics"] == "mri":
         state, eigenvalue = _pcf_mri_packet_state(solver, spec)
     else:
@@ -1121,6 +1136,8 @@ def _run_pcf_primitive_mhd_saturation(
         if "transport_alpha" in diag:
             row["transport_alpha"] = float(diag["transport_alpha"])
         diagnostic_rows.append(row)
+        if on_row is not None:
+            on_row(row)
 
     state, tstep0, t0 = _resume_or_initial_state(
         resume_checkpoint,
@@ -1152,8 +1169,10 @@ def _run_pcf_primitive_mhd_saturation(
         tstep0=tstep0,
     )
     final = _pcf_primitive_3d_scalars(solver, out)
+    # Growth is measured from the evolved baseline over the steps actually taken
+    # (n_steps == target_steps on a fresh run; smaller on a resume/quench).
     growth_rate = _growth_rate_from_energy(
-        initial["total_energy"], final["total_energy"], target_steps, solver.dt
+        initial["total_energy"], final["total_energy"], n_steps, solver.dt
     )
     elapsed = target_steps * float(spec["time"]["dt"])
     magnetic_growth = (
@@ -1185,9 +1204,12 @@ def _run_pcf_primitive_mhd_saturation(
         "magnetic_energy_growth_factor": float(magnetic_growth),
         "saturation_check_passed": bool(saturation_passed),
         "magnetic_bc": magnetic_bc,
+        # E* scalars here are the physical 0.5 * volume integral of |field|^2
+        # (couette/pcf_mri_primitive.py convention); the curl family reports 2x.
+        "energy_convention": "half_integral_abs2",
     }
     first = _pcf_primitive_summary_row(
-        initial, t=0.0, extra={"growth_rate_linear": float(eigenvalue.real)}
+        initial, t=float(t0), extra={"growth_rate_linear": float(eigenvalue.real)}
     )
     last = _pcf_primitive_summary_row(
         final,
@@ -1235,6 +1257,68 @@ def _pcf_primitive_summary_row(
     return row
 
 
+def _primitive_solver_from_spec(spec: dict[str, Any]):
+    """Construct the primitive-b 3-D solver exactly as the saturation oracle does.
+
+    Shared with the FJ-12 benchmark CLI so measured costs are the production
+    solver's, not a stand-in's.
+    """
+
+    from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
+
+    resolution = _selected_resolution(spec)
+    physics = _resolved_physics(spec)
+    return PCFMRIDNSJax(
+        S=physics.S,
+        omega=physics.Omega,
+        B0=physics.B0,
+        nu=physics.nu,
+        eta_mag=physics.eta,
+        Nx=int(resolution.get("Nx", resolution.get("N", 32))),
+        Ny=int(resolution.get("Ny", 8)),
+        Nz=int(resolution.get("Nz", 16)),
+        Ly=float(spec["domain"]["y_period"]),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "L"),
+        dealias=_padding_factor(resolution, solver_family="pcf_primitive"),
+        magnetic_bc=_magnetic_bc(spec),
+    )
+
+
+def _curl_solver_from_spec(spec: dict[str, Any]):
+    """Construct the vector-potential workhorse exactly as the oracle does."""
+
+    from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
+
+    resolution = _selected_resolution(spec)
+    physics = _resolved_physics(spec)
+    initial = spec["initial_condition"]
+    x0, x1 = (float(v) for v in spec["domain"]["x"])
+    return PlaneCouetteMRIShearpyJax(
+        N=(
+            int(resolution.get("Nx", resolution.get("N", 17))),
+            int(resolution.get("Ny", 16)),
+            int(resolution.get("Nz", 16)),
+        ),
+        domain=(
+            (x0, x1),
+            (0.0, float(spec["domain"]["y_period"])),
+            (0.0, float(spec["domain"]["z_period"])),
+        ),
+        Re=physics.Re_h,
+        Rm=physics.Rm_h if physics.Rm_h is not None else physics.Re_h,
+        omega=physics.Omega,
+        shear_rate=physics.S,
+        background_b=(0.0, 0.0, physics.B0),
+        dt=float(spec["time"]["dt"]),
+        family=resolution.get("family", "L"),
+        padding_factor=_padding_factor(resolution, solver_family="pcf_vector_potential"),
+        perturbation_amplitude=float(initial.get("velocity_amplitude", 0.05)),
+        magnetic_amplitude=float(initial.get("magnetic_amplitude", 0.0)),
+    )
+
+
 def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
     """Canonical scalars from the curl/vector-potential MRI solver (FJ-03)."""
 
@@ -1274,122 +1358,89 @@ def _run_pcf_vector_potential_mhd_saturation(
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
     quench: bool = False,
+    on_row: Any | None = None,
 ) -> dict[str, Any]:
     """FJ-03: curl/vector-potential PCF-MRI DNS (B = curl A, solenoidal by construction).
 
-    A candidate zero-net-flux workhorse cross-checkable against the primitive path.
-    Restart/checkpointing of the MHDState is not yet wired, so resume/quench are
-    rejected here.
+    The zero-net-flux workhorse. MHDState (KMM flow block + A coefficients)
+    checkpoint, snapshot, resume-exact, and quench continuation run through the
+    shared ``_solve_with_optional_checkpoints`` machinery, and the per-block health
+    guards always run (``health_block``) with or without a diagnostics cadence.
     """
 
-    from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
-    from jaxfun.io import Cadence
-
-    if resume_checkpoint is not None or quench:
+    magnetic_bc = _magnetic_bc(spec)
+    if magnetic_bc != "conducting":
         raise ProductionOracleNotImplementedError(
-            "vector-potential PCF-MRI restart/quench is not yet wired; run from scratch"
-        )
-    if checkpoint_every is not None or snapshot_every is not None:
-        # Do not silently ignore these flags: MHDState checkpoint/snapshot serialization
-        # is not wired for the curl path yet.
-        raise ProductionOracleNotImplementedError(
-            "vector-potential PCF-MRI checkpoint/snapshot is not yet wired; omit "
-            "--checkpoint-every / --snapshot-every"
+            "the vector-potential (curl) PCF-MRI family is wired for conducting "
+            f"walls only, got {magnetic_bc!r}; pseudo-vacuum runs use the "
+            "primitive-b family (FJ-09)"
         )
     _assert_pcf_half_gap_domain(spec)
-    resolution = _selected_resolution(spec)
-    physics = _resolved_physics(spec)
-    initial = spec["initial_condition"]
-    x0, x1 = (float(v) for v in spec["domain"]["x"])
-    solver = PlaneCouetteMRIShearpyJax(
-        N=(
-            int(resolution.get("Nx", resolution.get("N", 17))),
-            int(resolution.get("Ny", 16)),
-            int(resolution.get("Nz", 16)),
-        ),
-        domain=(
-            (x0, x1),
-            (0.0, float(spec["domain"]["y_period"])),
-            (0.0, float(spec["domain"]["z_period"])),
-        ),
-        Re=physics.Re_h,
-        Rm=physics.Rm_h if physics.Rm_h is not None else physics.Re_h,
-        omega=physics.Omega,
-        shear_rate=physics.S,
-        background_b=(0.0, 0.0, physics.B0),
-        dt=float(spec["time"]["dt"]),
-        family=resolution.get("family", "L"),
-        padding_factor=_padding_factor(resolution, solver_family="pcf_vector_potential"),
-        perturbation_amplitude=float(initial.get("velocity_amplitude", 0.05)),
-        magnetic_amplitude=float(initial.get("magnetic_amplitude", 0.0)),
+    solver = _curl_solver_from_spec(spec)
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint,
+        solver.initial_state(),
+        spec=spec,
+        state_kind="pcf_vector_potential_mhd_saturation",
+        quench=quench,
     )
-    state = solver.initial_state()
+    # FJ-05: baseline scalars come from the state actually evolved (the loaded
+    # parent checkpoint on a resume/quench), not the fresh configured seed.
     first_scalars = _pcf_curl_scalars(solver, state)
+    target_steps, n_steps = _remaining_steps_from_resume(
+        spec, steps=steps, tstep0=tstep0
+    )
 
     rows: list[dict[str, Any]] = []
-    diag_cache: dict[int, Any] = {}
 
     def collect(t: float, tstep: int, diag: dict[str, Any]) -> None:
-        diag_cache[int(tstep)] = diag
-        rows.append(
-            {
-                "t": float(t),
-                "kinetic_energy": float(diag["Epert"]),
-                "magnetic_energy": float(diag["Emag"]),
-                "total_energy": float(diag["Epert"]) + float(diag["Emag"]),
-                "divergence_u_l2": float(diag["divL2"]),
-                "divergence_b_l2": float(diag["divB_L2"]),
-                "reynolds_stress": float(diag["reynolds_stress"]),
-                "maxwell_stress_xy": float(diag["maxwell_stress"]),
-                "total_stress": float(diag["total_stress"]),
-                "alpha_Sh": float(diag["alpha_Sh"]),
-                "mean_bx": float(diag["mean_bx"]),
-                "mean_by": float(diag["mean_by"]),
-                "mean_bz": float(diag["mean_bz"]),
-                "mag_energy_mean": float(diag["mag_energy_mean"]),
-                "mag_energy_fluct": float(diag["mag_energy_fluct"]),
-                **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
-            }
-        )
+        row = {
+            "t": float(t),
+            "kinetic_energy": float(diag["Epert"]),
+            "magnetic_energy": float(diag["Emag"]),
+            "total_energy": float(diag["Epert"]) + float(diag["Emag"]),
+            "divergence_u_l2": float(diag["divL2"]),
+            "divergence_b_l2": float(diag["divB_L2"]),
+            "reynolds_stress": float(diag["reynolds_stress"]),
+            "maxwell_stress_xy": float(diag["maxwell_stress"]),
+            "total_stress": float(diag["total_stress"]),
+            "alpha_Sh": float(diag["alpha_Sh"]),
+            "mean_bx": float(diag["mean_bx"]),
+            "mean_by": float(diag["mean_by"]),
+            "mean_bz": float(diag["mean_bz"]),
+            "mag_energy_mean": float(diag["mag_energy_mean"]),
+            "mag_energy_fluct": float(diag["mag_energy_fluct"]),
+            **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
+        }
+        rows.append(row)
+        if on_row is not None:
+            on_row(row)
 
-    def should_stop(t: float, tstep: int, candidate: Any) -> bool:
-        # FJ-06: run the same per-block health guards as the primitive DNS path.
-        if not _tree_all_finite(candidate):
-            raise FloatingPointError(
-                f"nonfinite curl solver state at tstep={int(tstep)} t={float(t):g}"
-            )
-        cached = diag_cache.pop(int(tstep), None)
-        energy = None
-        if isinstance(cached, dict):
-            ke = cached.get("Epert")
-            me = cached.get("Emag")
-            if ke is not None and me is not None:
-                energy = float(ke) + float(me)
-        if energy is not None and (
-            not math.isfinite(energy) or abs(energy) > _ENERGY_RUNAWAY_LIMIT
-        ):
-            raise FloatingPointError(
-                f"energy runaway ceiling exceeded at tstep={int(tstep)} "
-                f"t={float(t):g}: E={energy:g} > {_ENERGY_RUNAWAY_LIMIT:g}"
-            )
-        return False
-
-    target_steps, n_steps = _remaining_steps_from_resume(spec, steps=steps, tstep0=0)
-    block_size = min(diagnostics_every or n_steps, _CURL_HEALTH_BLOCK) or 1
-    out = solver.solve_with_cadence(
+    out = _solve_with_optional_checkpoints(
+        solver,
         state,
         n_steps,
-        Cadence(diagnostics_every=diagnostics_every),
-        block_size=max(1, int(block_size)),
-        on_diagnostics=collect if diagnostics_every is not None else None,
-        should_stop=should_stop,
-        t0=0.0,
-        tstep0=0,
+        spec=spec,
+        out_dir=out_dir,
+        checkpoint_every=checkpoint_every,
+        snapshot_every=snapshot_every,
+        diagnostics_every=diagnostics_every,
+        state_kind="pcf_vector_potential_mhd_saturation",
+        device_record=device_record,
+        on_diagnostics_row=collect,
+        t0=t0,
+        tstep0=tstep0,
+        health_block=_CURL_HEALTH_BLOCK,
     )
     final_scalars = _pcf_curl_scalars(solver, out)
     elapsed = target_steps * float(spec["time"]["dt"])
+    # Growth is measured from the evolved baseline over the steps actually taken
+    # (n_steps == target_steps on a fresh run; smaller on a resume/quench).
     growth_rate = _growth_rate_from_energy(
-        first_scalars["total_energy"], final_scalars["total_energy"], target_steps, solver.dt
+        first_scalars["total_energy"],
+        final_scalars["total_energy"],
+        n_steps,
+        solver.dt,
     )
     magnetic_growth = (
         final_scalars["magnetic_energy"] / first_scalars["magnetic_energy"]
@@ -1417,10 +1468,17 @@ def _run_pcf_vector_potential_mhd_saturation(
         "growth_rate": float(growth_rate),
         "magnetic_energy_growth_factor": float(magnetic_growth),
         "saturation_check_passed": bool(saturation_passed),
-        "magnetic_bc": "conducting",
+        "magnetic_bc": magnetic_bc,
         "representation": "vector_potential",
+        # E* scalars here are plain volume integrals of |field|^2 (the curl-family
+        # reference convention, couette/pcf_mhd_mri_shearpy.py); the primitive
+        # family reports the physical 0.5x per its own reference.
+        "energy_convention": "integral_abs2",
     }
-    first = {"t": 0.0, **{k: v for k, v in first_scalars.items() if _is_number_scalar(v)}}
+    first = {
+        "t": float(t0),
+        **{k: v for k, v in first_scalars.items() if _is_number_scalar(v)},
+    }
     last = {
         "t": elapsed,
         **{k: v for k, v in final_scalars.items() if _is_number_scalar(v)},
@@ -1507,7 +1565,7 @@ def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _magnetic_bc(spec: dict[str, Any]) -> str:
-    magnetic = spec["boundary_conditions"]["magnetic"]
+    magnetic = spec.get("boundary_conditions", {}).get("magnetic", "conducting")
     return magnetic.get("type", magnetic) if isinstance(magnetic, dict) else magnetic
 
 
@@ -1631,6 +1689,7 @@ def _run_taylor_couette_mhd_saturation(
     diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
+    on_row: Any | None = None,
 ) -> dict[str, Any]:
     from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
 
@@ -1667,16 +1726,17 @@ def _run_taylor_couette_mhd_saturation(
     diagnostic_rows: list[dict[str, Any]] = []
 
     def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
-        diagnostic_rows.append(
-            {
-                "t": float(t),
-                "kinetic_energy": float(diag["Ekin"]),
-                "magnetic_energy": float(diag["Emag"]),
-                "divergence_u": float(diag["divu"]),
-                "divergence_b": float(diag["divb"]),
-                "divergence_b_l2": float(diag["divb"]),
-            }
-        )
+        row = {
+            "t": float(t),
+            "kinetic_energy": float(diag["Ekin"]),
+            "magnetic_energy": float(diag["Emag"]),
+            "divergence_u": float(diag["divu"]),
+            "divergence_b": float(diag["divb"]),
+            "divergence_b_l2": float(diag["divb"]),
+        }
+        diagnostic_rows.append(row)
+        if on_row is not None:
+            on_row(row)
 
     state, tstep0, t0 = _resume_or_initial_state(
         resume_checkpoint,
@@ -1882,6 +1942,7 @@ def _solve_with_optional_checkpoints(
     on_diagnostics_row: Any | None = None,
     t0: float = 0.0,
     tstep0: int = 0,
+    health_block: int | None = None,
 ) -> Any:
     if checkpoint_every is not None and checkpoint_every <= 0:
         raise ValueError("checkpoint_every must be positive")
@@ -1898,8 +1959,10 @@ def _solve_with_optional_checkpoints(
         snapshot_every=snapshot_every,
         diagnostics_every=diagnostics_every,
     )
-    if monitor_every is None and not (
-        checkpoint_every or snapshot_every or diagnostics_every
+    if (
+        monitor_every is None
+        and health_block is None
+        and not (checkpoint_every or snapshot_every or diagnostics_every)
     ):
         return solver.solve(state, steps)
 
@@ -1958,6 +2021,13 @@ def _solve_with_optional_checkpoints(
                 f"nonfinite solver state at tstep={int(tstep)} t={float(t):g}"
             )
         diag = diagnostics_cache.pop(int(tstep), None)
+        if diag is None and health_block is not None:
+            # FJ-06: an always-on health cadence computes real diagnostics per
+            # block so the energy/divergence guards run even without a
+            # diagnostics cadence.
+            diagnostics_fn = getattr(solver, "diagnostics", None)
+            if diagnostics_fn is not None:
+                diag = diagnostics_fn(candidate_state)
         # FJ-06: catch a finite-but-runaway energy in addition to non-finite state.
         _raise_on_energy_runaway(
             solver, candidate_state, t=t, tstep=tstep, diagnostics=diag
@@ -1973,6 +2043,8 @@ def _solve_with_optional_checkpoints(
         checkpoint_every=checkpoint_every,
     )
     block_size = monitor_every or max(1, int(steps))
+    if health_block is not None:
+        block_size = max(1, min(block_size, int(health_block)))
     out = solver.solve_with_cadence(
         state,
         steps,
@@ -2311,6 +2383,9 @@ def _write_snapshot_manifest(
 
 
 def _checkpoint_payload(state: Any) -> dict[str, Any]:
+    if hasattr(state, "flow") and hasattr(state, "A"):
+        # MHDState (curl / vector-potential family): KMM flow block + A coefficients.
+        return {"flow_u": state.flow.u, "flow_g": state.flow.g, "A": state.A}
     if hasattr(state, "u") and hasattr(state, "g"):
         return {"u": state.u, "g": state.g}
     if hasattr(state, "u"):
@@ -2366,6 +2441,28 @@ def _padding_factor(
     return native_padding_for_solver(
         resolution, solver_family=solver_family, dimensions=dimensions
     )
+
+
+def _axisymmetric_dealias(resolution: dict[str, Any]) -> float:
+    """FJ-01: spec dealias for the 2-D ``(z, x)`` axisymmetric primitive solver.
+
+    The solver applies one uniform padding factor, so a semantic per-axis map must
+    agree on the axes it resolves to; a genuinely anisotropic request fails loudly
+    instead of being silently truncated to one axis.
+    """
+
+    padding = _padding_factor(
+        resolution, solver_family="pcf_primitive_axisymmetric", dimensions=2
+    )
+    if any(
+        not math.isclose(p, padding[0], rel_tol=0.0, abs_tol=1.0e-12)
+        for p in padding[1:]
+    ):
+        raise ProductionOracleNotImplementedError(
+            "the axisymmetric primitive solver applies a single uniform dealias "
+            f"factor; got per-axis padding {padding}"
+        )
+    return float(padding[0])
 
 
 def _resolved_physics(spec: dict[str, Any]):

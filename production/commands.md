@@ -366,3 +366,53 @@ intentionally unwired specs still exit with status 1/2 before solver allocation.
 Runner metadata also records the persistent JAX compilation-cache path and DNS
 timing fields (`solver_steps`, `ms_per_step`, `steps_per_second`) so throughput
 regressions are visible in `metadata.json` and reports.
+
+## Curl-workhorse continuation (checkpoint / resume / quench)
+
+The vector-potential (curl) PCF-MRI family serializes its MHDState (KMM flow
+block + A coefficients, `state_kind=pcf_vector_potential_mhd_saturation`):
+
+```bash
+.venv/bin/python production/run_problem.py \
+  --config production/runs/exp_pcf_mri_vector_potential.json \
+  --out runs/exp_pcf_mri_vector_potential/parent \
+  --resolution-tier smoke --steps 4 --checkpoint-every 2 --diagnostics-every 2
+
+# resume-exact continuation (same spec_hash enforced)
+.venv/bin/python production/run_problem.py \
+  --resume runs/exp_pcf_mri_vector_potential/parent
+
+# FJ-05 quench: child spec may change only nu/eta (Re/Rm); baselines are taken
+# from the loaded parent state
+.venv/bin/python production/run_problem.py \
+  --config <child-spec>.json --out runs/.../quench \
+  --quench runs/exp_pcf_mri_vector_potential/parent
+```
+
+## Pseudo-vacuum magnetic walls (FJ-09, primitive family)
+
+`production/runs/exp_pcf_mri_pseudo_vacuum.json` runs the primitive-b solver
+with `d_x b_x = 0`, `b_y = b_z = 0` walls; the eigenmode seed and
+`growth_rate_linear` come from the pseudo-vacuum linear operator. Live parity
+covers both walls (`test_pcf_primitive_3d_finite_amplitude_matches_live_shenfun`).
+The vector-potential form rejects pseudo-vacuum until A-formulation BCs exist.
+
+## Performance measurement (FJ-12)
+
+```bash
+.venv/bin/python -m production.benchmark \
+  --config production/runs/exp_pcf_mri_vector_potential.json \
+  --tiers smoke,start --timed-steps 10 --out runs/bench/vp_cpu.json
+```
+
+Times the *real* production solver per materialized tier (compile vs warm step),
+fits the power-law cost model over >= 2 tiers, and predicts hours for the spec's
+horizon. The workhorse decision still requires this CLI on the authorized GPU.
+
+## Release gate defaults (FJ-13)
+
+`--write-golden` and production-scale runs (no `--steps`, no smoke/start tier)
+of `support_state: production` DNS specs refuse a dirty/unpushed/mutable-ref
+worktree by default; `--allow-dirty` archives the diff (tracked + untracked)
+for an explicit discovery run. `--wandb` streams cadence rows live during the
+solve and errors out if `wandb` is not installed (`pip install .[wandb]`).

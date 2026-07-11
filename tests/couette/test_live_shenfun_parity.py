@@ -377,7 +377,8 @@ def test_pcf_primitive_axisymmetric_finite_amplitude_matches_live_shenfun():
         )
 
 
-def test_pcf_primitive_3d_finite_amplitude_matches_live_shenfun():
+@pytest.mark.parametrize("magnetic_bc", ["conducting", "pseudo_vacuum"])
+def test_pcf_primitive_3d_finite_amplitude_matches_live_shenfun(magnetic_bc):
     solver = PCFMRIDNSJax(
         S=1.0,
         omega=2.0 / 3.0,
@@ -392,11 +393,13 @@ def test_pcf_primitive_3d_finite_amplitude_matches_live_shenfun():
         dt=1.0e-3,
         family="C",
         dealias=1.0,
+        magnetic_bc=magnetic_bc,
     )
     references = pcf_primitive_3d_reference(
         steps=(0, *PCF_PRIMITIVE_NONLINEAR_PARITY_STEPS),
         n=(solver.Nx, solver.Ny, solver.Nz),
         amp=PCF_PRIMITIVE_NONLINEAR_PARITY_AMP,
+        magnetic_bc=magnetic_bc,
         include_coefficients=True,
     )
     initial_reference, reference = references[0], references[-1]

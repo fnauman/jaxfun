@@ -1,13 +1,16 @@
 """Optional Weights & Biases sink (FJ-07).
 
 The local ``diagnostics.jsonl`` / ``metadata.json`` / summaries / checkpoints remain
-the source of truth. W&B is an *optional* mirror: it is import-tolerant (a run with
-``wandb`` uninstalled or logging disabled behaves identically minus the mirror), it
-is only ever called from the host-side cadence callback (never inside JAX tracing),
-and it logs the complete canonical cadence dictionary plus a run summary.
+the source of truth. W&B is an *optional* mirror: it is only ever called from the
+host-side cadence callback (never inside JAX tracing), it streams each canonical
+cadence row as it is produced (live telemetry for long remote runs), and it logs a
+run summary exactly once when the run finishes or fails.
 
-Enable by constructing :class:`WandbSink` with ``enabled=True`` (typically gated on a
-CLI flag). Offline runs use ``WANDB_MODE=offline`` and a later ``wandb sync``.
+Install it with the declared extra (``pip install .[wandb]``). When tracking is
+explicitly requested (``strict=True``, the runner's ``--wandb`` flag) an
+uninstalled/broken ``wandb`` raises :class:`WandbUnavailableError` instead of
+silently disabling tracking; a non-strict sink degrades to a local-only no-op.
+Offline runs use ``WANDB_MODE=offline`` and a later ``wandb sync``.
 """
 
 from __future__ import annotations
@@ -15,8 +18,12 @@ from __future__ import annotations
 from typing import Any
 
 
+class WandbUnavailableError(RuntimeError):
+    """Raised when tracking was explicitly requested but cannot be initialized."""
+
+
 class WandbSink:
-    """A no-op-by-default mirror of the cadence stream and run summary to W&B."""
+    """A mirror of the cadence stream and run summary to W&B."""
 
     def __init__(
         self,
@@ -28,6 +35,7 @@ class WandbSink:
         run_id: str | None = None,
         config: dict[str, Any] | None = None,
         mode: str | None = None,
+        strict: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
         self._run = None
@@ -37,7 +45,13 @@ class WandbSink:
             return
         try:
             import wandb  # type: ignore
-        except Exception:
+        except Exception as exc:
+            if strict:
+                raise WandbUnavailableError(
+                    "W&B tracking was requested (--wandb) but the `wandb` package "
+                    "cannot be imported; install the optional dependency "
+                    "(`pip install jaxfun[wandb]`) or drop --wandb"
+                ) from exc
             # Uninstalled / broken install -> silently degrade to a local-only run.
             self.enabled = False
             return
@@ -54,7 +68,11 @@ class WandbSink:
             init_kwargs["mode"] = mode
         try:
             self._run = wandb.init(**init_kwargs)
-        except Exception:
+        except Exception as exc:
+            if strict:
+                raise WandbUnavailableError(
+                    f"W&B tracking was requested (--wandb) but wandb.init failed: {exc}"
+                ) from exc
             self.enabled = False
             self._run = None
 

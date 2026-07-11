@@ -41,6 +41,7 @@ try:
     from .problem_spec import ProblemSpecError, UnsupportedSpecError, load_spec
     from .provenance import ReleaseCleanlinessError
     from .quench import QuenchError, burn_in_horizon, validate_quench
+    from .wandb_sink import WandbUnavailableError
 except ImportError:  # pragma: no cover - direct script mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from production.adapters import ProductionConfig, load_config  # type: ignore
@@ -74,6 +75,7 @@ except ImportError:  # pragma: no cover - direct script mode
         burn_in_horizon,
         validate_quench,
     )
+    from production.wandb_sink import WandbUnavailableError  # type: ignore
 
 
 class SolverExecutionNotImplementedError(RuntimeError):
@@ -119,6 +121,7 @@ def run_problem(
     compilation_cache, restore_compilation_cache = _configure_compilation_cache(out_dir)
     metadata: dict[str, Any] = {}
     diagnostics: dict[str, Any] = {}
+    sink = None
     try:
         effective_diagnostics_every = _effective_diagnostics_every(
             config.spec,
@@ -163,6 +166,18 @@ def run_problem(
         if validate_only:
             return metadata
 
+        # FJ-07: construct the sink BEFORE the solve so cadence rows stream live
+        # (a long remote run is visible while it runs, and a crash still leaves
+        # the partial cadence in W&B). Strict: an explicit --wandb that cannot
+        # initialize is an error, not a silent local-only run.
+        sink = _wandb_sink(
+            config,
+            metadata,
+            enabled=wandb,
+            project=wandb_project,
+            offline=wandb_offline,
+        )
+
         solver_started_at = _utc_timestamp()
         solver_start = time.perf_counter()
         solver_steps = _executed_solver_steps(
@@ -179,6 +194,7 @@ def run_problem(
                 device_record=device_record,
                 resume_checkpoint=resume_record,
                 quench=quench_mode,
+                on_row=sink.log_cadence if sink is not None and sink.active else None,
             )
         except ProductionOracleNotImplementedError as exc:
             metadata["timing"] = _solver_timing(
@@ -276,19 +292,12 @@ def run_problem(
         return metadata
     finally:
         restore_compilation_cache()
-        # FJ-07: mirror to W&B exactly once on every path that executed a solver --
-        # success, early stop, comparison failure, or crash -- so the failed run and
-        # its operational status are recorded. `diagnostics` is {} if the solver never
-        # produced any (the sink degrades gracefully); skipped for validate-only.
-        if wandb and not validate_only and metadata:
-            _mirror_to_wandb(
-                config,
-                diagnostics,
-                metadata,
-                enabled=wandb,
-                project=wandb_project,
-                offline=wandb_offline,
-            )
+        # FJ-07: close the live sink exactly once on every path that constructed
+        # it -- success, early stop, comparison failure, or crash -- logging the
+        # run summary and operational status. Cadence rows were already streamed
+        # live during the solve.
+        if sink is not None:
+            _finish_wandb(sink, diagnostics, metadata)
 
 
 def build_metadata(
@@ -986,31 +995,33 @@ def _integrator_provenance(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _mirror_to_wandb(
+def _wandb_sink(
     config: ProductionConfig,
-    diagnostics: dict[str, Any],
     metadata: dict[str, Any],
     *,
     enabled: bool,
     project: str | None,
     offline: bool,
-) -> None:
-    """FJ-07: mirror the cadence stream + run summary to W&B (host-side, post-solve).
+):
+    """FJ-07: build the live W&B sink before the solve.
 
-    A no-op when disabled or when wandb is uninstalled. Never invoked inside JAX
-    tracing -- it reads the already-materialized diagnostics.
+    Returns ``None`` when tracking is not requested. Strict: an explicit
+    ``--wandb`` with an uninstalled/broken ``wandb`` raises
+    :class:`production.wandb_sink.WandbUnavailableError` instead of silently
+    disabling tracking.
     """
 
     if not enabled:
-        return
+        return None
     try:
         from .wandb_sink import WandbSink
     except ImportError:  # pragma: no cover - direct script mode
         from production.wandb_sink import WandbSink  # type: ignore
 
     resolved = metadata.get("resolved_physics") or {}
-    sink = WandbSink(
+    return WandbSink(
         enabled=True,
+        strict=True,
         project=project or "jaxfun-production",
         group=f"{config.geometry}/{config.physics}",
         run_id=f"{config.problem_id}-{config.spec['spec_hash'][:12]}",
@@ -1021,19 +1032,30 @@ def _mirror_to_wandb(
         },
         mode="offline" if offline else None,
     )
-    with sink:
-        for row in diagnostics.get("time_series") or []:
-            sink.log_cadence(row)
+
+
+def _finish_wandb(
+    sink: Any, diagnostics: dict[str, Any], metadata: dict[str, Any]
+) -> None:
+    """FJ-07: log the run summary and close the sink exactly once."""
+
+    try:
         classification = metadata.get("classification") or {}
         execution = metadata.get("execution") or {}
-        scalars = diagnostics.get("scalars") or {}
+        scalars = (diagnostics or {}).get("scalars") or {}
+        series = (diagnostics or {}).get("time_series") or []
         summary = {
             "operational_status": execution.get("status"),
+            "failure_reason": execution.get("failure_reason"),
             "scientific_class": classification.get("scientific_class"),
-            "final_time": (diagnostics.get("time_series") or [{}])[-1].get("t"),
+            "final_time": series[-1].get("t") if series else None,
         }
+        summary = {key: value for key, value in summary.items() if value is not None}
         summary.update({k: v for k, v in scalars.items() if _is_number(v)})
         sink.log_summary(summary)
+    finally:
+        status = (metadata.get("execution") or {}).get("status")
+        sink.finish(exit_code=0 if status == "completed" else 1)
 
 
 def _is_number(value: Any) -> bool:
@@ -1232,7 +1254,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--require-clean",
         action="store_true",
-        help="FJ-13: refuse to run from a dirty/untagged/unpushed worktree.",
+        help="FJ-13: refuse to run from a dirty/untagged/unpushed worktree. "
+        "On by default for --write-golden and for production-scale runs of "
+        "production DNS specs; use --allow-dirty for discovery runs.",
     )
     parser.add_argument(
         "--allow-dirty",
@@ -1242,8 +1266,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wandb",
         action="store_true",
-        help="FJ-07: mirror diagnostics to Weights & Biases (optional; local files "
-        "stay the source of truth). No-op if wandb is uninstalled.",
+        help="FJ-07: stream cadence rows to Weights & Biases live during the "
+        "solve (local files stay the source of truth). Errors out if wandb is "
+        "uninstalled; install the `wandb` optional dependency.",
     )
     parser.add_argument("--wandb-project", default=None)
     parser.add_argument(
@@ -1261,15 +1286,46 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _peek_spec_precision(config_path: Path) -> str | None:
-    """Read a materialized spec's `precision` field before configuring JAX."""
+def _peek_spec_json(config_path: Path) -> dict[str, Any]:
+    """Best-effort raw read of a spec JSON before validation/JAX configuration."""
 
     try:
         data = json.loads(Path(config_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
-    precision = data.get("precision")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _peek_spec_precision(config_path: Path) -> str | None:
+    """Read a materialized spec's `precision` field before configuring JAX."""
+
+    precision = _peek_spec_json(config_path).get("precision")
     return str(precision) if precision is not None else None
+
+
+def _requires_release_gate(args: argparse.Namespace, config_path: Path) -> bool:
+    """FJ-13: decide whether the clean-worktree release gate is on by default.
+
+    Golden promotion (--write-golden) and any production-scale run (no --steps
+    bound, no smoke/start tier) of a `support_state: production` DNS spec must
+    come from a clean, pushed, immutable-ref worktree; --allow-dirty remains the
+    explicit discovery-run escape. Bounded smoke/dev runs stay permissive.
+    """
+
+    if args.require_clean or args.write_golden:
+        return True
+    if args.validate_only:
+        return False
+    if args.steps is not None or args.resolution_tier in {"smoke", "start"}:
+        return False
+    peek = _peek_spec_json(config_path)
+    if peek.get("support_state") != "production":
+        return False
+    oracle_type = (peek.get("expected_oracle") or {}).get("type")
+    if not oracle_type:
+        return False
+    kind = _execution_kind({"expected_oracle": {"type": str(oracle_type)}})
+    return kind in {"dns-saturation", "dns-linear-window"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1319,10 +1375,10 @@ def main(argv: list[str] | None = None) -> int:
                 resolution_tier=args.resolution_tier,
                 validate_only=args.validate_only,
                 resume=resume_dir,
-                # FJ-13: promoting a committed golden from the CLI is a production
-                # action -> require a clean/pushed/immutable-ref tree (unless the run
-                # is an explicit --allow-dirty discovery run).
-                require_clean=args.require_clean or args.write_golden,
+                # FJ-13: golden promotion and production-scale runs of production
+                # DNS specs default to the clean/pushed/immutable-ref gate
+                # (--allow-dirty is the explicit discovery-run escape).
+                require_clean=_requires_release_gate(args, config_path),
                 allow_dirty=args.allow_dirty,
                 wandb=args.wandb,
                 wandb_project=args.wandb_project,
@@ -1339,6 +1395,9 @@ def main(argv: list[str] | None = None) -> int:
         except ReleaseCleanlinessError as exc:
             print(f"release gate: {exc}", file=sys.stderr)
             return 3
+        except WandbUnavailableError as exc:
+            print(f"wandb tracking: {exc}", file=sys.stderr)
+            return 4
         except SolverExecutionNotImplementedError as exc:
             print(str(exc), file=sys.stderr)
             return 2

@@ -173,16 +173,22 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         # FJ-04: mean magnetic flux + mean/fluctuating energy split of the evolved
         # (fluctuation) field, so a ZNF run through the curl workhorse can detect
         # mean-flux contamination and the FJ-04 tolerance can be generated here.
+        # Convention: this family reports all E* diagnostics as the plain volume
+        # integral of the squared field (2x the physical energy), matching its
+        # shenfun references (couette/pcf_mhd_divfree.py, pcf_mhd_mri_shearpy.py)
+        # and the inherited Emag/Epert, so Emag == mag_energy_mean + mag_energy_fluct
+        # holds exactly. The primitive family reports the physical 0.5*integral per
+        # ITS reference; the oracle stamps `energy_convention` to disambiguate.
         b_spaces = (self.TD, self.TC, self.TC)
         mean_b = tuple(
             integrate(jnp.real(bi), sp) / volume
             for bi, sp in zip(b_fluct, b_spaces, strict=True)
         )
-        emag_fluct = 0.5 * sum(
+        emag_fluct = sum(
             jnp.real(integrate(jnp.conj(bi) * bi, sp))
             for bi, sp in zip(b_fluct, b_spaces, strict=True)
         )
-        mag_energy_mean = 0.5 * volume * sum(mb * mb for mb in mean_b)
+        mag_energy_mean = volume * sum(mb * mb for mb in mean_b)
         out = {
             **diag,
             "Emag_total": emag_total,

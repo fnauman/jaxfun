@@ -35,6 +35,9 @@ cuda13 = [
 io = [
   "h5py>=3.16.0",
 ]
+wandb = [
+  "wandb>=0.17",
+]
 
 [tool.pytest.ini_options]
 testpaths = [

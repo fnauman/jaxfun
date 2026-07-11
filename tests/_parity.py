@@ -632,6 +632,7 @@ def pcf_primitive_3d_reference(
     amp: float = 1.0e-3,
     family: str = "C",
     dealias: float | tuple[float, float, float] = 1.0,
+    magnetic_bc: str = "conducting",
     include_coefficients: bool = False,
 ) -> list[dict]:
     """Run live shenfun primitive-b 3D PCF MRI DNS parity rows."""
@@ -651,6 +652,7 @@ def pcf_primitive_3d_reference(
             "dt": dt,
             "family": family,
             "dealias": dealias,
+            "magnetic_bc": magnetic_bc,
         },
         seed_kwargs={"ky_mode": 1, "kz_mode": 1},
         steps=steps,

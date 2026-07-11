@@ -554,7 +554,7 @@ class PCFMRIDNS:
 
     def __init__(self, S=1.0, omega=2.0 / 3.0, B0=0.1, nu=1.0e-3, eta_mag=1.0e-3,
                  Nx=40, Ny=8, Nz=16, Ly=2.0 * math.pi, Lz=1.0, dt=2.0e-3,
-                 family="C", dealias=1.0):
+                 family="C", dealias=1.0, magnetic_bc="conducting"):
         self.S = float(S)
         self.omega = float(omega)
         self.B0 = float(B0)
@@ -587,10 +587,18 @@ class PCFMRIDNS:
                                      modify_spaces_inplace=True)
         self.TN = TensorProductSpace(comm, (self.Fy, self.Fz, self.SN), axes=ax)
 
+        # FJ-09: conducting walls -> b_x Dirichlet + b_y/b_z Neumann;
+        # pseudo-vacuum swaps them (d_x b_x = 0 Neumann, b_y = b_z = 0 Dirichlet).
+        self.magnetic_bc = str(magnetic_bc)
+        if self.magnetic_bc not in ("conducting", "pseudo_vacuum"):
+            raise ValueError("magnetic_bc must be 'conducting' or 'pseudo_vacuum'")
+        Tbx, Tbt = ((self.TN, self.TD) if self.magnetic_bc == "pseudo_vacuum"
+                    else (self.TD, self.TN))
+        self._b_spaces = (Tbx, Tbt, Tbt)
         self.VQ = CompositeSpace([self.TD, self.TD, self.TD, self.TP,
-                                  self.TD, self.TN, self.TN])
+                                  Tbx, Tbt, Tbt])
         self.VE = CompositeSpace([self.TD, self.TD, self.TD,
-                                  self.TD, self.TN, self.TN])
+                                  Tbx, Tbt, Tbt])
 
         self.x_sym = self.TD.coors.psi[2]       # wall-normal coordinate symbol
         X = self.T0.local_mesh(True)
@@ -610,9 +618,9 @@ class PCFMRIDNS:
         self.N_old = Function(self.VE)
         self._have_old = False
         self.vu = TestFunction(self.TD)
-        self.vbx = TestFunction(self.TD)
-        self.vby = TestFunction(self.TN)
-        self.vbz = TestFunction(self.TN)
+        self.vbx = TestFunction(self._b_spaces[0])
+        self.vby = TestFunction(self._b_spaces[1])
+        self.vbz = TestFunction(self._b_spaces[2])
 
         # cached derivative projects (d/dx axis2, d/dy axis0, d/dz axis1)
         self._Pdx = [Project(Dx(self.x[i], 2, 1), self.T0) for i in range(6)]
@@ -832,7 +840,7 @@ class PCFMRIDNS:
         return PlaneCouetteLinear.shearpy(
             nx=self.Nx, Re=abs(self.S) / self.nu, Rm=abs(self.S) / self.eta_mag,
             shear_rate=self.S, omega=self.omega, by=0.0, bz=self.B0,
-            velocity_scale=abs(self.S), magnetic_bc="conducting")
+            velocity_scale=abs(self.S), magnetic_bc=self.magnetic_bc)
 
     def seed_linear_eigenmode(self, ky_mode=1, kz_mode=1, amp=1e-6, which=0):
         """Inject the leading linear MRI eigenmode at ``(ky, kz)`` as the real field
@@ -851,7 +859,7 @@ class PCFMRIDNS:
         carg = ky * self.yphys + kz * self.zphys
         cc, ss = np.cos(carg), np.sin(carg)
         names = ("ux", "uy", "uz", "bx", "by", "bz")
-        spaces = (self.TD, self.TD, self.TD, self.TD, self.TN, self.TN)
+        spaces = (self.TD, self.TD, self.TD) + self._b_spaces
         self.x[:] = 0.0
         for i, (name, space) in enumerate(zip(names, spaces)):
             prof = vec[blk[name] * n:(blk[name] + 1) * n]

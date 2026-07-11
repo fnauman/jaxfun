@@ -1102,7 +1102,11 @@ class PCFMRIDNSJax:
             by=0.0,
             bz=self.B0,
             velocity_scale=abs(self.S),
-            magnetic_bc="conducting",
+            # FJ-09: seed with the eigenmode of the *same* magnetic wall as the
+            # DNS, so growth_rate_linear labels the operator actually evolved.
+            magnetic_bc="pseudo_vacuum"
+            if self.magnetic_bc == "pseudo_vacuum"
+            else "conducting",
         )
 
     def seed_linear_eigenmode(

@@ -114,8 +114,10 @@ class PlaneCouetteLinear:
         self.bz = float(bz)
         self.mhd = bool(mhd)
         self.magnetic_bc = magnetic_bc
-        if magnetic_bc not in ("conducting", "dirichlet"):
-            raise ValueError("magnetic_bc must be 'conducting' or 'dirichlet'")
+        if magnetic_bc not in ("conducting", "dirichlet", "pseudo_vacuum"):
+            raise ValueError(
+                "magnetic_bc must be 'conducting', 'dirichlet' or 'pseudo_vacuum'"
+            )
         self.x, self.D, self.D2, self.weights = cheb_lobatto(self.nx)
 
     @classmethod
@@ -199,6 +201,20 @@ class PlaneCouetteLinear:
                 for wall in (0, n - 1):
                     row = blk * n + wall
                     self._set_row(L, M, row, [(blk * n + wall, 1.0)])
+            return
+
+        if self.magnetic_bc == "pseudo_vacuum":
+            # FJ-09: pseudo-vacuum walls. Tangential field vanishes (Dirichlet on
+            # b_y, b_z); the normal gradient of the normal component vanishes
+            # (Neumann on b_x, the solenoidal complement of the tangential rows).
+            bx, by, bz = b["bx"], b["by"], b["bz"]
+            for wall in (0, n - 1):
+                self._set_row(
+                    L, M, bx * n + wall,
+                    [(slice(bx * n, (bx + 1) * n), self.D[wall, :])]
+                )
+                self._set_row(L, M, by * n + wall, [(by * n + wall, 1.0)])
+                self._set_row(L, M, bz * n + wall, [(bz * n + wall, 1.0)])
             return
 
         bx, by, bz = b["bx"], b["by"], b["bz"]
