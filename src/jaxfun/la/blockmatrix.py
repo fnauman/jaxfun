@@ -26,6 +26,23 @@ if TYPE_CHECKING:
 type _SparseMatrixCache = _CacheBox[DiaMatrix]
 
 
+def _component_num_dofs(space) -> tuple[tuple[int, ...], ...]:
+    """Normalize Cartesian or stacked-vector coefficient shapes per component."""
+    shapes = space.num_dofs
+    if all(isinstance(shape, tuple) for shape in shapes):
+        return cast(tuple[tuple[int, ...], ...], shapes)
+    if (
+        len(shapes) > 1
+        and shapes[0] == space.num_components
+        and all(isinstance(size, int) for size in shapes)
+    ):
+        component_shape = tuple(shapes[1:])
+        return (component_shape,) * space.num_components
+    raise ValueError(
+        f"Invalid coefficient shapes {shapes!r} for {space.num_components} components"
+    )
+
+
 class BlockMatrix[
     MatrixT: TPMatrix | GlobalMatrix,
     SpaceT: CartesianTensorProductSpace | CartesianProductSpace,
@@ -80,7 +97,7 @@ class BlockMatrix[
             self._combined_blocks = nnx.Dict(_grouped)
 
     def _matmul_array(self, w: tuple[Array, ...]) -> tuple[Array, ...]:
-        shapes = self.test_space.num_dofs
+        shapes = _component_num_dofs(self.test_space)
         out = [jnp.zeros(shape) for shape in shapes]
         for s, block_mat in self._combined_blocks.items():
             bi, bj = map(int, s.split(","))
@@ -289,7 +306,9 @@ class BlockArray(nnx.Pytree):
         self.data: nnx.List[Array] = nnx.List([])
         self.cartspace = nnx.static(cartspace)
         self.block_sizes: tuple[int, ...] = nnx.static(self.cartspace.block_sizes)
-        self.num_dofs: tuple[tuple[int, ...], ...] = nnx.static(self.cartspace.num_dofs)
+        self.num_dofs: tuple[tuple[int, ...], ...] = nnx.static(
+            _component_num_dofs(self.cartspace)
+        )
         for _ in range(cartspace.num_components):
             self.data.append(jnp.zeros(()))
         if indexed_arrays is not None:
