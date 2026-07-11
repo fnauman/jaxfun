@@ -141,6 +141,112 @@ def materialize_run_spec(
     }
 
 
+def cartesian_grid(grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    """All override combinations of a ``{key: [values, ...]}`` grid, stably ordered."""
+
+    import itertools
+
+    if not grid:
+        return []
+    keys = sorted(grid)
+    for key in keys:
+        if key not in _SUPPORTED_OVERRIDES:
+            raise SweepOverrideError(
+                f"unknown sweep override {key!r}; supported: "
+                f"{sorted(_SUPPORTED_OVERRIDES)}"
+            )
+        if not isinstance(grid[key], (list, tuple)) or not grid[key]:
+            raise SweepOverrideError(f"grid axis {key!r} must be a non-empty list")
+    return [
+        dict(zip(keys, combo, strict=True))
+        for combo in itertools.product(*(grid[key] for key in keys))
+    ]
+
+
+def execute_sweep(
+    base_spec_path: str | Path,
+    grid: dict[str, list[Any]],
+    out_dir: str | Path,
+    *,
+    execute: bool = False,
+    runner: Any | None = None,
+    resolution_tier: str | None = None,
+    steps: int | None = None,
+    wandb: bool = False,
+    skip_completed: bool = True,
+) -> dict[str, Any]:
+    """Cartesian sweep lifecycle: materialize every grid point, optionally run it.
+
+    Each point is materialized (validated + archived spec keyed by run id) and,
+    with ``execute=True``, run through ``production.run_problem.run_problem``
+    serially; per-point status lands in ``sweep_index.json`` after every point
+    (atomic rewrite), so a killed campaign resumes where it stopped. With
+    ``skip_completed`` a re-invocation -- including one with a widened grid --
+    skips already-completed run ids: the basic continuation/frontier workflow.
+    A failing point is recorded and does not abort the remaining grid.
+    Adaptive refinement (choosing the next points from results) is tracked in
+    production/KNOWN_ISSUES.md.
+    """
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    index_path = out_path / "sweep_index.json"
+    entries: dict[str, dict[str, Any]] = {}
+    if index_path.exists():
+        for item in json.loads(index_path.read_text(encoding="utf-8")):
+            entries[str(item.get("run_id"))] = item
+
+    def flush() -> None:
+        ordered = [entries[key] for key in sorted(entries)]
+        tmp = index_path.with_name(f".{index_path.name}.tmp")
+        tmp.write_text(json.dumps(ordered, indent=2, sort_keys=True) + "\n", "utf-8")
+        tmp.replace(index_path)
+
+    if runner is None and execute:
+        from .run_problem import run_problem as runner  # type: ignore[no-redef]
+
+    completed = failed = skipped = 0
+    for overrides in cartesian_grid(grid):
+        record = materialize_run_spec(base_spec_path, overrides, out_path)
+        run_id = record["run_id"]
+        prior = entries.get(run_id)
+        if (
+            skip_completed
+            and prior is not None
+            and prior.get("status") == "completed"
+        ):
+            skipped += 1
+            continue
+        entry = {**record, "status": "materialized"}
+        entries[run_id] = entry
+        flush()
+        if not execute:
+            continue
+        try:
+            runner(
+                config_path=record["spec_path"],
+                out=out_path / run_id / "run",
+                resolution_tier=resolution_tier,
+                steps=steps,
+                wandb=wandb,
+            )
+        except Exception as exc:  # record and continue with the rest of the grid
+            entry["status"] = "failed"
+            entry["failure_reason"] = f"{type(exc).__name__}: {exc}"
+            failed += 1
+        else:
+            entry["status"] = "completed"
+            completed += 1
+        flush()
+    return {
+        "points": len(cartesian_grid(grid)),
+        "completed": completed,
+        "failed": failed,
+        "skipped": skipped,
+        "index_path": str(index_path),
+    }
+
+
 def _parse_override(token: str) -> tuple[str, Any]:
     if "=" not in token:
         raise SweepOverrideError(f"override {token!r} must be key=value")
@@ -154,14 +260,47 @@ def _parse_override(token: str) -> tuple[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Materialize a swept run spec (FJ-07).")
+    parser = argparse.ArgumentParser(
+        description="Materialize (and optionally execute) swept run specs (FJ-07)."
+    )
     parser.add_argument("--base", required=True, help="Base spec JSON path.")
     parser.add_argument("--out", required=True, help="Output directory for run specs.")
     parser.add_argument(
         "--set", action="append", default=[], metavar="key=value",
         help="Semantic override, e.g. --set Re_h=1600 --set B0=0.0125",
     )
+    parser.add_argument(
+        "--grid",
+        default=None,
+        help='Cartesian grid as JSON, e.g. \'{"Rm_h": [400, 800], "B0": [0.025]}\'. '
+        "Materializes every combination; with --execute, runs each point "
+        "serially and records per-point status in sweep_index.json "
+        "(re-invocation skips completed points).",
+    )
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--resolution-tier", choices=["smoke", "start", "production"], default=None
+    )
+    parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--wandb", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.grid is not None:
+        grid = json.loads(args.grid)
+        if not isinstance(grid, dict):
+            raise SweepOverrideError("--grid must be a JSON object of lists")
+        summary = execute_sweep(
+            args.base,
+            grid,
+            args.out,
+            execute=args.execute,
+            resolution_tier=args.resolution_tier,
+            steps=args.steps,
+            wandb=args.wandb,
+        )
+        print(json.dumps(summary, indent=2))
+        return 1 if summary["failed"] else 0
+
     overrides = dict(_parse_override(token) for token in args.set)
     record = materialize_run_spec(args.base, overrides, args.out)
     print(json.dumps(record, indent=2))

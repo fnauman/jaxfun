@@ -145,3 +145,79 @@ def test_runner_records_failure_summary(monkeypatch, tmp_path):
     assert run.finished == [1]
     assert run.summary.get("operational_status") == "nan_inf"
     assert "nonfinite" in str(run.summary.get("failure_reason", ""))
+
+
+def test_post_solve_validation_failure_finishes_wandb_with_error(monkeypatch, tmp_path):
+    """Review round 3: a post-solve validation/comparison failure raises after
+    execution.status was set to 'completed'; the sink must still finish with a
+    nonzero exit code and a failed operational status."""
+    run = _install_fake_wandb(monkeypatch)
+
+    import production.run_problem as rp
+
+    def post_solve_boom(metadata):
+        raise RuntimeError("golden comparison failed for test")
+
+    monkeypatch.setattr(rp, "_assert_required_saturation_checks", post_solve_boom)
+
+    with pytest.raises(RuntimeError, match="golden comparison failed"):
+        rp.run_problem(
+            config_path=ROOT / "production" / "runs" / "pcf_mhd_divfree.json",
+            out=tmp_path / "run",
+            steps=2,
+            resolution_tier="smoke",
+            wandb=True,
+        )
+
+    assert run.finished == [1]
+    assert run.summary.get("operational_status") == "failed"
+    assert "golden comparison failed" in str(run.summary.get("failure_reason", ""))
+
+
+def test_crash_leaves_partial_diagnostics_locally(monkeypatch, tmp_path):
+    """Review round 3: the local artifact must never lag the W&B mirror -- a
+    mid-run crash leaves the streamed rows in diagnostics.partial.jsonl."""
+    import json as _json
+
+    import production.run_problem as rp
+
+    def crashing_solver(*args, **kwargs):
+        on_row = kwargs.get("on_row")
+        assert on_row is not None  # the partial writer is always attached
+        on_row({"t": 0.005, "kinetic_energy": 1.0})
+        on_row({"t": 0.010, "kinetic_energy": 2.0})
+        raise FloatingPointError("nonfinite solver state at tstep=2 t=0.01")
+
+    monkeypatch.setattr(rp, "run_supported_spec", crashing_solver)
+
+    out_dir = tmp_path / "run"
+    with pytest.raises(FloatingPointError):
+        rp.run_problem(
+            config_path=ROOT / "production" / "runs" / "pcf_mhd_divfree.json",
+            out=out_dir,
+            steps=2,
+            resolution_tier="smoke",
+        )
+
+    partial = out_dir / "diagnostics.partial.jsonl"
+    assert partial.exists()
+    rows = [_json.loads(line) for line in partial.read_text().splitlines()]
+    assert [row["t"] for row in rows] == [0.005, 0.010]
+    metadata = _json.loads((out_dir / "metadata.json").read_text())
+    assert metadata["execution"]["partial_diagnostics_path"] == str(partial)
+    assert not (out_dir / "diagnostics.jsonl").exists()
+
+
+def test_success_replaces_partial_with_canonical_diagnostics(tmp_path):
+    from production.run_problem import run_problem
+
+    out_dir = tmp_path / "run"
+    run_problem(
+        config_path=ROOT / "production" / "runs" / "pcf_mhd_divfree.json",
+        out=out_dir,
+        steps=2,
+        diagnostics_every=1,
+        resolution_tier="smoke",
+    )
+    assert (out_dir / "diagnostics.jsonl").exists()
+    assert not (out_dir / "diagnostics.partial.jsonl").exists()

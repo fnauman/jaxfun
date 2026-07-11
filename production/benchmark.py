@@ -219,6 +219,7 @@ def measure_spec(
     timed_steps: int = 10,
     warmup_steps: int = 2,
     shear_times: float | None = None,
+    holdout_tier: str | None = None,
 ) -> dict[str, Any]:
     """FJ-12: measure the real production solver at materialized resolution tiers.
 
@@ -287,6 +288,32 @@ def measure_spec(
         artifact["cost_model_note"] = (
             "need >= 2 measured tiers to fit the power-law cost model"
         )
+    # Review round 3: held-out validation -- fit on the other tiers, predict the
+    # held-out tier, and report the relative error so the cost model is tested
+    # on a point it never saw.
+    if holdout_tier is not None:
+        held = [m for m in measurements if m["tier"] == holdout_tier]
+        fit_rows = [m for m in measurements if m["tier"] != holdout_tier]
+        if not held:
+            raise ValueError(f"holdout tier {holdout_tier!r} was not measured")
+        if len(fit_rows) < 2:
+            raise ValueError(
+                "held-out validation needs >= 2 non-holdout tiers to fit"
+            )
+        held_row = held[0]
+        held_model = fit_cost_model(
+            [m["dof"] for m in fit_rows], [m["warm_step_s"] for m in fit_rows]
+        )
+        predicted = held_model.predict(held_row["dof"])
+        artifact["holdout_validation"] = {
+            "tier": holdout_tier,
+            "dof": held_row["dof"],
+            "predicted_warm_step_s": predicted,
+            "observed_warm_step_s": held_row["warm_step_s"],
+            "relative_error": held_model.relative_error(
+                held_row["dof"], held_row["warm_step_s"]
+            ),
+        }
     return artifact
 
 
@@ -321,6 +348,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timed-steps", type=int, default=10)
     parser.add_argument("--warmup-steps", type=int, default=2)
     parser.add_argument("--shear-times", type=float, default=None)
+    parser.add_argument(
+        "--holdout-tier",
+        default=None,
+        help="Validate the cost model against this measured-but-unfitted tier.",
+    )
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
 
@@ -330,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
         timed_steps=args.timed_steps,
         warmup_steps=args.warmup_steps,
         shear_times=args.shear_times,
+        holdout_tier=args.holdout_tier,
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

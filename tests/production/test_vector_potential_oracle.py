@@ -99,19 +99,34 @@ def test_vector_potential_emits_flux_diagnostics():
         assert key in sc
 
 
-def test_vector_potential_energy_split_identity():
-    """The magnetic-energy split must share the family's Emag convention.
+def test_vector_potential_energy_split_identity_and_total_field_means():
+    """Total-field magnetic semantics (review round 3, blocker 1).
 
-    Review regression: `mag_energy_mean`/`mag_energy_fluct` carried the physical
-    0.5 while `Emag` was the plain volume integral, so `magnetic_energy` was
-    exactly 2x `mag_energy_mean + mag_energy_fluct`.
+    The split and the component means are TOTAL-field quantities: a net-flux run
+    reports mean_bz == B0 (matching shearpy), and
+    mag_energy_mean + mag_energy_fluct == magnetic_energy_total exactly, in the
+    family's integral_abs2 convention.
     """
     jax.config.update("jax_enable_x64", True)
     out = run_supported_spec(_vp_spec(), steps=2)
     sc = out["scalars"]
     assert sc["energy_convention"] == "integral_abs2"
+    assert sc["box_volume"] == pytest.approx(2.0 * 4.0 * 1.0)
+    # Net-flux run: the physical mean field includes the imposed B0.
+    assert sc["mean_bz"] == pytest.approx(0.05, rel=1e-6)
+    split = sc["mag_energy_mean"] + sc["mag_energy_fluct"]
+    assert sc["magnetic_energy_total"] == pytest.approx(split, rel=1e-9)
+
+
+def test_vector_potential_znf_split_reduces_to_perturbation_energy():
+    """At B0=0 the total field is the perturbation, so the split identity
+    coincides with `magnetic_energy` (the original factor-2 regression)."""
+    jax.config.update("jax_enable_x64", True)
+    out = run_supported_spec(_vp_spec(B0=0.0), steps=2)
+    sc = out["scalars"]
     split = sc["mag_energy_mean"] + sc["mag_energy_fluct"]
     assert sc["magnetic_energy"] == pytest.approx(split, rel=1e-9)
+    assert abs(sc["mean_bz"]) < 1e-12
 
 
 def test_vector_potential_checkpoint_resume_matches_straight_run(tmp_path):

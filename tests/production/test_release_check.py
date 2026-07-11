@@ -104,8 +104,13 @@ def test_release_gate_default_covers_production_scale_runs(tmp_path):
         )
         is False
     )
-    # experimental specs stay permissive unless explicitly gated
-    assert _requires_release_gate(parser.parse_args(base), exp_spec) is False
+    # Review round 3: experimental DNS specs mint campaign evidence at
+    # production scale too, so they gate the same way (bounded runs exempt).
+    assert _requires_release_gate(parser.parse_args(base), exp_spec) is True
+    assert (
+        _requires_release_gate(parser.parse_args([*base, "--steps", "2"]), exp_spec)
+        is False
+    )
     assert (
         _requires_release_gate(
             parser.parse_args([*base, "--require-clean"]), exp_spec

@@ -1187,23 +1187,33 @@ class PCFMRIDNSJax:
     def magnetic_component_means(
         self, state: AxisymmetricPCFState
     ) -> tuple[Array, Array, Array]:
-        """FJ-04: quadrature-weighted volume means of (b_x, b_y, b_z) = mean flux."""
+        """FJ-04: quadrature-weighted volume means of the TOTAL (b_x, b_y, b_z).
+
+        Includes the imposed vertical field, so a net-flux run reports the
+        physical mean flux (``mean_bz == B0``, matching shearpy) and a nonzero
+        mean on a ZNF run flags mean-flux contamination.
+        """
         fields = self.fields_physical(state)
         volume = self._volume
+        background = (0.0, 0.0, self.B0)
         return tuple(
-            integrate(jnp.real(fields[3 + i]), self.T0) / volume for i in range(3)
+            integrate(jnp.real(fields[3 + i]), self.T0) / volume + background[i]
+            for i in range(3)
         )  # ty: ignore[return-value]
 
     def magnetic_energy_split(
         self, state: AxisymmetricPCFState
     ) -> tuple[Array, Array, Array]:
-        """FJ-04: (mag_total, mag_mean, mag_fluct) energies.
+        """FJ-04: (mag_total, mag_mean, mag_fluct) energies of the TOTAL field.
 
-        The volume-mean field is spatially uniform, so its energy is
-        ``0.5 * volume * |<b>|^2`` and, since the fluctuation is orthogonal to the
-        mean, ``mag_fluct = mag_total - mag_mean`` exactly.
+        The volume-mean field is spatially uniform and orthogonal to the
+        deviation from it, so ``mag_fluct = mag_total - mag_mean`` exactly. All
+        three use the family's physical ``0.5 * integral`` convention; the
+        evolved-perturbation energy remains ``Emag``.
         """
-        _, mag_total = self.energy_parts(state)
+        fields = self.fields_physical(state)
+        b_total = (fields[3], fields[4], fields[5] + self.B0)
+        mag_total = quadratic_energy(b_total, self.T0)
         mbx, mby, mbz = self.magnetic_component_means(state)
         mag_mean = 0.5 * self._volume * (mbx * mbx + mby * mby + mbz * mbz)
         return mag_total, mag_mean, mag_total - mag_mean

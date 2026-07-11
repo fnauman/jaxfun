@@ -389,6 +389,46 @@ block + A coefficients, `state_kind=pcf_vector_potential_mhd_saturation`):
   --quench runs/exp_pcf_mri_vector_potential/parent
 ```
 
+### Parent bank: multiple plateau times
+
+Add `--checkpoint-bank` to the parent so every `--checkpoint-every` interval is
+retained immutably under `checkpoints/bank/` with a provenance manifest
+(`index.json`: tstep, state time, spec hash, sha256). A quench then selects any
+plateau via `--quench-step <tstep>`, and `--burn-in-steps N` excludes the first
+N child steps from the fitted history (stationarity, classification,
+correlation time, budget), not only from metadata.
+
+```bash
+.venv/bin/python production/run_problem.py --config <child>.json --out runs/.../q415 \
+  --quench runs/.../parent --quench-step 24000 --burn-in-steps 2000
+```
+
+### Cartesian sweeps
+
+```bash
+.venv/bin/python -m production.sweep \
+  --base production/runs/exp_pcf_mri_vector_potential.json \
+  --out runs/sweeps/rm_scan \
+  --grid '{"Rm_h": [400, 600, 800], "B0": [0.025]}' \
+  --execute --resolution-tier smoke --steps 200
+```
+
+Materializes every combination (validated, physics-resolved, archived per run
+id), executes serially, and records per-point status in `sweep_index.json`
+after each point; re-invocation (including with a widened grid) skips completed
+points. Adaptive refinement is tracked in `production/KNOWN_ISSUES.md` (KI-6).
+
+### Health contract
+
+Saturation runs through the PCF families emit the CFL decomposition
+(advective/Alfven per direction + the implicit-diffusion number), per-axis
+spectral tail fractions, retained-mode occupancy, the correlation time of
+`total_stress`, and (curl family) the shearing-box `energy_budget_residual`
+(closes to ~5e-5 on the smoke anchor). Runs beyond the thresholds in
+`production/health.py` are classified `inconclusive` (`underresolved`) instead
+of trusted. Cadence rows also stream to `diagnostics.partial.jsonl` during the
+solve, so a crash leaves the same history locally that any mirror received.
+
 ## Pseudo-vacuum magnetic walls (FJ-09, primitive family)
 
 `production/runs/exp_pcf_mri_pseudo_vacuum.json` runs the primitive-b solver

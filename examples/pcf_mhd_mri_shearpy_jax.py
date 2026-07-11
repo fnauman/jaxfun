@@ -148,10 +148,36 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         HA = tuple(self.TD.mask_nyquist(self.TDp.forward(ei)) for ei in emf)
         return H, HA
 
+    def _dissipation_parts(self, state: MHDState, B) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Physical dissipation rates (nu * int |grad u|^2, eta * int |grad b|^2).
+
+        These close the shearing-box budget d(E_phys)/dt = S V <total_stress> -
+        dissipation between cadence rows (production/health.py).
+        """
+        u_spaces = (self.TB, self.TD, self.TD)
+        b_spaces = (self.TD, self.TC, self.TC)
+        derivatives = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+        diss_kinetic = jnp.asarray(0.0, dtype=jnp.real(state.flow.u[0]).dtype)
+        for ui, space in zip(state.flow.u, u_spaces, strict=True):
+            for deriv in derivatives:
+                g = space.backward_primitive(ui, deriv)
+                diss_kinetic = diss_kinetic + jnp.real(
+                    integrate(jnp.conj(g) * g, self.TC)
+                )
+        diss_magnetic = jnp.asarray(0.0, dtype=diss_kinetic.dtype)
+        for bi, space in zip(B, b_spaces, strict=True):
+            for deriv in derivatives:
+                g = space.backward_primitive(bi, deriv)
+                diss_magnetic = diss_magnetic + jnp.real(
+                    integrate(jnp.conj(g) * g, self.TC)
+                )
+        return self.nu * diss_kinetic, self.eta * diss_magnetic
+
     def diagnostics(self, state: MHDState) -> dict[str, jnp.ndarray]:
         diag = super().diagnostics(state)
         up = self._backward_velocity(state.flow.u)
-        bp = self._total_B_physical(self.update_B_from_A(state.A), padded=False)
+        B = self.update_B_from_A(state.A)
+        bp = self._total_B_physical(B, padded=False)
         volume = (
             (self.domain[0][1] - self.domain[0][0])
             * (self.domain[1][1] - self.domain[1][0])
@@ -167,22 +193,26 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         emag_total = jnp.asarray(0.0, dtype=up[0].real.dtype)
         for bi, space in zip(bp, (self.TD, self.TC, self.TC), strict=True):
             emag_total = emag_total + jnp.real(integrate(jnp.conj(bi) * bi, space))
-        b_fluct = self._backward_B(self.update_B_from_A(state.A), padded=False)
+        b_fluct = self._backward_B(B, padded=False)
+        diss_kinetic, diss_magnetic = self._dissipation_parts(state, B)
         bmax = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in b_fluct]))
         bmax_total = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in bp]))
-        # FJ-04: mean magnetic flux + mean/fluctuating energy split of the evolved
-        # (fluctuation) field, so a ZNF run through the curl workhorse can detect
-        # mean-flux contamination and the FJ-04 tolerance can be generated here.
+        # FJ-04: mean magnetic flux + mean/fluctuating energy split of the TOTAL
+        # field (imposed background included), so a net-flux run reports the
+        # physical mean field (mean_bz == B0, matching shearpy) and a ZNF run
+        # detects mean-flux contamination. The volume mean and the deviation from
+        # it are orthogonal, so mag_energy_mean + mag_energy_fluct == Emag_total
+        # holds exactly.
         # Convention: this family reports all E* diagnostics as the plain volume
         # integral of the squared field (2x the physical energy), matching its
         # shenfun references (couette/pcf_mhd_divfree.py, pcf_mhd_mri_shearpy.py)
-        # and the inherited Emag/Epert, so Emag == mag_energy_mean + mag_energy_fluct
-        # holds exactly. The primitive family reports the physical 0.5*integral per
-        # ITS reference; the oracle stamps `energy_convention` to disambiguate.
+        # and the inherited Emag/Epert. The primitive family reports the physical
+        # 0.5*integral per ITS reference; the oracle stamps `energy_convention`
+        # (and `box_volume`) so cross-code comparisons can convert.
         b_spaces = (self.TD, self.TC, self.TC)
         mean_b = tuple(
-            integrate(jnp.real(bi), sp) / volume
-            for bi, sp in zip(b_fluct, b_spaces, strict=True)
+            integrate(jnp.real(bti), sp) / volume
+            for bti, sp in zip(bp, b_spaces, strict=True)
         )
         emag_fluct = sum(
             jnp.real(integrate(jnp.conj(bi) * bi, sp))
@@ -206,7 +236,9 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             "mean_bz": mean_b[2],
             "mag_energy_fluct_total": emag_fluct,
             "mag_energy_mean": mag_energy_mean,
-            "mag_energy_fluct": emag_fluct - mag_energy_mean,
+            "mag_energy_fluct": emag_total - mag_energy_mean,
+            "dissipation_kinetic": diss_kinetic,
+            "dissipation_magnetic": diss_magnetic,
             "q_shear": jnp.asarray(self.q_shear),
             "kappa2": jnp.asarray(self.kappa2),
         }

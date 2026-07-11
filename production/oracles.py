@@ -12,7 +12,7 @@ from typing import Any
 import jax.numpy as jnp
 import numpy as np
 
-from . import observables
+from . import health, observables
 from .checkpoint import write_production_checkpoint
 
 
@@ -20,15 +20,41 @@ class ProductionOracleNotImplementedError(NotImplementedError):
     """Raised when a spec has no wired jaxfun production execution path yet."""
 
 
-def load_resume_checkpoint(run_dir: str | Path):
-    """Read the latest production checkpoint from a run directory or HDF5 file."""
+def load_resume_checkpoint(run_dir: str | Path, *, step: int | None = None):
+    """Read a production checkpoint from a run directory or HDF5 file.
+
+    ``step=None`` reads the latest checkpoint. With ``step``, a banked entry
+    (``checkpoints/bank/checkpoint_<step>.h5``, written under
+    ``--checkpoint-bank``) is preferred so a quench can select any retained
+    plateau time, falling back to the latest file when it holds that step.
+    """
     from jaxfun.io import read_checkpoint
 
     path = Path(run_dir)
-    checkpoint_path = path if path.suffix == ".h5" else path / "checkpoints" / "checkpoints.h5"
+    if path.suffix == ".h5":
+        checkpoint_path = path
+    else:
+        checkpoint_path = path / "checkpoints" / "checkpoints.h5"
+        if step is not None:
+            banked = _bank_checkpoint_path(path, step)
+            if banked.exists():
+                checkpoint_path = banked
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"resume checkpoint not found at {checkpoint_path}")
-    return read_checkpoint(checkpoint_path)
+    return read_checkpoint(checkpoint_path, step=step)
+
+
+def _bank_checkpoint_path(run_dir: Path, tstep: int) -> Path:
+    return Path(run_dir) / "checkpoints" / "bank" / f"checkpoint_{int(tstep):08d}.h5"
+
+
+def load_checkpoint_bank_index(run_dir: str | Path) -> list[dict[str, Any]]:
+    """Return the parent-bank manifest entries for a run directory (FJ-05)."""
+
+    index_path = Path(run_dir) / "checkpoints" / "bank" / "index.json"
+    if not index_path.exists():
+        return []
+    return json.loads(index_path.read_text(encoding="utf-8"))
 
 
 def validate_resume_checkpoint(
@@ -195,12 +221,17 @@ def run_supported_spec(
     resume_checkpoint: Any | None = None,
     quench: bool = False,
     on_row: Any | None = None,
+    checkpoint_bank: bool = False,
+    burn_in_steps: int = 0,
 ) -> dict[str, Any]:
     """Run a supported production spec and return canonical diagnostics.
 
     ``on_row`` is an optional host-side callback invoked with each canonical
     cadence row as it is produced (FJ-07 live telemetry); the materialized
-    ``time_series`` stays the source of truth.
+    ``time_series`` stays the source of truth. ``checkpoint_bank`` retains an
+    immutable per-interval checkpoint bank (FJ-05 parent-bank workflow), and
+    ``burn_in_steps`` excludes the first steps after a resume/quench from the
+    stationarity/classification analysis window.
     """
 
     if (
@@ -328,6 +359,8 @@ def run_supported_spec(
             resume_checkpoint=resume_checkpoint,
             quench=quench,
             on_row=on_row,
+            checkpoint_bank=checkpoint_bank,
+            burn_in_steps=burn_in_steps,
         )
     if (
         spec["geometry"] == "pcf"
@@ -345,6 +378,8 @@ def run_supported_spec(
             resume_checkpoint=resume_checkpoint,
             quench=quench,
             on_row=on_row,
+            checkpoint_bank=checkpoint_bank,
+            burn_in_steps=burn_in_steps,
         )
     if (
         spec["geometry"] == "pcf"
@@ -362,6 +397,8 @@ def run_supported_spec(
             resume_checkpoint=resume_checkpoint,
             quench=quench,
             on_row=on_row,
+            checkpoint_bank=checkpoint_bank,
+            burn_in_steps=burn_in_steps,
         )
     if (
         spec["geometry"] == "pipe"
@@ -1095,6 +1132,8 @@ def _run_pcf_primitive_mhd_saturation(
     resume_checkpoint: Any | None = None,
     quench: bool = False,
     on_row: Any | None = None,
+    checkpoint_bank: bool = False,
+    burn_in_steps: int = 0,
 ) -> dict[str, Any]:
     magnetic_bc = _magnetic_bc(spec)
     if magnetic_bc not in {"conducting", "pseudo_vacuum"}:
@@ -1132,6 +1171,7 @@ def _run_pcf_primitive_mhd_saturation(
             "mean_by": float(diag["mean_by"]),
             "mean_bz": float(diag["mean_bz"]),
             "nonaxisymmetric_fraction": float(diag["nonaxisymmetric_fraction"]),
+            "energy_convention": "half_integral_abs2",
         }
         if "transport_alpha" in diag:
             row["transport_alpha"] = float(diag["transport_alpha"])
@@ -1167,6 +1207,7 @@ def _run_pcf_primitive_mhd_saturation(
         on_diagnostics_row=collect_diagnostics,
         t0=t0,
         tstep0=tstep0,
+        checkpoint_bank=checkpoint_bank,
     )
     final = _pcf_primitive_3d_scalars(solver, out)
     # Growth is measured from the evolved baseline over the steps actually taken
@@ -1221,7 +1262,23 @@ def _run_pcf_primitive_mhd_saturation(
         },
     )
     series = _dedupe_time_rows([first, *diagnostic_rows, last])
-    scalars.update(_stationarity_scalars(series, key="total_energy"))
+    # FJ-05: exclude the post-quench burn-in window from the fitted history.
+    analysis_rows, analysis_start = _analysis_window(
+        diagnostic_rows, t0=t0, dt=float(spec["time"]["dt"]), burn_in_steps=burn_in_steps
+    )
+    fit_series = (
+        series if analysis_start is None else _dedupe_time_rows([*analysis_rows, last])
+    )
+    scalars.update(_stationarity_scalars(fit_series, key="total_energy"))
+    if analysis_start is not None:
+        scalars["analysis_burn_in_steps"] = int(burn_in_steps)
+        scalars["analysis_t_start"] = float(analysis_start)
+    # Review round 3: resolution/stability health contract (budget residual is
+    # curl-family only; the primitive path reports CFL/tails/occupancy).
+    scalars.update(health.primitive_health_scalars(solver, out))
+    tau = health.correlation_time(analysis_rows)
+    if tau is not None:
+        scalars["correlation_time_total_stress"] = float(tau)
     return {"scalars": scalars, "time_series": series}
 
 
@@ -1319,11 +1376,25 @@ def _curl_solver_from_spec(spec: dict[str, Any]):
     )
 
 
+def _box_volume(solver: Any) -> float:
+    """Box volume for converting family-convention energies to physical means."""
+
+    if hasattr(solver, "_volume"):
+        return float(solver._volume)
+    domain = solver.domain
+    return float(
+        (domain[0][1] - domain[0][0])
+        * (domain[1][1] - domain[1][0])
+        * (domain[2][1] - domain[2][0])
+    )
+
+
 def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
     """Canonical scalars from the curl/vector-potential MRI solver (FJ-03)."""
 
     diag = solver.diagnostics(state)
     scalars = {
+        "box_volume": _box_volume(solver),
         "kinetic_energy": float(diag["Epert"]),
         "magnetic_energy": float(diag["Emag"]),
         "magnetic_energy_total": float(diag["Emag_total"]),
@@ -1359,6 +1430,8 @@ def _run_pcf_vector_potential_mhd_saturation(
     resume_checkpoint: Any | None = None,
     quench: bool = False,
     on_row: Any | None = None,
+    checkpoint_bank: bool = False,
+    burn_in_steps: int = 0,
 ) -> dict[str, Any]:
     """FJ-03: curl/vector-potential PCF-MRI DNS (B = curl A, solenoidal by construction).
 
@@ -1410,6 +1483,9 @@ def _run_pcf_vector_potential_mhd_saturation(
             "mean_bz": float(diag["mean_bz"]),
             "mag_energy_mean": float(diag["mag_energy_mean"]),
             "mag_energy_fluct": float(diag["mag_energy_fluct"]),
+            "dissipation_kinetic": float(diag["dissipation_kinetic"]),
+            "dissipation_magnetic": float(diag["dissipation_magnetic"]),
+            "energy_convention": "integral_abs2",
             **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
         }
         rows.append(row)
@@ -1431,6 +1507,7 @@ def _run_pcf_vector_potential_mhd_saturation(
         t0=t0,
         tstep0=tstep0,
         health_block=_CURL_HEALTH_BLOCK,
+        checkpoint_bank=checkpoint_bank,
     )
     final_scalars = _pcf_curl_scalars(solver, out)
     elapsed = target_steps * float(spec["time"]["dt"])
@@ -1487,7 +1564,30 @@ def _run_pcf_vector_potential_mhd_saturation(
         "saturation_check_passed": bool(saturation_passed),
     }
     series = _dedupe_time_rows([first, *rows, last])
-    scalars.update(_stationarity_scalars(series, key="total_energy"))
+    # FJ-05: on a quench, the burn-in window is excluded from the fitted
+    # history (stationarity/correlation/budget), not merely recorded.
+    analysis_rows, analysis_start = _analysis_window(
+        rows, t0=t0, dt=float(spec["time"]["dt"]), burn_in_steps=burn_in_steps
+    )
+    fit_series = (
+        series if analysis_start is None else _dedupe_time_rows([*analysis_rows, last])
+    )
+    scalars.update(_stationarity_scalars(fit_series, key="total_energy"))
+    if analysis_start is not None:
+        scalars["analysis_burn_in_steps"] = int(burn_in_steps)
+        scalars["analysis_t_start"] = float(analysis_start)
+    # Review round 3: resolution/stability health contract for the workhorse.
+    scalars.update(health.curl_health_scalars(solver, out))
+    tau = health.correlation_time(analysis_rows)
+    if tau is not None:
+        scalars["correlation_time_total_stress"] = float(tau)
+    budget = health.energy_budget_residual(
+        analysis_rows,
+        shear_rate=float(solver.shear_rate),
+        volume=scalars["box_volume"],
+    )
+    if budget is not None:
+        scalars["energy_budget_residual"] = float(budget)
     return {"scalars": scalars, "time_series": series}
 
 
@@ -1943,6 +2043,7 @@ def _solve_with_optional_checkpoints(
     t0: float = 0.0,
     tstep0: int = 0,
     health_block: int | None = None,
+    checkpoint_bank: bool = False,
 ) -> Any:
     if checkpoint_every is not None and checkpoint_every <= 0:
         raise ValueError("checkpoint_every must be positive")
@@ -1980,9 +2081,10 @@ def _solve_with_optional_checkpoints(
     def on_checkpoint(t: float, tstep: int, checkpoint_state: Any) -> None:
         assert checkpoint_path is not None
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"state": _checkpoint_payload(checkpoint_state)}
         write_production_checkpoint(
             checkpoint_path,
-            {"state": _checkpoint_payload(checkpoint_state)},
+            payload,
             t=t,
             tstep=tstep,
             spec=spec,
@@ -1990,6 +2092,17 @@ def _solve_with_optional_checkpoints(
             device_record=device_record,
             diagnostics_path=diagnostics_path,
         )
+        if checkpoint_bank:
+            _write_bank_checkpoint(
+                checkpoint_path.parent,
+                payload,
+                t=t,
+                tstep=tstep,
+                spec=spec,
+                state_kind=state_kind,
+                device_record=device_record,
+                diagnostics_path=diagnostics_path,
+            )
 
     def on_snapshot(t: float, tstep: int, snapshot_state: Any) -> None:
         assert snapshot_path is not None
@@ -2115,6 +2228,22 @@ def _stationarity_scalars(
         "stationarity_relative_change": float(relative_change),
         "stationarity_check_passed": bool(relative_change <= tolerance),
     }
+
+
+def _analysis_window(
+    rows: list[dict[str, Any]], *, t0: float, dt: float, burn_in_steps: int
+) -> tuple[list[dict[str, Any]], float | None]:
+    """FJ-05: cadence rows inside the analysis window (post burn-in).
+
+    Returns ``(rows, None)`` when no burn-in applies; otherwise the rows at
+    ``t >= t0 + burn_in_steps * dt`` and that start time.
+    """
+
+    if int(burn_in_steps) <= 0:
+        return list(rows), None
+    start = float(t0) + int(burn_in_steps) * float(dt)
+    kept = [row for row in rows if float(row.get("t", -math.inf)) >= start - 1.0e-12]
+    return kept, start
 
 
 def _dedupe_time_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2382,6 +2511,62 @@ def _write_snapshot_manifest(
     path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
+def _write_bank_checkpoint(
+    checkpoint_dir: Path,
+    payload: dict[str, Any],
+    *,
+    t: float,
+    tstep: int,
+    spec: dict[str, Any],
+    state_kind: str,
+    device_record: dict[str, Any] | None,
+    diagnostics_path: Path | None,
+) -> None:
+    """FJ-05: retain an immutable per-step bank entry + manifest.
+
+    The latest ``checkpoints.h5`` is rewritten in O(1) at each interval, so
+    multiple plateau times only survive when banked; a quench then selects any
+    entry via ``--quench-step``.
+    """
+
+    from .quench import checkpoint_bank_entry, file_sha256, stable_manifest_json
+
+    bank_dir = checkpoint_dir / "bank"
+    bank_dir.mkdir(parents=True, exist_ok=True)
+    target = bank_dir / f"checkpoint_{int(tstep):08d}.h5"
+    write_production_checkpoint(
+        target,
+        payload,
+        t=t,
+        tstep=tstep,
+        spec=spec,
+        state_kind=state_kind,
+        device_record=device_record,
+        diagnostics_path=diagnostics_path,
+    )
+    entry = checkpoint_bank_entry(
+        parent_run_id=str(spec["problem_id"]),
+        child_run_id=None,
+        t=float(t),
+        tstep=int(tstep),
+        spec_hash=str(spec["spec_hash"]),
+        representation=str(spec.get("representation", "primitive")),
+        numerics_contract_version=int(spec.get("numerics_contract_version", 0)),
+        checkpoint_path=str(target),
+        file_sha256=file_sha256(str(target)),
+    )
+    index_path = bank_dir / "index.json"
+    entries: list[dict[str, Any]] = []
+    if index_path.exists():
+        entries = json.loads(index_path.read_text(encoding="utf-8"))
+    entries = [e for e in entries if int(e.get("tstep", -1)) != int(tstep)]
+    entries.append(entry)
+    entries.sort(key=lambda item: int(item["tstep"]))
+    tmp = index_path.with_name(f".{index_path.name}.tmp")
+    tmp.write_text(stable_manifest_json(entries) + "\n", encoding="utf-8")
+    tmp.replace(index_path)
+
+
 def _checkpoint_payload(state: Any) -> dict[str, Any]:
     if hasattr(state, "flow") and hasattr(state, "A"):
         # MHDState (curl / vector-potential family): KMM flow block + A coefficients.
@@ -2584,6 +2769,7 @@ def _assert_nonaxisymmetric_seed(solver: Any, state: Any, spec: dict[str, Any]) 
 def _pcf_primitive_3d_scalars(solver: Any, state: Any) -> dict[str, float]:
     diag = solver.diagnostics(state)
     scalars = {
+        "box_volume": _box_volume(solver),
         "kinetic_energy": float(diag["Ekin"]),
         "magnetic_energy": float(diag["Emag"]),
         "total_energy": float(diag["E"]),

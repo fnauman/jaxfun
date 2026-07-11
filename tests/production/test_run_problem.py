@@ -594,6 +594,8 @@ def test_solver_exception_marks_metadata_failed(tmp_path, monkeypatch):
         "solver_execution_wired": True,
         "execution_kind": "analytic-oracle",
         "failure_reason": "RuntimeError: synthetic solver crash",
+        # Review round 3: a crash records where the streamed cadence rows live.
+        "partial_diagnostics_path": str(out / "diagnostics.partial.jsonl"),
     }
     assert written["timing"]["solver_wall_time_seconds"] >= 0.0
 

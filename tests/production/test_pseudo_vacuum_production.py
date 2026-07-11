@@ -79,3 +79,25 @@ def test_conducting_and_pseudo_vacuum_linear_operators_differ():
         w, _ = lin.eigs(2.0 * m.pi / 4.0, 2.0 * m.pi / 1.0, n_return=1)
         evs[bc] = w[0]
     assert abs(evs["pseudo_vacuum"].real - evs["conducting"].real) > 1e-2
+
+
+def test_primitive_total_field_means_include_imposed_background():
+    """Review round 3, blocker 1: mean_bz must report the physical mean field
+    (imposed B0 included) so net-flux runs are cross-code comparable, and the
+    split identity anchors to the total-field energy."""
+    jax.config.update("jax_enable_x64", True)
+    from examples.pcf_mri_primitive_jax import PCFMRIDNSJax
+
+    solver = PCFMRIDNSJax(Nx=8, Ny=4, Nz=4, B0=0.1, dt=1e-3, family="L")
+    state = solver.zero_state()
+    mbx, mby, mbz = solver.magnetic_component_means(state)
+    assert float(mbx) == pytest.approx(0.0, abs=1e-14)
+    assert float(mby) == pytest.approx(0.0, abs=1e-14)
+    assert float(mbz) == pytest.approx(0.1, rel=1e-12)
+
+    mag_total, mag_mean, mag_fluct = solver.magnetic_energy_split(state)
+    # Zero perturbation: the total field IS the uniform imposed field.
+    assert float(mag_total) == pytest.approx(float(mag_mean), rel=1e-12)
+    assert float(mag_fluct) == pytest.approx(0.0, abs=1e-12)
+    # Physical 0.5 * V * B0^2 in the family convention.
+    assert float(mag_total) == pytest.approx(0.5 * solver._volume * 0.1**2, rel=1e-9)

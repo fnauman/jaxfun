@@ -104,13 +104,19 @@ def run_problem(
     wandb_project: str | None = None,
     wandb_offline: bool = False,
     quench_from: str | Path | None = None,
+    quench_step: int | None = None,
     burn_in_steps: int = 0,
+    checkpoint_bank: bool = False,
 ) -> dict[str, Any]:
     """Validate a config, write metadata, and eventually execute its solver."""
 
     config = load_config(config_path, resolution_tier=resolution_tier)
     resume_record, quench_metadata = _resolve_resume_or_quench(
-        config, resume=resume, quench_from=quench_from, burn_in_steps=burn_in_steps
+        config,
+        resume=resume,
+        quench_from=quench_from,
+        quench_step=quench_step,
+        burn_in_steps=burn_in_steps,
     )
     quench_mode = quench_metadata is not None
     out_dir = Path(out)
@@ -122,6 +128,7 @@ def run_problem(
     metadata: dict[str, Any] = {}
     diagnostics: dict[str, Any] = {}
     sink = None
+    partial_stream: dict[str, Any] = {}
     try:
         effective_diagnostics_every = _effective_diagnostics_every(
             config.spec,
@@ -177,6 +184,14 @@ def run_problem(
             project=wandb_project,
             offline=wandb_offline,
         )
+        # Review round 3: the local artifact must never lag the mirror. Cadence
+        # rows stream to diagnostics.partial.jsonl during the solve, so a
+        # mid-run crash leaves the same history locally that W&B received; on
+        # success the canonical diagnostics.jsonl replaces it.
+        partial_writer, close_partial, partial_path = _partial_diagnostics_writer(
+            out_dir
+        )
+        partial_stream = {"close": close_partial, "closed": False}
 
         solver_started_at = _utc_timestamp()
         solver_start = time.perf_counter()
@@ -194,7 +209,12 @@ def run_problem(
                 device_record=device_record,
                 resume_checkpoint=resume_record,
                 quench=quench_mode,
-                on_row=sink.log_cadence if sink is not None and sink.active else None,
+                on_row=_compose_row_callbacks(
+                    sink.log_cadence if sink is not None and sink.active else None,
+                    partial_writer,
+                ),
+                checkpoint_bank=checkpoint_bank,
+                burn_in_steps=burn_in_steps if quench_mode else 0,
             )
         except ProductionOracleNotImplementedError as exc:
             metadata["timing"] = _solver_timing(
@@ -215,6 +235,7 @@ def run_problem(
                 "solver_execution_wired": True,
                 "execution_kind": _execution_kind(config.spec),
                 "failure_reason": _exception_message(exc),
+                "partial_diagnostics_path": str(partial_path),
             }
             _write_json(out_dir / "metadata.json", metadata)
             raise
@@ -228,6 +249,8 @@ def run_problem(
             diagnostics,
             append=resume_record is not None and (out_dir / "diagnostics.jsonl").exists(),
         )
+        close_partial(keep=False)
+        partial_stream["closed"] = True
         metadata["execution"] = {
             "status": "completed",
             "solver_execution_wired": True,
@@ -292,6 +315,10 @@ def run_problem(
         return metadata
     finally:
         restore_compilation_cache()
+        # A crash keeps diagnostics.partial.jsonl as the local record of the
+        # streamed cadence; a clean run already replaced and removed it.
+        if partial_stream and not partial_stream.get("closed"):
+            partial_stream["close"](keep=True)
         # FJ-07: close the live sink exactly once on every path that constructed
         # it -- success, early stop, comparison failure, or crash -- logging the
         # run summary and operational status. Cadence rows were already streamed
@@ -813,6 +840,49 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     )
 
 
+def _compose_row_callbacks(*callbacks: Any) -> Any | None:
+    """Compose optional per-row callbacks; None when all are None."""
+
+    active = [cb for cb in callbacks if cb is not None]
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    def fanout(row: dict[str, Any]) -> None:
+        for cb in active:
+            cb(row)
+
+    return fanout
+
+
+def _partial_diagnostics_writer(out_dir: Path):
+    """Stream cadence rows to ``diagnostics.partial.jsonl`` during the solve.
+
+    Keeps the declared local source of truth at least as complete as any
+    mirror: a mid-run crash leaves every streamed row on disk. The caller
+    removes the file (``keep=False``) once the canonical ``diagnostics.jsonl``
+    has been written.
+    """
+
+    path = out_dir / "diagnostics.partial.jsonl"
+    handle = path.open("w", encoding="utf-8")
+
+    def write(row: dict[str, Any]) -> None:
+        handle.write(json.dumps(_json_ready(row), sort_keys=True) + "\n")
+        handle.flush()
+
+    def close(*, keep: bool) -> None:
+        try:
+            handle.close()
+        except Exception:  # pragma: no cover - close is best-effort
+            pass
+        if not keep:
+            path.unlink(missing_ok=True)
+
+    return write, close, path
+
+
 def _write_diagnostics(
     path: Path, diagnostics: dict[str, Any], *, append: bool = False
 ) -> None:
@@ -910,15 +980,23 @@ def _resolve_resume_or_quench(
     *,
     resume: str | Path | None,
     quench_from: str | Path | None,
+    quench_step: int | None = None,
     burn_in_steps: int,
 ) -> tuple[Any | None, dict[str, Any] | None]:
-    """Return ``(resume_record, quench_metadata)`` for resume-exact or quench (FJ-05)."""
+    """Return ``(resume_record, quench_metadata)`` for resume-exact or quench (FJ-05).
+
+    ``quench_step`` selects a banked plateau checkpoint (written under
+    ``--checkpoint-bank``) instead of the latest state, so one saturated parent
+    can seed children from multiple plateau times.
+    """
 
     if quench_from is not None and resume is not None:
         raise ProblemSpecError("--resume and --quench are mutually exclusive")
+    if quench_step is not None and quench_from is None:
+        raise ProblemSpecError("--quench-step requires --quench")
     if quench_from is not None:
         source = Path(quench_from)
-        record = load_resume_checkpoint(source)
+        record = load_resume_checkpoint(source, step=quench_step)
         parent_spec = load_spec(source / "spec.json")
         diff = validate_quench(parent_spec, config.spec)  # raises on illegal change
         tstep0 = int(getattr(record, "tstep", 0))
@@ -927,6 +1005,8 @@ def _resolve_resume_or_quench(
             "parent_run_dir": str(source),
             "parent_spec_hash": parent_spec.get("spec_hash"),
             "child_spec_hash": config.spec["spec_hash"],
+            "selected_tstep": tstep0,
+            "requested_quench_step": quench_step,
             "mutable_diff": {k: list(v) for k, v in diff["changed"].items()},
             **burn_in_horizon(tstep0=tstep0, burn_in_steps=burn_in_steps),
         }
@@ -1028,25 +1108,53 @@ def _wandb_sink(
         config={
             "problem_id": config.problem_id,
             "spec_hash": config.spec["spec_hash"],
+            # Cross-code safety: energies are family-convention volume
+            # integrals; consumers convert to physical means via box volume.
+            "energy_convention": _energy_convention_for_spec(config.spec),
             **{k: resolved.get(k) for k in ("Re_h", "Rm_h", "Pm", "B0", "nu", "eta")},
         },
         mode="offline" if offline else None,
     )
 
 
+def _energy_convention_for_spec(spec: dict[str, Any]) -> str | None:
+    """Family energy convention for E* scalars (None when not a PCF MHD family)."""
+
+    if spec.get("geometry") != "pcf":
+        return None
+    if spec.get("representation") == "vector_potential":
+        return "integral_abs2"
+    if spec.get("physics") in {"mhd", "mri"}:
+        return "half_integral_abs2"
+    return None
+
+
 def _finish_wandb(
     sink: Any, diagnostics: dict[str, Any], metadata: dict[str, Any]
 ) -> None:
-    """FJ-07: log the run summary and close the sink exactly once."""
+    """FJ-07: log the run summary and close the sink exactly once.
 
+    The exit code is truthful for post-solve failures too: a golden-comparison
+    or validation failure raises after ``execution.status`` was set to
+    ``completed``, so an in-flight exception (visible to this ``finally`` via
+    ``sys.exc_info``) forces a nonzero exit code and a failed status.
+    """
+
+    in_flight = sys.exc_info()[1]
+    status = (metadata.get("execution") or {}).get("status")
+    failed = in_flight is not None or status != "completed"
     try:
         classification = metadata.get("classification") or {}
         execution = metadata.get("execution") or {}
         scalars = (diagnostics or {}).get("scalars") or {}
         series = (diagnostics or {}).get("time_series") or []
+        operational = execution.get("status")
+        if in_flight is not None and operational == "completed":
+            operational = "failed"
         summary = {
-            "operational_status": execution.get("status"),
-            "failure_reason": execution.get("failure_reason"),
+            "operational_status": operational,
+            "failure_reason": execution.get("failure_reason")
+            or (_exception_message(in_flight) if in_flight is not None else None),
             "scientific_class": classification.get("scientific_class"),
             "final_time": series[-1].get("t") if series else None,
         }
@@ -1054,8 +1162,7 @@ def _finish_wandb(
         summary.update({k: v for k, v in scalars.items() if _is_number(v)})
         sink.log_summary(summary)
     finally:
-        status = (metadata.get("execution") or {}).get("status")
-        sink.finish(exit_code=0 if status == "completed" else 1)
+        sink.finish(exit_code=1 if failed else 0)
 
 
 def _is_number(value: Any) -> bool:
@@ -1101,8 +1208,10 @@ def _classification_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
 
     try:
         from .classify import classify_scientific
+        from .health import underresolved_from_scalars
     except ImportError:  # pragma: no cover - direct script mode
         from production.classify import classify_scientific  # type: ignore
+        from production.health import underresolved_from_scalars  # type: ignore
 
     series = diagnostics.get("time_series") or []
     scalars = diagnostics.get("scalars") or {}
@@ -1115,11 +1224,25 @@ def _classification_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
             if isinstance(value, (int, float)) and math.isfinite(value):
                 peak = max(peak, abs(float(value)))
     noise_floor = 1.0e-10 * peak
-    return classify_scientific(
+    # FJ-05: exclude the post-quench burn-in window from the fitted history.
+    t_start = scalars.get("analysis_t_start")
+    if isinstance(t_start, (int, float)):
+        series = [
+            row
+            for row in series
+            if float(row.get("t", -math.inf)) >= float(t_start) - 1.0e-12
+        ]
+    # Review round 3: the health contract quarantines under-resolved runs from
+    # scientific-class inference instead of trusting their thresholds.
+    underresolved = underresolved_from_scalars(scalars)
+    result = classify_scientific(
         series,
         noise_floor=noise_floor,
         stationary=bool(stationary) if stationary is not None else None,
+        underresolved=bool(underresolved) if underresolved is not None else False,
     )
+    result["underresolved"] = underresolved
+    return result
 
 
 def _resolved_physics_metadata(
@@ -1282,7 +1405,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="FJ-05: continue from a parent run dir, changing only nu/eta (Re/Rm).",
     )
+    parser.add_argument(
+        "--quench-step",
+        type=int,
+        default=None,
+        help="FJ-05: select a banked parent plateau checkpoint (tstep) instead "
+        "of the latest state; requires the parent ran with --checkpoint-bank.",
+    )
     parser.add_argument("--burn-in-steps", type=int, default=0)
+    parser.add_argument(
+        "--checkpoint-bank",
+        action="store_true",
+        help="FJ-05: with --checkpoint-every, also retain an immutable per-"
+        "interval checkpoint bank (checkpoints/bank/) with a manifest, so a "
+        "quench can select any plateau time via --quench-step.",
+    )
     return parser
 
 
@@ -1319,7 +1456,9 @@ def _requires_release_gate(args: argparse.Namespace, config_path: Path) -> bool:
     if args.steps is not None or args.resolution_tier in {"smoke", "start"}:
         return False
     peek = _peek_spec_json(config_path)
-    if peek.get("support_state") != "production":
+    # Review round 3: experimental DNS specs mint campaign evidence at
+    # production scale too, so they gate the same as production ones.
+    if peek.get("support_state") not in {"production", "experimental"}:
         return False
     oracle_type = (peek.get("expected_oracle") or {}).get("type")
     if not oracle_type:
@@ -1384,7 +1523,9 @@ def main(argv: list[str] | None = None) -> int:
                 wandb_project=args.wandb_project,
                 wandb_offline=args.wandb_offline,
                 quench_from=args.quench_from,
+                quench_step=args.quench_step,
                 burn_in_steps=args.burn_in_steps,
+                checkpoint_bank=args.checkpoint_bank,
             )
         except (ProblemSpecError, UnsupportedSpecError) as exc:
             print(f"spec rejected: {exc}", file=sys.stderr)

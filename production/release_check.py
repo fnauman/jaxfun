@@ -38,8 +38,14 @@ CONVENTIONS: dict[str, Any] = {
         "(couette/pcf_mri_primitive.py reference convention)",
         "pcf_vector_potential": "integral_abs2: E = volume integral of |field|^2 "
         "(couette/pcf_mhd_mri_shearpy.py reference convention; 2x the physical energy)",
-        "note": "oracle rows/goldens stamp `energy_convention`; never compare E* "
-        "scalars across families without converting",
+        "note": "oracle rows/goldens stamp `energy_convention` and `box_volume`; "
+        "never compare E* scalars across families without converting",
+        "shearpy_conversion": "shearpy reports physical volume-mean energies: "
+        "E_shearpy = factor * E_scalar / box_volume with factor = 0.5 for "
+        "integral_abs2 and 1.0 for half_integral_abs2",
+        "mean_field": "mean_bx/by/bz and mag_energy_mean/fluct are TOTAL-field "
+        "quantities (imposed background included); a net-flux run reports "
+        "mean_bz == B0, and the split identity anchors to the total-field energy",
     },
     "magnetic_bcs": {
         "conducting": "b_x = 0 (Dirichlet), d_x b_y = d_x b_z = 0 (Neumann)",
