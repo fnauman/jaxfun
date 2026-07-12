@@ -16,7 +16,13 @@ import pytest
 
 from production.oracles import run_supported_spec
 
-SOLENOIDAL_CEIL = 1.0e-12
+# Scale-aware roundoff ceiling for the PCF slab family: div B and the
+# vacuum-matching residual carry no 1/r projection error there, so the
+# measured floors (5e-21 .. 1.7e-16 across the tests below, on O(0.1)-scale
+# fields) are pure roundoff and the gate is a few hundred machine epsilons.
+# The cylindrical TC family keeps its separate, resolution-dependent
+# projected-witness tolerance (see test_tc_vector_potential_oracle.py).
+SOLENOIDAL_CEIL = 1.0e3 * np.finfo(float).eps  # ~2.2e-13
 
 
 def _pcf_insulating_spec(**groups):
@@ -70,6 +76,7 @@ def test_insulating_oracle_holds_divergence_and_matching_rows():
     assert _max_series(out, "insulating_bc_residual") < SOLENOIDAL_CEIL
 
 
+@pytest.mark.integration
 def test_insulating_finite_amplitude_horizon_stays_solenoidal():
     """50 nonlinear steps at finite amplitude: div B and the vacuum-matching
     residual must hold their roundoff floors (measured ~1e-16)."""

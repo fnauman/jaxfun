@@ -105,6 +105,14 @@ gates. Additional stated conventions to keep in mind:
   both cylinders (no net axial current), `b_z(R2) = 0` (finite exterior
   energy), and the exact trapped-flux Faraday row at `R1`. Alternatives (for
   example a driven exterior field) are not implemented.
+- TC insulating *eigenmode seeding* remains anchored to the `m=0`
+  flux-function eigensolver (the only insulating linear solver). Because an
+  axisymmetric seed stays axisymmetric under nonlinear evolution, the TC
+  vector-potential run specs superpose a small non-axisymmetric solenoidal
+  perturbation by default (`initial_condition.symmetry_break_amplitude`,
+  wall rows satisfied identically by construction) so production runs
+  actually exercise the `m != 0` dynamics and, for insulating walls, the
+  non-axisymmetric Bessel matching rows.
 - The TC `div B` witness is the divergence of the projected coefficient
   representation of `curl(A)`; for non-axisymmetric modes it is a spectrally
   convergent resolution floor (`m=1`: `1.8e-12` at `Nr=24`, `3.7e-15` at

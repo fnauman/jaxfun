@@ -2217,8 +2217,9 @@ def _run_taylor_couette_vp_mhd_saturation(
     m_seed = int(initial.get("azimuthal_mode", 0))
     if magnetic_bc == "insulating" and m_seed != 0:
         raise ProductionOracleNotImplementedError(
-            "insulating TC seeding is anchored to the m=0 flux eigensolver; "
-            "non-axisymmetric modes still evolve, but the seed must be m=0"
+            "insulating TC *eigenmode seeding* is anchored to the m=0 flux "
+            "eigensolver; use initial_condition.symmetry_break_amplitude to "
+            "populate non-axisymmetric modes on top of the m=0 seed"
         )
     if "seeded_kz_mode" in initial:
         kz_mode = int(initial["seeded_kz_mode"])
@@ -2231,6 +2232,19 @@ def _run_taylor_couette_vp_mhd_saturation(
         kz_mode=kz_mode,
         amp=float(initial.get("amplitude", 1.0e-4)),
     )
+    # An axisymmetric eigenmode seed stays axisymmetric under nonlinear
+    # evolution, so production runs superpose a small non-axisymmetric
+    # solenoidal perturbation by default spec so the full 3D dynamics (and,
+    # for insulating walls, the non-axisymmetric vacuum-matching rows) are
+    # actually exercised.
+    sb_amp = float(initial.get("symmetry_break_amplitude", 0.0))
+    if sb_amp > 0.0:
+        state = solver.add_symmetry_breaking_perturbation(
+            state,
+            sb_amp,
+            m=int(initial.get("symmetry_break_m", 1)),
+            kz_mode=kz_mode,
+        )
     state, tstep0, t0 = _resume_or_initial_state(
         resume_checkpoint,
         state,
@@ -3190,6 +3204,8 @@ def _adaptive_scalars(record: dict[str, Any]) -> dict[str, Any]:
         "dt_min_used": float(record["dt_min_used"]),
         "dt_max_used": float(record["dt_max_used"]),
         "n_dt_changes": int(record["n_dt_changes"]),
+        "adaptive_steps_taken": int(record["steps_taken"]),
+        "adaptive_final_step_clipped": bool(record["final_step_clipped"]),
         "cfl_total_max_observed": float(record["cfl_total_max_observed"]),
     }
 
@@ -3212,9 +3228,13 @@ def _run_vp_adaptive_blocks(
 ) -> tuple[Any, dict[str, Any]]:
     """Adaptive-CFL block driver shared by the vector-potential runners.
 
-    Every compiled block produces a diagnostics row (with the exact
-    accumulated time and current dt) and runs the full guard set: non-finite
-    state, energy runaway, divergence drift, and the resolution health gate.
+    The horizon is the *elapsed time* the fixed-dt run would cover
+    (``steps * spec dt``): dt adaptation changes the step count and the
+    driver clips the final step to land exactly on that time, so growth
+    windows and saturation horizons keep the spec contract.  Every compiled
+    block produces a diagnostics row (with the exact accumulated time and
+    the dt actually used) and runs the full guard set: non-finite state,
+    energy runaway, divergence drift, and the resolution health gate.
     A final production checkpoint is written when an output directory is set
     (per-interval checkpoints under adaptive dt are not wired yet).
     """
@@ -3248,7 +3268,7 @@ def _run_vp_adaptive_blocks(
     out, record = run_adaptive_cfl(
         solver,
         state,
-        steps=steps,
+        elapsed_target=int(steps) * float(spec["time"]["dt"]),
         config=config,
         health_scalars_fn=health_scalars_fn,
         on_block=on_block,
@@ -3261,7 +3281,7 @@ def _run_vp_adaptive_blocks(
             checkpoint_path,
             {"state": _checkpoint_payload(out)},
             t=float(t0) + float(record["elapsed_time"]),
-            tstep=int(tstep0) + int(steps),
+            tstep=int(tstep0) + int(record["steps_taken"]),
             spec=spec,
             state_kind=state_kind,
             device_record=device_record,

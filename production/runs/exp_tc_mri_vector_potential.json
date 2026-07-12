@@ -10,8 +10,23 @@
     "internal": "full 3D (theta,z,r) vector-potential resistive-MHD Taylor-Couette CNAB2 DNS: B = B0 e_z + curl A with A evolved (solenoidal by construction)",
     "pressure": "plain pressure; the linear Lorentz force is J(A) x B0 in plain-pressure form"
   },
-  "evolved_variables": ["u_r", "u_theta", "u_z", "Pi", "A_r", "A_theta", "A_z"],
-  "diagnostic_variables": ["kinetic_energy", "magnetic_energy", "maxwell_stress_rt", "reynolds_stress", "divergence_b_l2", "mean_bz"],
+  "evolved_variables": [
+    "u_r",
+    "u_theta",
+    "u_z",
+    "Pi",
+    "A_r",
+    "A_theta",
+    "A_z"
+  ],
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "magnetic_energy",
+    "maxwell_stress_rt",
+    "reynolds_stress",
+    "divergence_b_l2",
+    "mean_bz"
+  ],
   "canonical_axes": {
     "x": "radial direction",
     "y": "azimuthal direction",
@@ -36,21 +51,39 @@
     "eta_mag": 0.001
   },
   "boundary_conditions": {
-    "velocity": {"type": "no_slip_rotating_cylinders"},
+    "velocity": {
+      "type": "no_slip_rotating_cylinders"
+    },
     "magnetic": {
       "type": "conducting",
       "details": "A_theta=A_z=0 and (r A_r)'=0 (div A=0 at the walls), i.e. E_tang=0 exactly; on-shell equivalent to the primitive set {b_r=0, (r b_theta)'=0, b_z'=0}"
     }
   },
   "domain": {
-    "r": [1.0, 2.0],
+    "r": [
+      1.0,
+      2.0
+    ],
     "theta_period": 6.283185307179586,
     "z_period": 1.0471975511965976
   },
   "resolution": {
-    "smoke": {"Nr": 12, "Ntheta": 4, "Nz": 8, "dealias": 1.0},
-    "start": {"Nr": 32, "Ntheta": 8, "Nz": 24},
-    "production": {"Nr": 48, "Ntheta": 32, "Nz": 48},
+    "smoke": {
+      "Nr": 12,
+      "Ntheta": 4,
+      "Nz": 8,
+      "dealias": 1.0
+    },
+    "start": {
+      "Nr": 32,
+      "Ntheta": 8,
+      "Nz": 24
+    },
+    "production": {
+      "Nr": 48,
+      "Ntheta": 32,
+      "Nz": 48
+    },
     "dealias": 1.5,
     "family": "L"
   },
@@ -63,17 +96,30 @@
     "type": "linear_eigenmode",
     "amplitude": 0.0001,
     "seeded_kz_mode": 1,
-    "azimuthal_mode": 0
+    "azimuthal_mode": 0,
+    "symmetry_break_amplitude": 1e-05,
+    "symmetry_break_m": 1
   },
   "forcing": {
     "type": "rotating_cylinders_imposed_axial_field",
     "B0": 0.1
   },
-  "diagnostics": ["magnetic_energy", "growth_rate", "maxwell_stress_rt", "divergence_b_l2", "kinetic_energy", "mean_bz"],
+  "diagnostics": [
+    "magnetic_energy",
+    "growth_rate",
+    "maxwell_stress_rt",
+    "divergence_b_l2",
+    "kinetic_energy",
+    "mean_bz"
+  ],
   "expected_oracle": {
     "type": "tc_mri_saturation_ladder",
     "source": "TaylorCouetteMRIJax conducting linear eigensolver (any m), then GPU-generated saturated DNS golden",
-    "fallback_rungs": [1, 2, 3],
+    "fallback_rungs": [
+      1,
+      2,
+      3
+    ],
     "saturation_check": "E_mag[-1] > 2*E_mag[0] and all energies finite; divergence_b_l2 must hold its resolution floor for the whole horizon"
   },
   "tolerance_model": {
@@ -82,7 +128,7 @@
       "divergence_b_l2": 1e-10,
       "divergence_u_l2": 1e-06,
       "divergence_b": 1e-08,
-      "divergence_u": 1e-04,
+      "divergence_u": 0.0001,
       "growth_rate": 0.002,
       "growth_rate_linear": 1e-06,
       "magnetic_energy": 1e-06,

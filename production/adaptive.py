@@ -109,28 +109,65 @@ def run_adaptive_cfl(
     solver: Any,
     state: Any,
     *,
-    steps: int,
+    elapsed_target: float,
     config: AdaptiveCFLConfig,
     health_scalars_fn: Any,
     on_block: Any | None = None,
     t0: float = 0.0,
 ) -> tuple[Any, dict[str, Any]]:
-    """Advance ``steps`` with chunked CFL-targeted dt adaptation.
+    """Advance exactly ``elapsed_target`` time units with CFL-targeted dt.
+
+    The horizon is a *time* target, not a step count: dt changes alter the
+    number of steps, and the final step is clipped so the run lands exactly
+    on ``t0 + elapsed_target`` (a fixed step count would overshoot the
+    requested final time under growth and stop early under shrinkage).
+
+    The CFL is measured on the state *before* every compiled block (the
+    post-block measurement of one block doubles as the pre-block measurement
+    of the next), so an unsafe initial or newly evolved dt is shrunk before
+    any stepping instead of tripping the production health gate mid-block.
 
     ``health_scalars_fn(solver, state)`` must expose ``cfl_total`` (the
     family health contract).  ``on_block(t, tstep, state, health)`` runs
-    after every compiled block with the exact accumulated time.  Returns the
-    final state and the adaptation record.
+    after every compiled block with the exact accumulated time and the
+    evolved state's health scalars.  Returns the final state and the
+    adaptation record.
     """
 
-    steps = int(steps)
-    if steps < 0:
-        raise ValueError("steps must be non-negative")
+    elapsed_target = float(elapsed_target)
+    if elapsed_target < 0.0:
+        raise ValueError("elapsed_target must be non-negative")
     if solver.dt > config.dt_max or solver.dt < config.dt_min:
         raise ValueError(
             f"initial dt={solver.dt:g} lies outside "
             f"[{config.dt_min:g}, {config.dt_max:g}]"
         )
+
+    def measure(current_state: Any) -> tuple[dict[str, float], float]:
+        values = {
+            str(key): float(value)
+            for key, value in health_scalars_fn(solver, current_state).items()
+        }
+        return values, float(values.get("cfl_total", math.nan))
+
+    def maybe_adapt(current_state: Any, cfl_total: float, done: int, t: float) -> Any:
+        new_dt = _proposed_dt(float(solver.dt), cfl_total, config)
+        if new_dt is None:
+            return current_state
+        changes.append(
+            {
+                "tstep": float(done),
+                "t": float(t),
+                "dt_old": float(solver.dt),
+                "dt_new": float(new_dt),
+                "cfl_total": float(cfl_total),
+            }
+        )
+        solver.set_dt(new_dt)
+        nonlocal dt_used_min, dt_used_max
+        dt_used_min = min(dt_used_min, float(new_dt))
+        dt_used_max = max(dt_used_max, float(new_dt))
+        return _reset_multistep_history(current_state)
 
     t = float(t0)
     done = 0
@@ -138,43 +175,52 @@ def run_adaptive_cfl(
     dt_used_min = float(solver.dt)
     dt_used_max = float(solver.dt)
     cfl_max = 0.0
-    while done < steps:
-        n = min(int(config.check_every), steps - done)
+    final_step_clipped = False
+    time_left = elapsed_target
+    # Round-off guard: treat anything below this fraction of dt_min as "done".
+    tiny = 1.0e-12 * max(elapsed_target, float(solver.dt))
+
+    # Pre-flight: adapt to the *initial* state before any stepping, so an
+    # unsafe starting dt never evolves a block.
+    health, cfl_total = measure(state)
+    cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
+    state = maybe_adapt(state, cfl_total, done, t)
+
+    working_dt = float(solver.dt)
+    while time_left > tiny:
+        working_dt = float(solver.dt)
+        if time_left < working_dt * (1.0 - 1.0e-12):
+            # Clip the final step so the run lands exactly on the target time
+            # (the working dt is kept for the record; the run ends here).
+            solver.set_dt(time_left)
+            state = _reset_multistep_history(state)
+            final_step_clipped = True
+            n = 1
+        else:
+            n = min(int(config.check_every), int(time_left / working_dt + 1.0e-12))
+            n = max(n, 1)
         state = solver.solve(state, n)
         done += n
-        t += n * float(solver.dt)
-        health = {
-            str(key): float(value)
-            for key, value in health_scalars_fn(solver, state).items()
-        }
-        cfl_total = float(health.get("cfl_total", math.nan))
+        advanced = n * float(solver.dt)
+        t += advanced
+        time_left -= advanced
+        health, cfl_total = measure(state)
         cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
         if on_block is not None:
             on_block(t, done, state, health)
-        if done >= steps:
-            break
-        new_dt = _proposed_dt(float(solver.dt), cfl_total, config)
-        if new_dt is not None:
-            changes.append(
-                {
-                    "tstep": float(done),
-                    "t": float(t),
-                    "dt_old": float(solver.dt),
-                    "dt_new": float(new_dt),
-                    "cfl_total": float(cfl_total),
-                }
-            )
-            solver.set_dt(new_dt)
-            state = _reset_multistep_history(state)
-            dt_used_min = min(dt_used_min, float(new_dt))
-            dt_used_max = max(dt_used_max, float(new_dt))
+        if time_left > tiny:
+            # The post-block measurement doubles as the next pre-block check.
+            state = maybe_adapt(state, cfl_total, done, t)
+
     record = {
         "adaptive_cfl_target": float(config.target),
-        "dt_final": float(solver.dt),
+        "dt_final": float(working_dt),
         "dt_min_used": float(dt_used_min),
         "dt_max_used": float(dt_used_max),
         "dt_changes": changes,
         "n_dt_changes": len(changes),
+        "steps_taken": int(done),
+        "final_step_clipped": bool(final_step_clipped),
         "elapsed_time": float(t - t0),
         "cfl_total_max_observed": float(cfl_max),
     }

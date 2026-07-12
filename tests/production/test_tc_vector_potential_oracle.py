@@ -112,7 +112,16 @@ def test_tc_vp_conducting_oracle_is_solenoidal_for_the_whole_horizon():
 
 def test_tc_vp_insulating_oracle_holds_divergence_and_matching_rows():
     jax.config.update("jax_enable_x64", True)
-    out = run_supported_spec(_tc_vp_spec("insulating"), steps=4, diagnostics_every=2)
+    # Exercise the production seeding path end to end: m=0 eigenmode plus the
+    # non-axisymmetric symmetry-breaking perturbation (the m=0 mode alone
+    # would stay axisymmetric forever and never touch the m != 0
+    # vacuum-matching rows).  The test amplitude is small so the m=1 modes'
+    # resolution-dependent projection floor (amplitude-proportional, measured
+    # ~3e-14 here) stays far under the 1e-12 gate at the smoke resolution.
+    spec = _tc_vp_spec("insulating")
+    spec["initial_condition"]["symmetry_break_amplitude"] = 1.0e-8
+    spec["initial_condition"]["symmetry_break_m"] = 1
+    out = run_supported_spec(spec, steps=4, diagnostics_every=2)
     sc = out["scalars"]
     assert sc["magnetic_bc"] == "insulating"
     assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
@@ -131,6 +140,62 @@ def test_tc_vp_insulating_oracle_holds_divergence_and_matching_rows():
     assert evolved < SOLENOIDAL_CEIL
 
 
+@pytest.mark.integration
+def test_tc_vp_symmetry_breaking_populates_nonaxisymmetric_modes():
+    """The m=0 eigenmode seed is invariant under nonlinear evolution, so the
+    non-axisymmetric insulating dynamics (including the m != 0 Bessel rows)
+    are only exercised through the symmetry-breaking perturbation.  The
+    perturbation profile satisfies every wall row identically at t = 0
+    (w = w' = 0 at both cylinders), stays gated over the horizon, and the
+    MRI coupling must transfer m = 1 content into the velocity field."""
+    jax.config.update("jax_enable_x64", True)
+    from examples.taylor_couette_linear_jax import CircularCouette
+    from examples.taylor_couette_vp_jax import TaylorCouetteVPMRIDNSJax
+
+    base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
+    solver = TaylorCouetteVPMRIDNSJax(
+        base,
+        B0=0.1,
+        nu=1e-3,
+        eta_mag=1e-3,
+        Nr=20,
+        Ntheta=4,
+        Nz=8,
+        dt=1e-3,
+        family="L",
+        dealias=1.5,
+        magnetic_bc="insulating",
+    )
+    import jax.numpy as jnp
+
+    state, _ = solver.seed_linear_eigenmode(m=0, kz_mode=1, amp=1e-4)
+    residual_seed = float(solver.insulating_bc_residual(state))
+    # Amplitude keeps the m=1 projection floor (amplitude-proportional) far
+    # below the solenoidal gate at this resolution; symmetry breaking needs
+    # no more, since the MRI amplifies the m=1 content exponentially.
+    state = solver.add_symmetry_breaking_perturbation(state, 1e-8, m=1, kz_mode=1)
+
+    def m1_content(arrays):
+        return max(float(jnp.max(jnp.abs(a[1, :, :]))) for a in arrays)
+
+    # The perturbation populates the magnetic m=1 slots immediately and
+    # satisfies the vacuum-matching rows identically (w = w' = 0 at both
+    # cylinders), so the wall residual -- dominated by the m=0 eigenmode
+    # seed's own projection error at this resolution -- must not increase.
+    assert m1_content(state.A) > 0.0
+    residual_perturbed = float(solver.insulating_bc_residual(state))
+    assert residual_perturbed <= residual_seed + 1.0e-14
+    assert m1_content(state.u) == 0.0
+
+    state = solver.solve(state, 10)
+    diag = solver.diagnostics(state)
+    assert float(diag["divb_l2"]) < SOLENOIDAL_CEIL
+    assert float(diag["insulating_bc_residual"]) < SOLENOIDAL_CEIL
+    # MRI coupling feeds the non-axisymmetric velocity modes.
+    assert m1_content(state.u) > 0.0
+
+
+@pytest.mark.integration
 def test_tc_vp_checkpoint_resume_matches_straight_run(tmp_path):
     jax.config.update("jax_enable_x64", True)
     spec = _tc_vp_spec()

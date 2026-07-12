@@ -97,7 +97,9 @@
     "type": "linear_eigenmode",
     "amplitude": 0.0001,
     "seeded_kz_mode": 1,
-    "azimuthal_mode": 0
+    "azimuthal_mode": 0,
+    "symmetry_break_amplitude": 1e-05,
+    "symmetry_break_m": 1
   },
   "forcing": {
     "type": "rotating_cylinders_imposed_axial_field",

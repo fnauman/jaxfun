@@ -82,37 +82,44 @@ def test_proposed_dt_shrinks_grows_and_holds():
     assert _proposed_dt(1.0e-2, float("nan"), config) is None
 
 
-def test_adaptive_run_shrinks_an_oversized_dt_and_stays_solenoidal():
-    """Start with a dt whose rotation CFL breaks the target: the driver must
-    shrink it, the recorded history must say so, and the vector-potential
-    solenoidal contract must hold across the operator rebuilds."""
+@pytest.mark.integration
+def test_adaptive_run_shrinks_an_unsafe_dt_before_the_first_block():
+    """Start with a dt whose rotation CFL exceeds 1 (the health-gate abort
+    threshold): the driver must shrink it *before* advancing any block --
+    otherwise the production resolution gate would abort mid-run -- land
+    exactly on the requested elapsed time, and hold the solenoidal contract
+    across the operator rebuilds."""
     jax.config.update("jax_enable_x64", True)
-    # 2*Omega*dt = 0.27 at dt=0.2 -> cfl_total ~ 0.27 > target 0.15.
+    # 2*Omega*dt = 1.6 at dt=1.2 -> cfl_total > 1 on the *initial* state.
     spec = _vp_spec(
         {
             "integrator": "IMEXRK222",
-            "dt": 0.2,
+            "dt": 1.2,
             "final_time": 24.0,
             "adaptive_cfl": {
                 "target": 0.15,
                 "check_every": 5,
                 "dt_min": 1e-5,
-                "dt_max": 0.5,
+                "dt_max": 2.0,
                 "safety": 0.9,
             },
         }
     )
-    out = run_supported_spec(spec, steps=30, diagnostics_every=5)
+    out = run_supported_spec(spec, steps=8, diagnostics_every=5)
     sc = out["scalars"]
     assert sc["n_dt_changes"] >= 1
-    assert sc["dt_final"] < 0.2
-    assert sc["dt_min_used"] < 0.2
+    assert sc["dt_final"] < 1.2
+    assert sc["dt_min_used"] < 1.2
     assert sc["adaptive_cfl_target"] == pytest.approx(0.15)
-    dts = [row["dt"] for row in out["time_series"] if "dt" in row]
-    assert min(dts) < 0.2
+    # The unsafe initial dt must never evolve a block: every *observed* CFL
+    # (all measured on evolved states or the pre-flight initial state) stays
+    # in the safe band after the pre-flight shrink.
     cfls = [row["cfl_total"] for row in out["time_series"] if "cfl_total" in row]
-    # After adaptation the measured CFL sits at/below the target band.
-    assert cfls[-1] <= 0.15 * 1.05
+    assert max(cfls) <= 0.15 * 1.05
+    # The run lands exactly on the requested elapsed time (8 steps * dt=1.2).
+    assert out["time_series"][-1]["t"] == pytest.approx(8 * 1.2, rel=1e-12)
+    assert sc["adaptive_final_step_clipped"] in (True, False)
+    assert sc["adaptive_steps_taken"] > 8  # shrunk dt -> more, smaller steps
     assert (
         max(
             row["divergence_b_l2"]
@@ -123,7 +130,8 @@ def test_adaptive_run_shrinks_an_oversized_dt_and_stays_solenoidal():
     )
 
 
-def test_adaptive_run_grows_an_undersized_dt_up_to_the_cap():
+@pytest.mark.integration
+def test_adaptive_run_grows_an_undersized_dt_and_keeps_the_final_time():
     jax.config.update("jax_enable_x64", True)
     spec = _vp_spec(
         {
@@ -146,8 +154,13 @@ def test_adaptive_run_grows_an_undersized_dt_up_to_the_cap():
     assert sc["dt_final"] == pytest.approx(4.0e-3)  # capped by dt_max
     assert sc["cfl_total_max_observed"] < 0.3
     assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
+    # A grown dt takes fewer steps but must NOT overshoot the requested
+    # elapsed time (25 steps * dt=1e-3): the final block/step is clipped.
+    assert sc["adaptive_steps_taken"] < 25
+    assert out["time_series"][-1]["t"] == pytest.approx(0.025, rel=1e-12)
 
 
+@pytest.mark.integration
 def test_tc_vp_set_dt_recombination_preserves_the_contract():
     """The TC vector-potential family rebuilds its per-mode LU from cached
     mass/physics parts on set_dt; the solenoidal witness and the insulating

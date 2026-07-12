@@ -1111,6 +1111,44 @@ class TaylorCouetteVPMRIDNSJax:
             complex(w[which]),
         )
 
+    def add_symmetry_breaking_perturbation(
+        self, state: TCVPState, amp: float, m: int = 1, kz_mode: int = 1
+    ) -> TCVPState:
+        """Superpose a non-axisymmetric solenoidal magnetic perturbation.
+
+        An axisymmetric eigenmode seed stays axisymmetric under nonlinear
+        evolution, so a small ``m != 0`` perturbation is required for a run
+        to exercise the non-axisymmetric dynamics (and, for insulating walls,
+        the non-axisymmetric Bessel matching rows).  The perturbation adds
+
+            dA_theta = dA_z = amp * w(r) * cos(m theta) * cos(kz z),
+            w(r) = sin^2(pi (r - R1) / (R2 - R1)),
+
+        so ``b = curl(dA)`` is solenoidal by construction and carries
+        ``(+-m, +-kz)`` content, while ``w = w' = 0`` at both cylinders makes
+        every wall row -- conducting Dirichlet/Robin and insulating vacuum
+        matching alike, all linear in wall values and first derivatives of
+        ``A`` -- hold identically at t = 0.  Velocity and the AB2 history are
+        untouched apart from restarting the IMEX-Euler bootstrap.
+        """
+        _require_resolved_m(m, self.Ntheta)
+        if int(m) == 0:
+            raise ValueError("the symmetry-breaking perturbation requires m != 0")
+        kz = 2.0 * math.pi * int(kz_mode) / self.Lz
+        gap = self.base.R2 - self.base.R1
+        w = jnp.sin(math.pi * (self.R - self.base.R1) / gap) ** 2
+        field = float(amp) * w * jnp.cos(int(m) * self.Theta) * jnp.cos(kz * self.Z)
+        d_at = self.TAt.mask_nyquist(self.TAt.forward(field))
+        d_az = self.TAz.mask_nyquist(self.TAz.forward(field))
+        A = (state.A[0], state.A[1] + d_at, state.A[2] + d_az)
+        return TCVPState(
+            u=state.u,
+            p=state.p,
+            A=A,
+            nonlinear_old=state.nonlinear_old,
+            have_old=False,
+        )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

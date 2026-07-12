@@ -139,13 +139,21 @@ resolution.
 
 Both vector-potential runners accept an optional `time.adaptive_cfl` block
 (`true` for defaults, or `{"target", "safety", "dt_min", "dt_max",
-"check_every", "growth_cap", "grow_when_below"}`). The run then advances in
-compiled blocks; between blocks the explicit CFL is measured from the family
-health scalars and, when it leaves the band, the implicit factorizations are
-rebuilt at the new `dt` (`solver.set_dt`), with the CNAB2 family restarting
-its IMEX-Euler bootstrap so no stale multistep history is extrapolated.
-Elapsed time is accumulated exactly, every `dt` change is recorded (scalars
-`n_dt_changes`, `dt_final`, `dt_min_used`, `dt_max_used`,
+"check_every", "growth_cap", "grow_when_below"}`). The horizon is a **time**
+target (the elapsed time the fixed-`dt` run would cover, i.e. the spec
+`final_time` when no step override is given): `dt` changes alter the step
+count and the final step is clipped so the run lands exactly on the
+requested time — a grown `dt` cannot overshoot the saturation window and a
+shrunk one cannot end early. The CFL is measured on the state **before**
+every compiled block (a pre-flight check covers the initial state), so an
+unsafe starting `dt` is shrunk before any stepping instead of tripping the
+production health gate mid-block; the post-block measurement of one block
+doubles as the pre-block check of the next. On a change the implicit
+factorizations are rebuilt at the new `dt` (`solver.set_dt`), with the CNAB2
+family restarting its IMEX-Euler bootstrap so no stale multistep history is
+extrapolated. Elapsed time is accumulated exactly, every `dt` change is
+recorded (scalars `n_dt_changes`, `dt_final`, `dt_min_used`, `dt_max_used`,
+`adaptive_steps_taken`, `adaptive_final_step_clipped`,
 `cfl_total_max_observed`; per-row `dt` and `cfl_total` in the time series),
 and the solenoidal gates run every block. Adaptive runs are currently wired
 for fresh starts (no resume/quench/checkpoint-bank) and write a final
