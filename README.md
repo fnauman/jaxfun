@@ -87,6 +87,13 @@ trainer.train(lbfgs(u), 5000)
 
 See the [`examples`](examples/) directory and preliminary [notebooks](https://spectraldns.github.io/jaxfun/) for more patterns.
 
+### Couette examples
+
+The Shenfun reference examples for plane and Taylor-Couette hydrodynamics and
+MHD live in [`couette/`](couette/). The corresponding Jaxfun production runners,
+specifications, and validation tools live in [`production/`](production/). See
+the [Couette demo guide](couette/README_Couette.md) for Shenfun entry points.
+
 ## Development
 
 Run tests (excluding slow):

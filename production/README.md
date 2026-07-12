@@ -5,11 +5,11 @@ vendors the neutral problem-spec schema, example specs, 13 committed shenfun
 goldens, and five generated jaxfun saturation goldens so parity checks do not
 import or require a live shenfun process.
 
-The intended rotating-MHD campaign compares plane Couette and Taylor-Couette
-here with the shearing box in `/home/nauman/cfd/shearpy-jimenez`. The canonical
-normalization, shared observables, campaign ladder, and blocking gates are in
-[`PLAN_comparison_design.md`](../PLAN_comparison_design.md); open implementation
-and measurement gates remain authoritative in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
+The intended rotating-MHD campaign compares the Jaxfun plane-Couette and
+Taylor-Couette runners here with the shearing box in
+`/home/nauman/cfd/shearpy-jimenez`. The production inventory and validation
+scopes are documented below; open implementation and measurement gates remain
+authoritative in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
 
 ## Production-run inventory
 

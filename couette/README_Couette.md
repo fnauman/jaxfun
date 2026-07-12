@@ -1,19 +1,20 @@
 # Couette Demo Guide
 
-This directory contains plane-Couette and Taylor-Couette demos in hydrodynamic
-and MHD regimes.  The linear paths are small dense generalized-eigenvalue tools
-for analysis and validation; the DNS paths are the time-dependent Shenfun
-solvers; and `thin_gap_compare.py` puts the two geometries side by side
+This directory contains the Shenfun reference examples for plane-Couette and
+Taylor-Couette flow in hydrodynamic and MHD regimes.  The linear paths are small
+dense generalized-eigenvalue tools for analysis and validation; the DNS paths
+are the time-dependent Shenfun solvers; and `thin_gap_compare.py` puts the two
+geometries side by side
 (apples-to-apples).  **Several tasks have more than one implementation** (a
 shenfun-Galerkin operator *and* a dense Chebyshev-collocation operator; a CNAB2
 *and* an IMEXRK DNS); see [Which approach to use](#which-approach-to-use) for a
 decision table, and [Porting to another shenfun
 codebase](#porting-to-another-shenfun-codebase) for the minimal file sets.
 
-> **Where to run from.**  Run the scripts from inside `demo/` (the modules
+> **Where to run from.**  Run the scripts from inside `couette/` (the modules
 > import their siblings by bare name), in the shenfun conda environment.
 > Examples below are written `python <script>.py ...`; from the repo root prefix
-> them with `demo/`.
+> them with `couette/`.
 
 ## Shared Helpers
 
@@ -106,9 +107,9 @@ python pcf_imexrk_linear.py --ky 0 --kz 1 --end-time 0.05   # measured vs eigenv
 Examples:
 
 ```bash
-python demo/pcf_fluctuations_corrected.py --linear eigs --linear-nx 48 --ky 1 --kz 1
-python demo/pcf_fluctuations_corrected.py --linear nonmodal --linear-nx 80 --ky 0 --kz 1.66 --linear-times 139
-python demo/pcf_fluctuations_corrected.py --no-save-plots --no-save-analysis --no-save-spectra
+python couette/pcf_fluctuations_corrected.py --linear eigs --linear-nx 48 --ky 1 --kz 1
+python couette/pcf_fluctuations_corrected.py --linear nonmodal --linear-nx 80 --ky 0 --kz 1.66 --linear-times 139
+python couette/pcf_fluctuations_corrected.py --no-save-plots --no-save-analysis --no-save-spectra
 ```
 
 The hydrodynamic PCF DNS end time is currently fixed inside the script
@@ -128,10 +129,10 @@ The hydrodynamic PCF DNS end time is currently fixed inside the script
 Examples:
 
 ```bash
-python demo/pcf_mhd_divfree.py --linear eigs --linear-nx 48 --ky 1 --kz 1 --linear-bz 0.1
-python demo/pcf_mhd_divfree.py --linear nonmodal --linear-nx 48 --ky 1 --kz 1 --linear-bz 0.1 --linear-times 0,1,5
-python demo/pcf_mhd_divfree.py --linear nonmodal --linear-nx 48 --ky 1 --kz 1 --linear-energy kinetic
-python demo/pcf_mhd_divfree.py --end-time 0.1 --moderror 10
+python couette/pcf_mhd_divfree.py --linear eigs --linear-nx 48 --ky 1 --kz 1 --linear-bz 0.1
+python couette/pcf_mhd_divfree.py --linear nonmodal --linear-nx 48 --ky 1 --kz 1 --linear-bz 0.1 --linear-times 0,1,5
+python couette/pcf_mhd_divfree.py --linear nonmodal --linear-nx 48 --ky 1 --kz 1 --linear-energy kinetic
+python couette/pcf_mhd_divfree.py --end-time 0.1 --moderror 10
 ```
 
 - `pcf_mhd_mri_shearpy.py`
@@ -145,10 +146,10 @@ python demo/pcf_mhd_divfree.py --end-time 0.1 --moderror 10
 Examples:
 
 ```bash
-python demo/pcf_mhd_mri_shearpy.py --linear eigs --linear-nx 48 --ky 0 --kz 25.81988897471611 --Re 1000000 --Rm 1000000
-python demo/pcf_mhd_mri_shearpy.py --linear nonmodal --linear-nx 32 --ky 0 --kz 6.283185307179586 --linear-times 0,1,5
-python demo/pcf_mhd_mri_shearpy.py --linear nonmodal --linear-nx 32 --ky 0 --kz 6.283185307179586 --linear-energy magnetic
-python demo/pcf_mhd_mri_shearpy.py --end-time 0.01 --store-history
+python couette/pcf_mhd_mri_shearpy.py --linear eigs --linear-nx 48 --ky 0 --kz 25.81988897471611 --Re 1000000 --Rm 1000000
+python couette/pcf_mhd_mri_shearpy.py --linear nonmodal --linear-nx 32 --ky 0 --kz 6.283185307179586 --linear-times 0,1,5
+python couette/pcf_mhd_mri_shearpy.py --linear nonmodal --linear-nx 32 --ky 0 --kz 6.283185307179586 --linear-energy magnetic
+python couette/pcf_mhd_mri_shearpy.py --end-time 0.01 --store-history
 ```
 
 ## Taylor-Couette Flow
@@ -182,8 +183,8 @@ In addition to the Galerkin `taylor_couette_linear.py` / `taylor_couette_mri.py`
 Examples:
 
 ```bash
-python demo/taylor_couette_linear.py --N 48 --family C --kz 3.16
-python demo/taylor_couette_linear.py --N 80 --family C --nonmodal --kz 1.5707963267948966 --times 5,10,20
+python couette/taylor_couette_linear.py --N 48 --family C --kz 3.16
+python couette/taylor_couette_linear.py --N 80 --family C --nonmodal --kz 1.5707963267948966 --times 5,10,20
 ```
 
 - `taylor_couette_dns.py`
@@ -196,9 +197,9 @@ python demo/taylor_couette_linear.py --N 80 --family C --nonmodal --kz 1.5707963
 Examples:
 
 ```bash
-python demo/taylor_couette_dns.py --linear-analysis eigs --Nr 48 --family C --kz 3.16
-python demo/taylor_couette_dns.py --linear-analysis nonmodal --Nr 80 --family C --kz 1.5707963267948966 --times 5,10,20
-python demo/taylor_couette_dns.py --Nr 32 --Nz 64 --end-time 1.0
+python couette/taylor_couette_dns.py --linear-analysis eigs --Nr 48 --family C --kz 3.16
+python couette/taylor_couette_dns.py --linear-analysis nonmodal --Nr 80 --family C --kz 1.5707963267948966 --times 5,10,20
+python couette/taylor_couette_dns.py --Nr 32 --Nz 64 --end-time 1.0
 ```
 
 ### Magnetohydrodynamic
@@ -215,10 +216,10 @@ python demo/taylor_couette_dns.py --Nr 32 --Nz 64 --end-time 1.0
 Examples:
 
 ```bash
-python demo/taylor_couette_mri.py --local-check
-python demo/taylor_couette_mri.py --N 32 --family C --magnetic-bc conducting --kz 1.75 --B0 0.16639676113360324 --eta-mag 0.04048582995951417 --nu 4.048582995951417e-08
-python demo/taylor_couette_mri.py --N 32 --family C --magnetic-bc insulating --nonmodal --kz 1.25 --times 0,1,5
-python demo/taylor_couette_mri.py --N 32 --family C --nonmodal --kz 1.5 --times 5 --energy kinetic
+python couette/taylor_couette_mri.py --local-check
+python couette/taylor_couette_mri.py --N 32 --family C --magnetic-bc conducting --kz 1.75 --B0 0.16639676113360324 --eta-mag 0.04048582995951417 --nu 4.048582995951417e-08
+python couette/taylor_couette_mri.py --N 32 --family C --magnetic-bc insulating --nonmodal --kz 1.25 --times 0,1,5
+python couette/taylor_couette_mri.py --N 32 --family C --nonmodal --kz 1.5 --times 5 --energy kinetic
 ```
 
 - `taylor_couette_dns.py --mhd`
@@ -232,10 +233,10 @@ python demo/taylor_couette_mri.py --N 32 --family C --nonmodal --kz 1.5 --times 
 Examples:
 
 ```bash
-python demo/taylor_couette_dns.py --mhd --linear-analysis eigs --Nr 32 --family C --kz 1.75 --B0 0.16639676113360324 --eta-mag 0.04048582995951417 --nu 4.048582995951417e-08
-python demo/taylor_couette_dns.py --mhd --linear-analysis nonmodal --Nr 32 --family C --kz 1.25 --times 0,1,5
-python demo/taylor_couette_dns.py --mhd --linear-analysis nonmodal --Nr 32 --family C --kz 1.25 --magnetic-bc insulating --energy kinetic
-python demo/taylor_couette_dns.py --mhd --Nr 32 --Nz 64 --end-time 0.1 --B0 0.1
+python couette/taylor_couette_dns.py --mhd --linear-analysis eigs --Nr 32 --family C --kz 1.75 --B0 0.16639676113360324 --eta-mag 0.04048582995951417 --nu 4.048582995951417e-08
+python couette/taylor_couette_dns.py --mhd --linear-analysis nonmodal --Nr 32 --family C --kz 1.25 --times 0,1,5
+python couette/taylor_couette_dns.py --mhd --linear-analysis nonmodal --Nr 32 --family C --kz 1.25 --magnetic-bc insulating --energy kinetic
+python couette/taylor_couette_dns.py --mhd --Nr 32 --Nz 64 --end-time 0.1 --B0 0.1
 ```
 
 - `taylor_couette_imexrk_dns.py`
@@ -248,8 +249,8 @@ python demo/taylor_couette_dns.py --mhd --Nr 32 --Nz 64 --end-time 0.1 --B0 0.1
     --timestepper {IMEXRK111,IMEXRK222,IMEXRK443} --seed-linear --kz-mode --amp`.
 
 ```bash
-python demo/taylor_couette_imexrk_dns.py --Nr 32 --Nz 16 --nu 1e-2 --dt 1e-3 --end-time 0.1 --seed-linear --kz-mode 1
-python demo/taylor_couette_imexrk_dns.py --mhd --B0 0.1 --eta-mag 1e-3 --timestepper IMEXRK222 --seed-linear
+python couette/taylor_couette_imexrk_dns.py --Nr 32 --Nz 16 --nu 1e-2 --dt 1e-3 --end-time 0.1 --seed-linear --kz-mode 1
+python couette/taylor_couette_imexrk_dns.py --mhd --B0 0.1 --eta-mag 1e-3 --timestepper IMEXRK222 --seed-linear
 ```
 
 ## Apples-to-Apples Thin-Gap Comparison
@@ -264,9 +265,9 @@ it to `1e-4` or below for the plane limit.
 
 ```bash
 # eigenvalues only -- shearing (rotating) limit is the recommended test
-python demo/thin_gap_compare.py --limit shearing --Omega 0.6666666667 --S 1 --ky 0 --kz 1
+python couette/thin_gap_compare.py --limit shearing --Omega 0.6666666667 --S 1 --ky 0 --kz 1
 # add non-modal transient growth and the DNS-style time-stepped check
-python demo/thin_gap_compare.py --limit shearing --mhd --B0 0.05 --nonmodal --dns
+python couette/thin_gap_compare.py --limit shearing --mhd --B0 0.05 --nonmodal --dns
 ```
 
 1. **Linear eigenvalues.**  Reported as a *set-matched* full-complex residual:

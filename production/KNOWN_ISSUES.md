@@ -82,8 +82,9 @@ diagnostics; align them before any TC campaign.
 
 The target study compares rotating plane Couette and Taylor-Couette in this
 repository with the shear-periodic solver in
-`/home/nauman/cfd/shearpy-jimenez`. The normalization, common outputs, curvature
-ladder, and campaign order are fixed in `PLAN_comparison_design.md`.
+`/home/nauman/cfd/shearpy-jimenez`. The local production inventory and
+validation scopes are documented in [`README.md`](README.md); a durable
+cross-repository campaign protocol still needs to be recorded before execution.
 
 This remains open because KI-2--KI-7 apply to at least one local leg, shearpy's
 MRI production-requirements artifact still lacks measured net-flux saturation
