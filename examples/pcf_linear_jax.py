@@ -80,6 +80,17 @@ class PlaneCouetteLinear:
       (``b_y' = b_z' = 0``); the pseudo-vacuum / perfect-conductor condition.
     * ``dirichlet`` -- all components pinned (``b = 0``); a non-physical
       diagnostic BC, useful only for operator/convergence checks.
+    * ``pseudo_vacuum`` -- tangential field vanishes (``b_y = b_z = 0``) with
+      the solenoidal-compatible ``b_x' = 0``.
+    * ``insulating`` -- exact vacuum matching per mode.  The exterior field is
+      a decaying potential ``b = grad(psi)``, ``psi ~ exp(-|k| |x|)`` with
+      ``k = sqrt(ky^2 + kz^2)``, so continuity of all three components gives,
+      at ``x = +1`` (upper wall, outward decay):
+      ``b_x' + k b_x = 0``, ``b_y + (i ky / k) b_x = 0``,
+      ``b_z + (i kz / k) b_x = 0`` and the sign-flipped set at ``x = -1``.
+      The Robin condition on ``b_x`` is the solenoidal consequence of the two
+      tangential matching rows.  Because ``k`` enters the rows, the insulating
+      operator is per-mode (assembled inside :meth:`assemble`).
 
     Energy norm.  :meth:`nonmodal_growth` measures gain in the *total*
     perturbation energy by default (kinetic + magnetic, equal weights in Alfven
@@ -114,9 +125,15 @@ class PlaneCouetteLinear:
         self.bz = float(bz)
         self.mhd = bool(mhd)
         self.magnetic_bc = magnetic_bc
-        if magnetic_bc not in ("conducting", "dirichlet", "pseudo_vacuum"):
+        if magnetic_bc not in (
+            "conducting",
+            "dirichlet",
+            "pseudo_vacuum",
+            "insulating",
+        ):
             raise ValueError(
-                "magnetic_bc must be 'conducting', 'dirichlet' or 'pseudo_vacuum'"
+                "magnetic_bc must be 'conducting', 'dirichlet', 'pseudo_vacuum' "
+                "or 'insulating'"
             )
         self.x, self.D, self.D2, self.weights = cheb_lobatto(self.nx)
 
@@ -191,10 +208,46 @@ class PlaneCouetteLinear:
                 row = blk * n + wall
                 self._set_row(L, M, row, [(blk * n + wall, 1.0)])
 
-    def _apply_magnetic_bcs(self, L, M, b):
+    def _apply_magnetic_bcs(self, L, M, b, ky=None, kz=None):
         if not self.mhd:
             return
         n = self.nx
+        if self.magnetic_bc == "insulating":
+            # Exact vacuum matching (see class docstring).  x[0] = +1 and
+            # x[n-1] = -1 in Chebyshev-Lobatto ordering; ``sign`` is the wall
+            # outward direction along x.
+            #
+            # The wall rows of the divergence multiplier phi must be replaced by
+            # a phi pin: div b = 0 at the wall is *identically* the solenoidal
+            # combination of the three matching rows (b_x' = -+ k b_x plus the
+            # tangential rows), so keeping it would leave a singular pencil and
+            # QZ then returns unreliable spectra.  phi is harmonic with
+            # phi(+-1) = 0, hence phi = 0 on-shell and no physics changes.
+            k = float(np.hypot(float(ky), float(kz)))
+            if k <= 0.0:
+                raise ValueError("insulating BCs require ky or kz nonzero")
+            bx, by, bz = b["bx"], b["by"], b["bz"]
+            phi = b["phi"]
+            for wall, sign in ((0, 1.0), (n - 1, -1.0)):
+                self._set_row(L, M, phi * n + wall, [(phi * n + wall, 1.0)])
+                robin = self.D[wall, :].astype(complex).copy()
+                robin[wall] += sign * k
+                self._set_row(
+                    L, M, bx * n + wall, [(slice(bx * n, (bx + 1) * n), robin)]
+                )
+                self._set_row(
+                    L,
+                    M,
+                    by * n + wall,
+                    [(by * n + wall, 1.0), (bx * n + wall, sign * 1j * ky / k)],
+                )
+                self._set_row(
+                    L,
+                    M,
+                    bz * n + wall,
+                    [(bz * n + wall, 1.0), (bx * n + wall, sign * 1j * kz / k)],
+                )
+            return
         if self.magnetic_bc == "dirichlet":
             for name in ("bx", "by", "bz"):
                 blk = b[name]
@@ -207,8 +260,14 @@ class PlaneCouetteLinear:
             # FJ-09: pseudo-vacuum walls. Tangential field vanishes (Dirichlet on
             # b_y, b_z); the normal gradient of the normal component vanishes
             # (Neumann on b_x, the solenoidal complement of the tangential rows).
+            # As for insulating walls, div b = 0 at the wall is identically the
+            # combination b_x'-row + i ky * b_y-row + i kz * b_z-row, so the
+            # wall rows of phi are replaced by a phi pin to keep the pencil
+            # regular (phi stays harmonic with zero wall values -> phi = 0).
             bx, by, bz = b["bx"], b["by"], b["bz"]
+            phi = b["phi"]
             for wall in (0, n - 1):
+                self._set_row(L, M, phi * n + wall, [(phi * n + wall, 1.0)])
                 self._set_row(
                     L,
                     M,
@@ -284,7 +343,7 @@ class PlaneCouetteLinear:
             self._put(L, p, p, Z)
 
         self._apply_velocity_bcs(L, M, b)
-        self._apply_magnetic_bcs(L, M, b)
+        self._apply_magnetic_bcs(L, M, b, ky=ky, kz=kz)
         return L, M
 
     def energy_matrix(self, kind="total"):
@@ -351,7 +410,9 @@ def main(argv=None):
     parser.add_argument("--by", type=float, default=0.0)
     parser.add_argument("--bz", type=float, default=0.025)
     parser.add_argument(
-        "--magnetic-bc", choices=["conducting", "dirichlet"], default="conducting"
+        "--magnetic-bc",
+        choices=["conducting", "dirichlet", "pseudo_vacuum", "insulating"],
+        default="conducting",
     )
     parser.add_argument("--nonmodal", action="store_true")
     parser.add_argument("--times", type=str, default="1,5,10,20")

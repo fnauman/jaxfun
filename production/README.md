@@ -24,8 +24,11 @@ authoritative in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
 | `pcf_mhd_divfree` | pcf | mhd | `examples/pcf_mri_primitive_jax.py` | failed candidate: the direct/primitive-`b` full `N=(32,64,32)` run completed with small finite `div B`, but decayed and failed the saturation growth gate (not a divergence failure) | rung 3 |
 | `exp_pcf_mri_shearbox_growth` | pcf | mri | `examples/pcf_mri_primitive_jax.py` | quarantined: direct/primitive-`b` MRI reached `div B=1.34e-2` by `t=30`; its old saturated artifact is regression-only and forbidden from production seeding | rung 1/2/3 |
 | `exp_pcf_mri_vector_potential` | pcf | mri | `examples/pcf_mhd_mri_shearpy_jax.py` | selected workhorse pending full run: `B=B0+curl(A)`, 300-step CPU qualification and start-tier GPU smoke pass with roundoff `div B`; full-resolution GPU golden still required | rung 1/2/3 |
+| `exp_pcf_mri_vp_insulating` | pcf | mri | `examples/pcf_mhd_mri_shearpy_jax.py` | CPU-anchored candidate: `B=B0+curl(A)` with exact per-mode vacuum matching (true insulating walls); DNS growth matches the insulating linear eigensolver to `3.3e-8` and `div B` holds roundoff for the whole horizon; no GPU artifact yet | rung 1/2/3 |
+| `exp_tc_mri_vector_potential` | taylor_couette | mri | `examples/taylor_couette_vp_jax.py` | CPU-anchored candidate: full 3D `(theta,z,r)` `B=B0 e_z+curl(A)` with exact resistive-conducting cylinders; DNS growth matches the conducting eigensolver at `m=0` (`1.5e-9`) and `m=1` (`9.7e-8`), nonlinear trajectories match the primitive solver to `~1e-10`, and `div B` holds its resolution floor; no GPU artifact yet | rung 1/2/3 |
+| `exp_tc_mri_vp_insulating` | taylor_couette | mri | `examples/taylor_couette_vp_jax.py` | CPU-anchored candidate: full 3D insulating cylinders via per-mode Bessel-ratio vacuum matching (all `(m,kz)`, not just axisymmetric); `m=0` growth matches the flux-function eigensolver to `1.5e-7`; no GPU artifact yet | rung 1/2/3 |
 | `tc_supercritical_saturation` | taylor_couette | hydro | `examples/taylor_couette_dns_jax.py` | qualified candidate: runner, smoke coverage, and a legacy full-resolution GPU saturation artifact exist; current TC diagnostic-contract and release gates remain | rung 2/3 |
-| `tc_mri_nonlinear_saturation` | taylor_couette | mri | `examples/taylor_couette_dns_jax.py` | finite-divergence only: the direct-`b` legacy full run saturated but ended at `div B=7.96e-4`; below the generic health ceiling, not roundoff-solenoidal or campaign-ready | rung 1/2/3 |
+| `tc_mri_nonlinear_saturation` | taylor_couette | mri | `examples/taylor_couette_dns_jax.py` | finite-divergence only: the direct-`b` legacy full run saturated but ended at `div B=7.96e-4`; below the generic health ceiling, not roundoff-solenoidal or campaign-ready. Note this runner is the **axisymmetric** primitive class; the full-3D primitive class exists but is not production-wired | rung 1/2/3 |
 | `stab_PCF_MRI_stability` | pcf | mri | `examples/pcf_mhd_mri_shearpy_jax.py` | config-undetermined placeholder | not executable |
 
 `pcf_mhd_divfree` is not a no-field run: the spec includes `B0=0.05`, but it
@@ -71,31 +74,99 @@ below are explicitly distinguished as finite-divergence or quarantined.
 ### Magnetic representation and divergence evidence
 
 The single discriminator is the magnetic representation. Only the
-vector-potential form `B = B0 + curl(A)` (`examples/pcf_mhd_mri_shearpy_jax.py`)
-makes `div B = div(curl A) = 0` an identity, so `div B` stays at roundoff for the
-whole horizon and does not grow. Every primitive/direct-`b` path
-(`examples/pcf_mri_primitive_jax.py`, `examples/taylor_couette_dns_jax.py`) evolves
-the field components directly and does **not** enforce the solenoidal constraint;
-its `div B` stays small only while amplitudes are low and grows into the finite
-regime at finite MRI amplitude.
+vector-potential form `B = B0 + curl(A)` makes `div B = div(curl A) = 0` an
+identity, so `div B` stays at its roundoff/resolution floor for the whole
+horizon and does not grow. This now covers **both geometries and both wall
+types**: plane Couette (`examples/pcf_mhd_mri_shearpy_jax.py`, conducting and
+insulating walls) and Taylor-Couette (`examples/taylor_couette_vp_jax.py`,
+conducting and insulating cylinders, full 3D `(theta,z,r)`). Every
+primitive/direct-`b` path (`examples/pcf_mri_primitive_jax.py`,
+`examples/taylor_couette_dns_jax.py`) evolves the field components directly and
+does **not** enforce the solenoidal constraint; its `div B` stays small only
+while amplitudes are low and grows into the finite regime at finite MRI
+amplitude.
+
+Wall-condition conventions of the vector-potential family:
+
+- PCF conducting: `A = 0` on the walls (`b_x = 0` exact; the tangential
+  electric field carries an `O(eta)` gauge residual — the convention of the
+  shenfun reference `couette/pcf_mhd_divfree.py`).
+- PCF insulating: exact per-mode vacuum matching
+  `b_x' = -+k b_x`, `b_y = -+(i ky/k) b_x`, `b_z = -+(i kz/k) b_x` imposed as
+  per-mode tau rows (Neumann/Robin split of the tangential potentials).
+- TC conducting: `A_theta = A_z = 0` plus `(r A_r)' = 0`, i.e. `div A = 0` at
+  the walls, which makes `E_tang = 0` **exact** — on-shell equivalent to the
+  primitive set `{b_r=0, (r b_theta)'=0, b_z'=0}`.
+- TC insulating: per-mode matching to `I_m(|kz| r)` / `K_m(|kz| r)` exterior
+  potentials (`r^{+-|m|}` at `kz=0`); the `(0,0)` mean mode uses
+  `b_theta = 0` at both walls, `b_z(R2) = 0`, and the exact trapped-flux
+  Faraday row `(R1/2) db_z(R1)/dt = eta db_z/dr(R1)`.
 
 | Case and evidence | Magnetic representation | Preserves `div B=0`? | `div u` (L2) | `div B` (L2) | Qualification |
 |---|---|---|---:|---:|---|
 | PCF plain MHD, decaying GPU smoke (`pcf_mhd_divfree`) | primitive/direct `b` | no (small while decaying) | `1.05e-8` | `7.15e-6` | failed candidate; decayed, not a saturation reference |
 | PCF growing MRI, GPU smoke at `t=30` (`exp_pcf_mri_shearbox_growth`) | primitive/direct `b` | no — grows past the `1e-2` guard | not recorded at guard exit | `1.34e-2` | guard failure; primitive MRI is not production-ready |
 | PCF growing MRI, older full artifact (`exp_pcf_mri_shearbox_growth`) | primitive/direct `b` | no — grew to `2.67e-2` | `2.30e-2` | `2.67e-2` | quarantined and forbidden from production seeding |
-| PCF MRI, 300-step CPU qualification + GPU smoke (`exp_pcf_mri_vector_potential`) | vector potential, `B=B0+curl(A)` | yes — by construction, non-growing | `~1e-16` (CPU) | GPU `~1e-18`; CPU `~2.5e-16` (max over 300 steps) | selected conducting-wall workhorse; gated `< 1e-12` over the whole horizon; full-resolution GPU golden pending |
+| PCF MRI, 300-step CPU qualification + GPU smoke (`exp_pcf_mri_vector_potential`) | vector potential, `B=B0+curl(A)`, conducting | yes — by construction, non-growing | `~1e-16` (CPU) | GPU `~1e-18`; CPU `~2.5e-16` (max over 300 steps) | selected conducting-wall workhorse; gated `< 1e-12` over the whole horizon; full-resolution GPU golden pending |
+| PCF MRI insulating, 300-step finite-amplitude CPU run + eigenmode anchor (`exp_pcf_mri_vp_insulating`) | vector potential, `B=B0+curl(A)`, vacuum-matched | yes — by construction, non-growing | `~1e-16` | max `9.9e-17` over 300 steps; matching-row residual `<=1.7e-16`; DNS growth matches the insulating eigensolver to `3.3e-8` | CPU-anchored candidate; gated `< 1e-12` whole-horizon; no GPU artifact yet |
+| TC MRI conducting, CPU anchors + finite-amplitude horizon (`exp_tc_mri_vector_potential`) | vector potential, `B=B0 e_z+curl(A)`, `E_tang=0` exact | yes — by construction, non-growing | `~1e-12` | `m=0`: max `~1e-19`; `m=1` (3D): `~4e-15` at `Nr=40` (spectrally convergent projection floor); finite amplitude (`3e-2`): `~1.5e-15` while the primitive solver is already at `~7e-8` | CPU-anchored candidate; growth matches the linear eigensolver at `m=0` (`1.5e-9`) and `m=1` (`9.7e-8`); nonlinear parity vs primitive `~1e-10`; no GPU artifact yet |
+| TC MRI insulating, CPU anchors (`exp_tc_mri_vp_insulating`) | vector potential, Bessel vacuum matching | yes — by construction, non-growing | `~1e-12` | max `1.2e-19` (`m=0`, 400 steps); matching-row residual `<=4.5e-22`; growth matches the flux eigensolver to `1.5e-7` | CPU-anchored candidate; no GPU artifact yet |
 | Taylor-Couette conducting MHD/MRI, legacy full artifact (`tc_mri_nonlinear_saturation`) | primitive/direct `b` | no — grew to `7.96e-4` | `2.26e-5` | `7.96e-4` | finite-divergence only; saturated but not roundoff-solenoidal |
 
 Every `div u`/`div B` cell above is a **measured** emitted L2 diagnostic (not a
 gate) from different resolutions, horizons, and solver families; the gate
 thresholds live in the Qualification column and in the tests
 (`tests/production/test_vector_potential_oracle.py`,
-`tests/production/test_workhorse_qualification.py` gate the curl family at
+`tests/production/test_workhorse_qualification.py`,
+`tests/production/test_vp_insulating_oracle.py`, and
+`tests/production/test_tc_vector_potential_oracle.py` gate the curl family at
 `div B < 1e-12` across the whole horizon). They are qualification flags, not a
 cross-geometry convergence comparison. The PCF GPU evidence is recorded in
 [`promotions/fj03_gpu_smoke_findings.md`](promotions/fj03_gpu_smoke_findings.md);
 the full-artifact values come from the committed golden diagnostics.
+
+One honest measurement nuance for Taylor-Couette: the reported TC `div B`
+witness is the divergence of the forward-projected coefficient representation
+of `b = curl(A)` (the representation the current density and diagnostics use),
+so it carries the spectrally convergent quadrature error of the cylindrical
+`1/r` projections. It is resolution-dependent (`m=1`: `1.8e-12` at `Nr=24`
+vs `3.7e-15` at `Nr=40`) but saturates instead of growing secularly, and the
+underlying pointwise `curl A` field is solenoidal to roundoff identically. The
+slab (PCF) witness has no `1/r` factors and sits at `~1e-16` independent of
+resolution.
+
+### Adaptive CFL stepping
+
+Both vector-potential runners accept an optional `time.adaptive_cfl` block
+(`true` for defaults, or `{"target", "safety", "dt_min", "dt_max",
+"check_every", "growth_cap", "grow_when_below"}`). The run then advances in
+compiled blocks; between blocks the explicit CFL is measured from the family
+health scalars and, when it leaves the band, the implicit factorizations are
+rebuilt at the new `dt` (`solver.set_dt`), with the CNAB2 family restarting
+its IMEX-Euler bootstrap so no stale multistep history is extrapolated.
+Elapsed time is accumulated exactly, every `dt` change is recorded (scalars
+`n_dt_changes`, `dt_final`, `dt_min_used`, `dt_max_used`,
+`cfl_total_max_observed`; per-row `dt` and `cfl_total` in the time series),
+and the solenoidal gates run every block. Adaptive runs are currently wired
+for fresh starts (no resume/quench/checkpoint-bank) and write a final
+checkpoint only; tests: `tests/production/test_adaptive_cfl.py`. Fixed-`dt`
+remains the default and the committed goldens' semantics.
+
+### Magnetic wall-condition menu (what exists, what does not)
+
+- `conducting`: primitive families (PCF, TC) and vector-potential families
+  (PCF `A=0` convention; TC exact `E_tang=0`).
+- `insulating` (true vacuum matching): vector-potential families only, both
+  geometries; the primitive families have no insulating implementation. The
+  TC linear insulating eigensolver remains `m=0` only.
+- `pseudo_vacuum` (`b_tang=0`, the cheap insulating surrogate): primitive PCF
+  family only (`exp_pcf_mri_pseudo_vacuum`), not solenoidal-preserving; a
+  vector-potential pseudo-vacuum variant is not implemented. With true
+  insulating walls now available in the solenoidal-preserving family,
+  pseudo-vacuum is useful mainly for literature comparison.
+- Stress-free velocity walls: not implemented in any family (all wall-bounded
+  solvers are no-slip); listed here so the absence is explicit rather than
+  implied.
 
 ## Support matrix
 
@@ -105,10 +176,11 @@ the full-artifact values come from the committed golden diagnostics.
 | channel | hydro | production_ready_limited_scope | driven KMM pressure-gradient steady state with golden-normalized Poiseuille observables | `examples/channelflow_kmm.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip walls, pressure-gradient drive | `channel_poiseuille_hydro_v1` | `divergence_l2` | KMM steady-profile regression and CLI golden comparison |
 | pcf | plain mhd, primitive `b` | finite_divergence_only | direct magnetic components; cheap linear parity and low-amplitude/decaying nonlinear execution work, but the full candidate decayed and was not promoted | `examples/pcf_mhd_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting walls; `B0=0.05`; `Omega=0` | `pcf_mhd_conducting_v1`; failed `pcf_mhd_divfree` candidate | `divergence_u_l2`, `divergence_b_l2` | finite-divergence smoke and failed-candidate regression |
 | pcf | mri, primitive `b` | quarantined | direct magnetic components do not preserve the solenoidal constraint at finite MRI amplitude; linear and short DNS parity remain diagnostic-only | `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting or pseudo-vacuum walls, Coriolis/shear, imposed `B0 e_z` | cheap `pcf_mri_shearbox_v1`; DNS `pcf_mri_primitive_dns_v1`; quarantined `exp_pcf_mri_shearbox_growth` | `divergence_u_l2`, `divergence_b_l2`; DNS `divergence_u`, `divergence_b` | quarantine and divergence-guard regressions |
-| pcf | mri, vector potential | selected_workhorse_pending_full_run | nonlinear `B=B0+curl(A)` workhorse; current 300-step CPU qualification and GPU start-tier smoke pass, with checkpoint/resume/quench support; full production golden pending | `examples/pcf_mhd_mri_shearpy_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting walls only, Coriolis/shear, imposed `B0 e_z` | fallback rungs 1/2/3; full curl golden not yet committed | `divergence_u_l2`, `divergence_b_l2` | vector-potential oracle and long nonlinear workhorse qualification |
+| pcf | mri, vector potential | selected_workhorse_pending_full_run | nonlinear `B=B0+curl(A)` workhorse; current 300-step CPU qualification and GPU start-tier smoke pass, with checkpoint/resume/quench support and optional adaptive-CFL stepping; full production golden pending | `examples/pcf_mhd_mri_shearpy_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting (`A=0`) or insulating (exact per-mode vacuum matching) walls, Coriolis/shear, imposed `B0 e_z` | fallback rungs 1/2/3; full curl golden not yet committed | `divergence_u_l2`, `divergence_b_l2`, insulating adds `insulating_bc_residual` | vector-potential oracle, insulating oracle + linear-anchor tests, long nonlinear workhorse qualification |
+| taylor_couette | mhd/mri, vector potential | CPU-anchored candidate | full 3D `(theta,z,r)` nonlinear `B=B0 e_z+curl(A)` DNS (CNAB2, per-mode coupled blocks); conducting rows are the exact resistive perfect-conductor set (`E_tang=0`); insulating rows are per-mode Bessel vacuum matching for **all** `(m,kz)`; checkpoint/resume and optional adaptive-CFL stepping wired; no GPU artifact yet | `examples/taylor_couette_vp_jax.py`, `production/oracles.py` | `axis_0=theta`, `axis_1=z`, `axis_2=r` (native); canonical `x=r`, `y=theta`, `z=z` | rotating no-slip cylinders; conducting `{A_theta=A_z=0, (r A_r)'=0}` or insulating Bessel matching; imposed `B0 e_z` | fallback rungs 1/2/3 via `exp_tc_mri_vector_potential`, `exp_tc_mri_vp_insulating`; no committed golden | `divergence_u_l2`, `divergence_b_l2`, insulating adds `insulating_bc_residual` | TC vector-potential oracle: eigenvalue anchors (`m=0`, `m=1`, insulating `m=0`), primitive-parity, whole-horizon solenoidal gates |
 | taylor_couette | hydro | qualified_candidate | cheap and linear-window DNS parity, wired nonlinear runner, smoke coverage, and a legacy full GPU saturation artifact; current TC diagnostic contract remains open | `examples/taylor_couette_dns_jax.py`, `examples/taylor_couette_linear_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | rotating no-slip cylinders, `V=A*r+B/r` | `taylor_couette_hydro_v1`; DNS `taylor_couette_hydro_dns_v1`; heavy `tc_supercritical_saturation` | `divergence_l2`; DNS `divergence_linf` | cheap/DNS parity, smoke, and legacy saturation regressions |
 | taylor_couette | mhd/mri conducting, primitive `b` | finite_divergence_only | direct magnetic components; cheap and linear-window DNS parity plus a legacy full GPU saturation artifact, but not roundoff-solenoidal and not on the current TC diagnostic contract | `examples/taylor_couette_dns_jax.py`, `examples/taylor_couette_mri_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | conducting walls, Alfven units, `Pm=Rm/Re` | `taylor_couette_mhd_conducting_v1`; DNS `taylor_couette_mhd_dns_v1`; legacy `tc_mri_nonlinear_saturation` | `divergence_b_l2`; DNS `divergence_u`, `divergence_b` | cheap/DNS parity, smoke, and legacy saturation regressions |
-| taylor_couette | mhd insulating | linear_only | cheap insulating linear parity only; no qualified nonlinear insulating DNS path | `examples/taylor_couette_mri_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | insulating only for `m=0`, `kz!=0` | `taylor_couette_mhd_insulating_v1` | `divergence_b_l2` | linear golden and loader rejection for `m!=0` |
+| taylor_couette | mhd insulating (linear/flux path) | production_ready_limited_scope (linear) | the axisymmetric flux-function insulating **eigensolver** remains `m=0, kz!=0` only and anchors the nonlinear vector-potential insulating DNS above (which itself has no such mode restriction) | `examples/taylor_couette_mri_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | insulating eigensolver only for `m=0`, `kz!=0` | `taylor_couette_mhd_insulating_v1` | `divergence_b_l2` | linear golden; loader rejection for `m!=0` applies to the non-VP path only |
 | pipe | hydro | production_ready_limited_scope | axisymmetric regular-axis Hagen-Poiseuille and Womersley oracle; full 3-D non-axisymmetric pipe DNS remains out of scope | `examples/pipe_flow_dns_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | no-slip wall, regular axis at `r=0` | `pipe_hagen_poiseuille_v1`, `pipe_womersley_v1` | `divergence_l2` | golden comparisons wired for both pipe hydro goldens |
 | pipe | mhd/mri | unsupported | no shenfun production formulation | none | `axis_0=r`, `axis_1=theta`, `axis_2=z` | unsupported | rejected to match shenfun | n/a | loader rejection test |
 

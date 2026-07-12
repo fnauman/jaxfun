@@ -1,0 +1,104 @@
+{
+  "family": "shenfun",
+  "problem_id": "exp_tc_mri_vector_potential",
+  "geometry": "taylor_couette",
+  "physics": "mri",
+  "support_state": "experimental",
+  "numerics_contract_version": 2,
+  "representation": "vector_potential",
+  "formulation": {
+    "internal": "full 3D (theta,z,r) vector-potential resistive-MHD Taylor-Couette CNAB2 DNS: B = B0 e_z + curl A with A evolved (solenoidal by construction)",
+    "pressure": "plain pressure; the linear Lorentz force is J(A) x B0 in plain-pressure form"
+  },
+  "evolved_variables": ["u_r", "u_theta", "u_z", "Pi", "A_r", "A_theta", "A_z"],
+  "diagnostic_variables": ["kinetic_energy", "magnetic_energy", "maxwell_stress_rt", "reynolds_stress", "divergence_b_l2", "mean_bz"],
+  "canonical_axes": {
+    "x": "radial direction",
+    "y": "azimuthal direction",
+    "z": "axial direction"
+  },
+  "native_axes": {
+    "axis_0": "theta azimuthal (Fourier)",
+    "axis_1": "z axial (Fourier)",
+    "axis_2": "r radial (Legendre/Chebyshev)"
+  },
+  "nondimensional_groups": {
+    "Re": 1000.0,
+    "Rm": 1000.0,
+    "Pm": 1.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "radius_ratio": 0.5,
+    "Omega1": 1.0,
+    "Omega2": 0.3535533905932738,
+    "B0": 0.1,
+    "nu": 0.001,
+    "eta_mag": 0.001
+  },
+  "boundary_conditions": {
+    "velocity": {"type": "no_slip_rotating_cylinders"},
+    "magnetic": {
+      "type": "conducting",
+      "details": "A_theta=A_z=0 and (r A_r)'=0 (div A=0 at the walls), i.e. E_tang=0 exactly; on-shell equivalent to the primitive set {b_r=0, (r b_theta)'=0, b_z'=0}"
+    }
+  },
+  "domain": {
+    "r": [1.0, 2.0],
+    "theta_period": 6.283185307179586,
+    "z_period": 1.0471975511965976
+  },
+  "resolution": {
+    "smoke": {"Nr": 12, "Ntheta": 4, "Nz": 8, "dealias": 1.0},
+    "start": {"Nr": 32, "Ntheta": 8, "Nz": 24},
+    "production": {"Nr": 48, "Ntheta": 32, "Nz": 48},
+    "dealias": 1.5,
+    "family": "L"
+  },
+  "time": {
+    "integrator": "CNAB2",
+    "dt": 0.001,
+    "final_time": 32.0
+  },
+  "initial_condition": {
+    "type": "linear_eigenmode",
+    "amplitude": 0.0001,
+    "seeded_kz_mode": 1,
+    "azimuthal_mode": 0
+  },
+  "forcing": {
+    "type": "rotating_cylinders_imposed_axial_field",
+    "B0": 0.1
+  },
+  "diagnostics": ["magnetic_energy", "growth_rate", "maxwell_stress_rt", "divergence_b_l2", "kinetic_energy", "mean_bz"],
+  "expected_oracle": {
+    "type": "tc_mri_saturation_ladder",
+    "source": "TaylorCouetteMRIJax conducting linear eigensolver (any m), then GPU-generated saturated DNS golden",
+    "fallback_rungs": [1, 2, 3],
+    "saturation_check": "E_mag[-1] > 2*E_mag[0] and all energies finite; divergence_b_l2 must hold its resolution floor for the whole horizon"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 1e-10,
+      "divergence_u_l2": 1e-06,
+      "divergence_b": 1e-08,
+      "divergence_u": 1e-04,
+      "growth_rate": 0.002,
+      "growth_rate_linear": 1e-06,
+      "magnetic_energy": 1e-06,
+      "kinetic_energy": 1e-06,
+      "total_energy": 1e-06,
+      "maxwell_stress_rt": 1e-06,
+      "reynolds_stress": 1e-06,
+      "total_stress": 1e-06,
+      "mean_bz": 1e-06,
+      "magnetic_energy_growth_factor": 1e-06,
+      "box_volume": 1e-09
+    }
+  },
+  "golden": {
+    "artifact_id": "exp_tc_mri_vector_potential",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/exp_tc_mri_vector_potential.json --out runs/exp_tc_mri_vector_potential/<timestamp> --device auto --write-golden"
+  },
+  "unsupported_subcases": []
+}

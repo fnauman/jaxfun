@@ -41,6 +41,9 @@ JAXFUN_IMPLEMENTED_ORACLES = {
     "exp_pcf_mri_pseudo_vacuum": {"mri_saturation_ladder"},
     "exp_pcf_mri_shearbox_growth": {"mri_saturation_ladder"},
     "exp_pcf_mri_vector_potential": {"mri_saturation_ladder"},
+    "exp_pcf_mri_vp_insulating": {"mri_saturation_ladder"},
+    "exp_tc_mri_vector_potential": {"tc_mri_saturation_ladder"},
+    "exp_tc_mri_vp_insulating": {"tc_mri_saturation_ladder"},
     "pcf_fluct_re400": {"gpu_generated_saturated_dns"},
     "pcf_hydro_laminar_v1": {"plane_couette_laminar"},
     "pcf_hydro_primitive_dns_v1": {"pcf_hydro_dns_decay"},
@@ -458,20 +461,24 @@ def _reject_shenfun_unsupported_subcases(
         raise UnsupportedSpecError(
             "MRI production specs are supported only for pcf and Taylor-Couette"
         )
+    is_vector_potential = data.get("representation") == "vector_potential"
     if geometry == "pcf" and physics in {"mhd", "mri"}:
-        if magnetic_bc not in {"conducting", "pseudo_vacuum"}:
+        if magnetic_bc not in {"conducting", "pseudo_vacuum", "insulating"}:
             raise UnsupportedSpecError(
-                "PCF MHD/MRI production specs support conducting or pseudo-vacuum "
-                "magnetic walls only"
+                "PCF MHD/MRI production specs support conducting, pseudo-vacuum "
+                "or insulating magnetic walls"
             )
-        if (
-            magnetic_bc == "pseudo_vacuum"
-            and data.get("representation") == "vector_potential"
-        ):
+        if magnetic_bc == "pseudo_vacuum" and is_vector_potential:
             raise UnsupportedSpecError(
                 "pseudo-vacuum magnetic walls are wired for the primitive-b "
                 "family only (FJ-09); the vector-potential (curl) form needs "
                 "A-formulation boundary conditions"
+            )
+        if magnetic_bc == "insulating" and not is_vector_potential:
+            raise UnsupportedSpecError(
+                "insulating magnetic walls are wired for the vector-potential "
+                "(curl) family only; the primitive-b family has no vacuum "
+                "matching"
             )
     if (
         geometry == "taylor_couette"
@@ -486,7 +493,11 @@ def _reject_shenfun_unsupported_subcases(
         geometry == "taylor_couette"
         and physics in {"mhd", "mri"}
         and magnetic_bc == "insulating"
+        and not is_vector_potential
     ):
+        # The primitive/linear insulating path is the axisymmetric flux
+        # eigensolver; the vector-potential DNS imposes per-mode vacuum
+        # matching for every (m, kz) and carries no such restriction.
         m = int(mode.get("azimuthal_wavenumber", 0))
         kz = float(mode.get("axial_wavenumber", 0.0))
         if m != 0:

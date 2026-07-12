@@ -1,0 +1,174 @@
+{
+  "family": "shenfun",
+  "problem_id": "exp_pcf_mri_vp_insulating",
+  "geometry": "pcf",
+  "physics": "mri",
+  "support_state": "experimental",
+  "numerics_contract_version": 2,
+  "representation": "vector_potential",
+  "formulation": {
+    "internal": "curl/vector-potential PCF MRI/shearbox DNS with insulating (vacuum-matched) walls: B = B0 + curl A",
+    "pressure": "KMM velocity-vorticity flow block; no magnetic pressure variable"
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "A_x",
+    "A_y",
+    "A_z"
+  ],
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "magnetic_energy",
+    "maxwell_stress_xy",
+    "reynolds_stress",
+    "alpha_Sh",
+    "mean_bx",
+    "mean_by",
+    "mean_bz",
+    "insulating_bc_residual"
+  ],
+  "canonical_axes": {
+    "x": "wall-normal/shear-gradient direction",
+    "y": "streamwise direction",
+    "z": "spanwise/vertical-field direction"
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal (Chebyshev/Legendre)",
+    "axis_1": "y streamwise (Fourier)",
+    "axis_2": "z spanwise/vertical (Fourier)"
+  },
+  "nondimensional_groups": {
+    "Re": 200.0,
+    "Rm": 200.0,
+    "Pm": 1.0,
+    "Omega": 0.6666666666666666,
+    "S": 1.0,
+    "q_shear": 1.5,
+    "B0": 0.1,
+    "nu": 0.005,
+    "eta_mag": 0.005
+  },
+  "boundary_conditions": {
+    "velocity": {
+      "type": "no_slip_shearbox_walls"
+    },
+    "magnetic": {
+      "type": "insulating",
+      "details": "exact per-mode vacuum matching: b_x' = -+k b_x, b_y = -+(i ky/k) b_x, b_z = -+(i kz/k) b_x at x=+-1 via per-mode tau rows on the tangential potentials (P Neumann / Q Robin split)"
+    }
+  },
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 4.0,
+    "z_period": 1.0
+  },
+  "resolution": {
+    "smoke": {
+      "Nx": 9,
+      "Ny": 8,
+      "Nz": 8,
+      "dealias": 1.0
+    },
+    "start": {
+      "Nx": 17,
+      "Ny": 16,
+      "Nz": 16
+    },
+    "production": {
+      "Nx": 33,
+      "Ny": 32,
+      "Nz": 32
+    },
+    "dealias": {
+      "x": 1.0,
+      "y": 1.5,
+      "z": 1.5
+    },
+    "family": "L"
+  },
+  "time": {
+    "integrator": "IMEXRK222",
+    "dt": 0.005,
+    "final_time": 60.0
+  },
+  "initial_condition": {
+    "type": "linear_eigenmode",
+    "velocity_amplitude": 0.0,
+    "magnetic_amplitude": 0.0,
+    "amplitude": 1e-06,
+    "seeded_ky_mode": 0,
+    "seeded_kz_mode": 1
+  },
+  "forcing": {
+    "type": "rotation_shear_imposed_vertical_field",
+    "B0": 0.1,
+    "by": 0.0,
+    "bz": 0.025
+  },
+  "diagnostics": [
+    "magnetic_energy",
+    "growth_rate",
+    "maxwell_stress_xy",
+    "reynolds_stress",
+    "total_stress",
+    "transport_alpha",
+    "alpha_Sh",
+    "divergence_b_l2",
+    "divergence_u_l2",
+    "mean_bx",
+    "mean_by",
+    "mean_bz",
+    "mag_energy_mean",
+    "mag_energy_fluct",
+    "insulating_bc_residual"
+  ],
+  "expected_oracle": {
+    "type": "mri_saturation_ladder",
+    "source": "local ideal MRI optimum, pcf_mri_shearbox_v1, exp_pcf_mri_shearbox_growth cross-check, then GPU-generated saturated DNS golden through the curl workhorse",
+    "plan_inventory_id": "exp_PCF_MRI_vector_potential",
+    "fallback_rungs": [
+      1,
+      2,
+      3
+    ],
+    "linear_window_check": "growth over t in [1,3]; saturation uses E_mag[-1] > 2*E_mag[0] and monotone-then-plateau"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 1e-10,
+      "divergence_u_l2": 1e-10,
+      "growth_rate": 0.002,
+      "magnetic_energy": 1e-06,
+      "magnetic_energy_total": 1e-06,
+      "maxwell_stress_xy": 1e-06,
+      "total_stress": 1e-06,
+      "alpha_Sh": 1e-06,
+      "mean_bx": 1e-06,
+      "mean_by": 1e-06,
+      "mean_bz": 1e-06,
+      "mag_energy_mean": 1e-06,
+      "mag_energy_fluct": 1e-06,
+      "flux_drift_bx": 1e-06,
+      "flux_drift_by": 1e-06,
+      "flux_drift_bz": 1e-06,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy_growth_factor": 1e-06,
+      "reynolds_stress": 1e-06,
+      "total_energy": 1e-06,
+      "transport_alpha": 1e-06,
+      "alpha_B0": 1e-06,
+      "insulating_bc_residual": 1e-10
+    }
+  },
+  "golden": {
+    "artifact_id": "exp_pcf_mri_vp_insulating",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/exp_pcf_mri_vp_insulating.json --out runs/exp_pcf_mri_vp_insulating/<timestamp> --device auto --write-golden"
+  },
+  "unsupported_subcases": []
+}
