@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +14,10 @@ from production.quench import (
     checkpoint_bank_entry,
     validate_quench,
 )
+from production.sweep import apply_overrides
+
+ROOT = Path(__file__).resolve().parents[2]
+TC_BASE = ROOT / "production" / "runs" / "exp_tc_mri_vector_potential.json"
 
 
 def _parent():
@@ -117,3 +123,56 @@ def test_checkpoint_bank_entry_records_provenance():
 def test_burn_in_horizon_quarantines_inherited_history():
     h = burn_in_horizon(tstep0=6400, burn_in_steps=1000)
     assert h["classification_valid_after_tstep"] == 7400
+
+
+def _tc_parent(*, materialized: bool = True):
+    spec = json.loads(TC_BASE.read_text())
+    return apply_overrides(spec, {}) if materialized else spec
+
+
+def test_tc_quench_allows_coupled_local_native_and_legacy_rm_aliases():
+    parent = _tc_parent()
+    child = apply_overrides(
+        parent,
+        {"Rm_h": 0.5 * parent["nondimensional_groups"]["Rm_h"]},
+    )
+
+    result = validate_quench(parent, child)
+    changed = result["changed"]
+    for key in ("Rm_h", "Rm_TC", "Rm", "eta_mag"):
+        assert f"nondimensional_groups.{key}" in changed
+    assert changed["nondimensional_groups.Rm_h"] == pytest.approx(
+        (
+            parent["nondimensional_groups"]["Rm_h"],
+            child["nondimensional_groups"]["Rm_h"],
+        )
+    )
+
+
+def test_tc_quench_canonicalizes_legacy_parent_before_alias_diff():
+    parent = _tc_parent(materialized=False)
+    child = apply_overrides(parent, {"Rm_h": 100.0})
+
+    result = validate_quench(parent, child)
+    assert "nondimensional_groups.Rm_h" in result["changed"]
+    assert "nondimensional_groups.Rm_TC" in result["changed"]
+
+
+def test_tc_quench_rejects_inconsistent_coupled_alias():
+    parent = _tc_parent()
+    child = apply_overrides(parent, {"Rm_h": 100.0})
+    child["nondimensional_groups"]["Rm_TC"] *= 0.9
+
+    with pytest.raises(QuenchError, match="invalid Taylor-Couette quench physics"):
+        validate_quench(parent, child)
+
+
+def test_tc_quench_rejects_increasing_local_and_native_reynolds_numbers():
+    parent = _tc_parent()
+    child = apply_overrides(
+        parent,
+        {"Re_h": 2.0 * parent["nondimensional_groups"]["Re_h"]},
+    )
+
+    with pytest.raises(QuenchError, match="cannot increase"):
+        validate_quench(parent, child)

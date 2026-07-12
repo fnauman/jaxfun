@@ -815,6 +815,7 @@ def _run_taylor_couette_hydro(spec: dict[str, Any]) -> dict[str, Any]:
 
     resolution = spec["resolution"]
     groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     mode = spec.get("mode", {})
     base = CircularCouette(
         float(groups["R1"]),
@@ -825,7 +826,7 @@ def _run_taylor_couette_hydro(spec: dict[str, Any]) -> dict[str, Any]:
     n = int(resolution.get("N", resolution.get("Nr", 28)))
     operator = TaylorCouetteLinearJax(
         base,
-        nu=float(groups["nu"]),
+        nu=physics.nu,
         N=n,
         family=resolution.get("family", "C"),
     )
@@ -868,6 +869,7 @@ def _run_taylor_couette_hydro_saturation(
 
     resolution = _selected_resolution(spec)
     groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     base = CircularCouette(
         float(groups["R1"]),
         float(groups["R2"]),
@@ -876,7 +878,7 @@ def _run_taylor_couette_hydro_saturation(
     )
     solver = AxisymmetricTCDNSJax(
         base,
-        nu=float(groups["nu"]),
+        nu=physics.nu,
         Nr=int(resolution.get("Nr", resolution.get("N", 40))),
         Nz=int(resolution.get("Nz", 16)),
         Lz=float(spec["domain"]["z_period"]),
@@ -993,6 +995,7 @@ def _run_taylor_couette_hydro_dns(
 
     resolution = spec["resolution"]
     groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     base = CircularCouette(
         float(groups["R1"]),
         float(groups["R2"]),
@@ -1001,7 +1004,7 @@ def _run_taylor_couette_hydro_dns(
     )
     solver = AxisymmetricTCDNSJax(
         base,
-        nu=float(groups["nu"]),
+        nu=physics.nu,
         Nr=int(resolution.get("Nr", resolution.get("N", 40))),
         Nz=int(resolution.get("Nz", 8)),
         Lz=float(spec["domain"]["z_period"]),
@@ -2046,6 +2049,7 @@ def _run_taylor_couette_mhd(spec: dict[str, Any]) -> dict[str, Any]:
 
     resolution = spec["resolution"]
     groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     mode = spec.get("mode", {})
     base = CircularCouette(
         float(groups["R1"]),
@@ -2059,9 +2063,9 @@ def _run_taylor_couette_mhd(spec: dict[str, Any]) -> dict[str, Any]:
     magnetic_bc = _magnetic_bc(spec)
     operator = TaylorCouetteMRIJax(
         base,
-        B0=float(groups.get("B0", 0.1)),
-        nu=float(groups["nu"]),
-        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        B0=physics.B0,
+        nu=physics.nu,
+        eta_mag=physics.eta if physics.eta is not None else physics.nu,
         N=n,
         family=resolution.get("family", "C"),
         magnetic_bc=magnetic_bc,
@@ -2100,6 +2104,7 @@ def _run_taylor_couette_mhd_saturation(
         )
     resolution = _selected_resolution(spec)
     groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     solver = AxisymmetricMRIDNSJax(
         CircularCouette(
             float(groups["R1"]),
@@ -2107,9 +2112,9 @@ def _run_taylor_couette_mhd_saturation(
             float(groups["Omega1"]),
             float(groups["Omega2"]),
         ),
-        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
-        nu=float(groups["nu"]),
-        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        B0=physics.B0,
+        nu=physics.nu,
+        eta_mag=physics.eta if physics.eta is not None else physics.nu,
         Nr=int(resolution.get("Nr", resolution.get("N", 40))),
         Nz=int(resolution.get("Nz", 24)),
         Lz=float(spec["domain"]["z_period"]),
@@ -2222,6 +2227,7 @@ def _tc_vp_solver_from_spec(spec: dict[str, Any]):
 
     resolution = _selected_resolution(spec)
     groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     return TaylorCouetteVPMRIDNSJax(
         CircularCouette(
             float(groups["R1"]),
@@ -2229,9 +2235,9 @@ def _tc_vp_solver_from_spec(spec: dict[str, Any]):
             float(groups["Omega1"]),
             float(groups["Omega2"]),
         ),
-        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
-        nu=float(groups["nu"]),
-        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        B0=physics.B0,
+        nu=physics.nu,
+        eta_mag=physics.eta if physics.eta is not None else physics.nu,
         Nr=int(resolution.get("Nr", resolution.get("N", 24))),
         Ntheta=int(resolution.get("Ntheta", 8)),
         Nz=int(resolution.get("Nz", 16)),
@@ -2538,6 +2544,7 @@ def _run_taylor_couette_mhd_dns(
         )
     resolution = spec["resolution"]
     groups = spec["nondimensional_groups"]
+    physics = _resolved_physics(spec)
     solver = AxisymmetricMRIDNSJax(
         CircularCouette(
             float(groups["R1"]),
@@ -2545,9 +2552,9 @@ def _run_taylor_couette_mhd_dns(
             float(groups["Omega1"]),
             float(groups["Omega2"]),
         ),
-        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
-        nu=float(groups["nu"]),
-        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        B0=physics.B0,
+        nu=physics.nu,
+        eta_mag=physics.eta if physics.eta is not None else physics.nu,
         Nr=int(resolution.get("Nr", resolution.get("N", 40))),
         Nz=int(resolution.get("Nz", 8)),
         Lz=float(spec["domain"]["z_period"]),
