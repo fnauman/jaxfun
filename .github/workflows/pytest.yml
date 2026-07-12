@@ -84,7 +84,7 @@ jobs:
         if: matrix.name == 'integration tests'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfftw3-dev libfftw3-mpi-dev libopenmpi-dev
+          sudo apt-get install -y libfftw3-dev libfftw3-mpi-dev libhdf5-openmpi-dev libopenmpi-dev
 
       - name: Checkout shenfun reference
         if: matrix.name == 'integration tests'
@@ -96,7 +96,13 @@ jobs:
 
       - name: Install shenfun reference
         if: matrix.name == 'integration tests'
-        run: uv pip install "scipy<1.16" numba -e .reference/shenfun
+        env:
+          CC: mpicc
+          HDF5_DIR: /usr/lib/x86_64-linux-gnu/hdf5/openmpi
+          HDF5_MPI: "ON"
+        run: |
+          uv pip install "scipy<1.16" numba -e .reference/shenfun
+          uv pip install --reinstall --no-binary h5py --no-deps "h5py==3.16.0"
 
       - name: Run tests
         env:
