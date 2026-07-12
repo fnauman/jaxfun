@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import health, observables
+from .adaptive import adaptive_cfl_from_spec, run_adaptive_cfl
 from .checkpoint import write_production_checkpoint
 
 
@@ -281,6 +282,16 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             flow=KMMState(u=tuple(payload["flow_u"]), g=payload["flow_g"]),
             A=tuple(payload["A"]),
         )
+    if state_kind == "tc_vector_potential_mhd_saturation":
+        from examples.taylor_couette_vp_jax import TCVPState
+
+        return TCVPState(
+            u=tuple(payload["u"]),
+            p=payload["p"],
+            A=tuple(payload["A"]),
+            nonlinear_old=tuple(payload["nonlinear_old"]),
+            have_old=payload["have_old"],
+        )
     raise ValueError(f"unsupported resume state_kind {state_kind!r}")
 
 
@@ -293,6 +304,31 @@ def _remaining_steps_from_resume(
             f"resume checkpoint step {int(tstep0)} is beyond target step {target}"
         )
     return target, target - int(tstep0)
+
+
+def _adaptive_elapsed_target(
+    spec: dict[str, Any], *, steps: int | None, t0: float
+) -> float:
+    """Physical time remaining for an adaptive run.
+
+    An explicit step override preserves the CLI contract of ``steps * initial
+    dt``.  Without an override, adaptive stepping uses ``final_time`` directly,
+    so exact endpoint landing does not require it to be an integer multiple of
+    the initial timestep.
+    """
+
+    if steps is not None:
+        if int(steps) < 0:
+            raise ValueError("steps override must be non-negative")
+        return int(steps) * float(spec["time"]["dt"])
+    remaining = float(spec["time"]["final_time"]) - float(t0)
+    tolerance = 1.0e-12 * max(1.0, abs(float(spec["time"]["final_time"])))
+    if remaining < -tolerance:
+        raise ValueError(
+            f"resume time {float(t0):g} is beyond adaptive final_time "
+            f"{float(spec['time']['final_time']):g}"
+        )
+    return max(0.0, remaining)
 
 
 def _saturation_passed(
@@ -340,6 +376,24 @@ def run_supported_spec(
     """
 
     if (
+        spec.get("representation") == "vector_potential"
+        and adaptive_cfl_from_spec(spec) is not None
+        and (checkpoint_every is not None or snapshot_every is not None)
+    ):
+        requested = ", ".join(
+            name
+            for name, value in (
+                ("checkpoint_every", checkpoint_every),
+                ("snapshot_every", snapshot_every),
+            )
+            if value is not None
+        )
+        raise ProductionOracleNotImplementedError(
+            "adaptive_cfl does not yet support intermediate checkpoint/snapshot "
+            f"cadence ({requested}); remove those options or use fixed dt"
+        )
+
+    if (
         spec["geometry"] == "taylor_couette"
         and spec["physics"] == "hydro"
         and spec["expected_oracle"]["type"] == "tc_hydro_saturation_ladder"
@@ -369,6 +423,25 @@ def run_supported_spec(
             diagnostics_every=diagnostics_every,
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
+        )
+    if (
+        spec["geometry"] == "taylor_couette"
+        and spec["physics"] in {"mhd", "mri"}
+        and spec.get("representation") == "vector_potential"
+    ):
+        return _run_taylor_couette_vp_mhd_saturation(
+            spec,
+            steps=steps,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
+            device_record=device_record,
+            resume_checkpoint=resume_checkpoint,
+            quench=quench,
+            on_row=on_row,
+            checkpoint_bank=checkpoint_bank,
+            burn_in_steps=burn_in_steps,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -1464,13 +1537,21 @@ def _primitive_solver_from_spec(spec: dict[str, Any]):
 def _curl_solver_from_spec(spec: dict[str, Any]):
     """Construct the vector-potential workhorse exactly as the oracle does."""
 
-    from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
+    from examples.pcf_mhd_mri_shearpy_jax import (
+        PlaneCouetteMRIShearpyInsulatingJax,
+        PlaneCouetteMRIShearpyJax,
+    )
 
+    magnetic_bc = _magnetic_bc(spec)
+    solver_cls = {
+        "conducting": PlaneCouetteMRIShearpyJax,
+        "insulating": PlaneCouetteMRIShearpyInsulatingJax,
+    }[magnetic_bc]
     resolution = _selected_resolution(spec)
     physics = _resolved_physics(spec)
     initial = spec["initial_condition"]
     x0, x1 = (float(v) for v in spec["domain"]["x"])
-    return PlaneCouetteMRIShearpyJax(
+    return solver_cls(
         N=(
             int(resolution.get("Nx", resolution.get("N", 17))),
             int(resolution.get("Ny", 16)),
@@ -1535,6 +1616,8 @@ def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
     if "alpha" in diag:  # net-flux alpha only when B0 != 0 (ZNF-safe)
         scalars["transport_alpha"] = float(diag["alpha"])
         scalars["alpha_B0"] = float(diag["alpha_B0"])
+    if "insulating_bc_residual" in diag:
+        scalars["insulating_bc_residual"] = float(diag["insulating_bc_residual"])
     return scalars
 
 
@@ -1564,11 +1647,11 @@ def _run_pcf_vector_potential_mhd_saturation(
     """
 
     magnetic_bc = _magnetic_bc(spec)
-    if magnetic_bc != "conducting":
+    if magnetic_bc not in {"conducting", "insulating"}:
         raise ProductionOracleNotImplementedError(
             "the vector-potential (curl) PCF-MRI family is wired for conducting "
-            f"walls only, got {magnetic_bc!r}; pseudo-vacuum runs use the "
-            "primitive-b family (FJ-09)"
+            f"or insulating walls, got {magnetic_bc!r}; pseudo-vacuum runs use "
+            "the primitive-b family (FJ-09)"
         )
     _assert_pcf_half_gap_domain(spec)
     solver = _curl_solver_from_spec(spec)
@@ -1582,9 +1665,14 @@ def _run_pcf_vector_potential_mhd_saturation(
     # FJ-05: baseline scalars come from the state actually evolved (the loaded
     # parent checkpoint on a resume/quench), not the fresh configured seed.
     first_scalars = _pcf_curl_scalars(solver, state)
-    target_steps, n_steps = _remaining_steps_from_resume(
-        spec, steps=steps, tstep0=tstep0
-    )
+    adaptive = adaptive_cfl_from_spec(spec)
+    if adaptive is None:
+        _target_steps, n_steps = _remaining_steps_from_resume(
+            spec, steps=steps, tstep0=tstep0
+        )
+        adaptive_elapsed = None
+    else:
+        adaptive_elapsed = _adaptive_elapsed_target(spec, steps=steps, t0=t0)
 
     rows: list[dict[str, Any]] = []
 
@@ -1608,43 +1696,82 @@ def _run_pcf_vector_potential_mhd_saturation(
             "dissipation_kinetic": float(diag["dissipation_kinetic"]),
             "dissipation_magnetic": float(diag["dissipation_magnetic"]),
             "energy_convention": "integral_abs2",
+            "dt": float(solver.dt),
             **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
+            **(
+                {"insulating_bc_residual": float(diag["insulating_bc_residual"])}
+                if "insulating_bc_residual" in diag
+                else {}
+            ),
+            **({"cfl_total": float(diag["cfl_total"])} if "cfl_total" in diag else {}),
         }
         rows.append(row)
         if on_row is not None:
             on_row(row)
 
     health_observations: list[dict[str, float]] = []
-    out = _solve_with_optional_checkpoints(
-        solver,
-        state,
-        n_steps,
-        spec=spec,
-        out_dir=out_dir,
-        checkpoint_every=checkpoint_every,
-        snapshot_every=snapshot_every,
-        diagnostics_every=diagnostics_every,
-        state_kind="pcf_vector_potential_mhd_saturation",
-        device_record=device_record,
-        on_diagnostics_row=collect,
-        t0=t0,
-        tstep0=tstep0,
-        health_block=_PRODUCTION_HEALTH_BLOCK,
-        health_scalars_fn=health.curl_health_scalars,
-        health_observations=health_observations,
-        checkpoint_bank=checkpoint_bank,
-        plateau_rows=rows,
-    )
+    adaptive_record: dict[str, Any] | None = None
+    if adaptive is not None:
+        # Experimental adaptive-CFL path (chunked dt adaptation with exact
+        # time accounting).  Fresh starts only; cadence IO reduces to
+        # per-check diagnostics rows plus a final checkpoint.
+        if resume_checkpoint is not None or quench or checkpoint_bank:
+            raise ProductionOracleNotImplementedError(
+                "adaptive_cfl runs are wired for fresh starts without the "
+                "checkpoint-bank/quench machinery (experimental)"
+            )
+        out, adaptive_record = _run_vp_adaptive_blocks(
+            solver,
+            state,
+            elapsed_target=adaptive_elapsed,
+            config=adaptive,
+            spec=spec,
+            health_scalars_fn=health.curl_health_scalars,
+            diagnostics_row_fn=collect,
+            health_observations=health_observations,
+            t0=t0,
+            tstep0=tstep0,
+            out_dir=out_dir,
+            state_kind="pcf_vector_potential_mhd_saturation",
+            device_record=device_record,
+        )
+    else:
+        out = _solve_with_optional_checkpoints(
+            solver,
+            state,
+            n_steps,
+            spec=spec,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
+            state_kind="pcf_vector_potential_mhd_saturation",
+            device_record=device_record,
+            on_diagnostics_row=collect,
+            t0=t0,
+            tstep0=tstep0,
+            health_block=_PRODUCTION_HEALTH_BLOCK,
+            health_scalars_fn=health.curl_health_scalars,
+            health_observations=health_observations,
+            checkpoint_bank=checkpoint_bank,
+            plateau_rows=rows,
+        )
     final_scalars = _pcf_curl_scalars(solver, out)
-    elapsed = target_steps * float(spec["time"]["dt"])
-    # Growth is measured from the evolved baseline over the steps actually taken
-    # (n_steps == target_steps on a fresh run; smaller on a resume/quench).
-    growth_rate = _growth_rate_from_energy(
-        first_scalars["total_energy"],
-        final_scalars["total_energy"],
-        n_steps,
-        solver.dt,
-    )
+    if adaptive_record is not None:
+        elapsed = float(adaptive_record["elapsed_time"])
+        growth_rate = _growth_rate_from_elapsed(
+            first_scalars["total_energy"], final_scalars["total_energy"], elapsed
+        )
+    else:
+        elapsed = n_steps * float(spec["time"]["dt"])
+        # Growth is measured from the evolved baseline over the steps actually
+        # taken (n_steps == target_steps on a fresh run; smaller on a resume).
+        growth_rate = _growth_rate_from_energy(
+            first_scalars["total_energy"],
+            final_scalars["total_energy"],
+            n_steps,
+            solver.dt,
+        )
     magnetic_growth = (
         final_scalars["magnetic_energy"] / first_scalars["magnetic_energy"]
         if first_scalars["magnetic_energy"] > 0.0
@@ -1679,12 +1806,19 @@ def _run_pcf_vector_potential_mhd_saturation(
         # family reports the physical 0.5x per its own reference.
         "energy_convention": "integral_abs2",
     }
+    if adaptive_record is not None:
+        scalars.update(_adaptive_scalars(adaptive_record))
     first = {
         "t": float(t0),
         **{k: v for k, v in first_scalars.items() if _is_number_scalar(v)},
     }
     last = {
-        "t": elapsed,
+        "t": float(t0) + elapsed,
+        "dt": float(
+            adaptive_record["dt_last_used"]
+            if adaptive_record is not None
+            else solver.dt
+        ),
         **{k: v for k, v in final_scalars.items() if _is_number_scalar(v)},
         "growth_rate": float(growth_rate),
         "magnetic_energy_growth_factor": float(magnetic_growth),
@@ -1800,6 +1934,38 @@ def _run_pcf_mhd_like(spec: dict[str, Any]) -> dict[str, Any]:
 def _magnetic_bc(spec: dict[str, Any]) -> str:
     magnetic = spec.get("boundary_conditions", {}).get("magnetic", "conducting")
     return magnetic.get("type", magnetic) if isinstance(magnetic, dict) else magnetic
+
+
+def _tc_projected_divergence_guard(spec: dict[str, Any]) -> float:
+    """Return the explicit TC projected-divergence qualification ceiling.
+
+    The witness is amplitude- and resolution-dependent even though ``div(curl
+    A)`` is analytically zero.  Campaign specs may therefore declare a scalar
+    ceiling or tier-specific ceilings.  Direct unit specs retain the strict
+    x64 qualification default.
+    """
+
+    configured = spec.get("expected_oracle", {}).get("divergence_b_guard_l2", 1.0e-12)
+    if isinstance(configured, dict):
+        resolution = _selected_resolution(spec)
+        tier = "production"
+        for candidate in ("smoke", "start", "production"):
+            block = spec.get("resolution", {}).get(candidate)
+            if isinstance(block, dict) and all(
+                resolution.get(key) == value for key, value in block.items()
+            ):
+                tier = candidate
+                break
+        if tier not in configured:
+            raise ValueError(
+                "expected_oracle.divergence_b_guard_l2 is missing the "
+                f"{tier!r} resolution tier"
+            )
+        configured = configured[tier]
+    limit = float(configured)
+    if not math.isfinite(limit) or limit <= 0.0:
+        raise ValueError("divergence_b_guard_l2 must be finite and positive")
+    return limit
 
 
 def _quadratic_energy(q: np.ndarray, matrix: np.ndarray) -> float:
@@ -2048,6 +2214,309 @@ def _run_taylor_couette_mhd_saturation(
     return {"scalars": scalars, "time_series": series}
 
 
+def _tc_vp_solver_from_spec(spec: dict[str, Any]):
+    """Construct the vector-potential TC solver exactly as the oracle does."""
+
+    from examples.taylor_couette_linear_jax import CircularCouette
+    from examples.taylor_couette_vp_jax import TaylorCouetteVPMRIDNSJax
+
+    resolution = _selected_resolution(spec)
+    groups = spec["nondimensional_groups"]
+    return TaylorCouetteVPMRIDNSJax(
+        CircularCouette(
+            float(groups["R1"]),
+            float(groups["R2"]),
+            float(groups["Omega1"]),
+            float(groups["Omega2"]),
+        ),
+        B0=float(groups.get("B0", spec.get("forcing", {}).get("B0", 0.1))),
+        nu=float(groups["nu"]),
+        eta_mag=float(groups.get("eta_mag", groups["nu"])),
+        Nr=int(resolution.get("Nr", resolution.get("N", 24))),
+        Ntheta=int(resolution.get("Ntheta", 8)),
+        Nz=int(resolution.get("Nz", 16)),
+        Lz=float(spec["domain"]["z_period"]),
+        dt=float(spec["time"]["dt"]),
+        family=spec["resolution"].get("family", resolution.get("family", "L")),
+        dealias=float(spec["resolution"].get("dealias", 1.5)),
+        magnetic_bc=_magnetic_bc(spec),
+    )
+
+
+def _tc_vp_scalars(solver: Any, state: Any) -> dict[str, float]:
+    """Canonical scalars of the vector-potential TC family.
+
+    Energies are the physical 0.5 * integral |field|^2 r dr dtheta dz over the
+    full annulus (the 2*pi azimuthal integral included -- the axisymmetric
+    primitive family omits it, so cross-family comparisons must convert).
+    """
+
+    diag = solver.diagnostics(state)
+    scalars = {
+        "box_volume": float(solver._volume()),
+        "kinetic_energy": float(diag["Ekin"]),
+        "magnetic_energy": float(diag["Emag"]),
+        "total_energy": float(diag["E"]),
+        "divergence_u": float(diag["divu"]),
+        "divergence_b": float(diag["divb"]),
+        "divergence_u_l2": float(diag["divu_l2"]),
+        "divergence_b_l2": float(diag["divb_l2"]),
+        "reynolds_stress": float(diag["reynolds_rt"]),
+        "maxwell_stress_rt": float(diag["maxwell_rt"]),
+        "total_stress": float(diag["total_stress"]),
+        "mean_bz": float(diag["mean_bz"]),
+    }
+    if "insulating_bc_residual" in diag:
+        scalars["insulating_bc_residual"] = float(diag["insulating_bc_residual"])
+    return scalars
+
+
+def _run_taylor_couette_vp_mhd_saturation(
+    spec: dict[str, Any],
+    *,
+    steps: int | None = None,
+    out_dir: str | Path | None = None,
+    checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    diagnostics_every: int | None = None,
+    device_record: dict[str, Any] | None = None,
+    resume_checkpoint: Any | None = None,
+    quench: bool = False,
+    on_row: Any | None = None,
+    checkpoint_bank: bool = False,
+    burn_in_steps: int = 0,
+) -> dict[str, Any]:
+    """Vector-potential (curl) Taylor-Couette MHD/MRI DNS runner.
+
+    ``B = B0 e_z + curl(A)`` in full 3D ``(theta, z, r)``; conducting or
+    insulating cylinders; seeded from the matching linear eigensolver.  The
+    solenoidal witness (``divergence_b_l2``) is the divergence of the
+    projected coefficient representation of ``b`` and must stay at its
+    resolution floor for the whole horizon -- the invariant the primitive-b
+    family cannot hold at finite amplitude.
+    """
+
+    magnetic_bc = _magnetic_bc(spec)
+    if magnetic_bc not in {"conducting", "insulating"}:
+        raise ProductionOracleNotImplementedError(
+            "the vector-potential TC family is wired for conducting or "
+            f"insulating cylinders, got {magnetic_bc!r}"
+        )
+    divergence_b_guard = _tc_projected_divergence_guard(spec)
+    solver = _tc_vp_solver_from_spec(spec)
+    initial = spec["initial_condition"]
+    m_seed = int(initial.get("azimuthal_mode", 0))
+    if magnetic_bc == "insulating" and m_seed != 0:
+        raise ProductionOracleNotImplementedError(
+            "insulating TC *eigenmode seeding* is anchored to the m=0 flux "
+            "eigensolver; use initial_condition.symmetry_break_amplitude to "
+            "populate non-axisymmetric modes on top of the m=0 seed"
+        )
+    if "seeded_kz_mode" in initial:
+        kz_mode = int(initial["seeded_kz_mode"])
+    elif "mode" in spec:
+        kz_mode = _kz_mode_from_spec(spec, solver.Lz, strict=False)
+    else:
+        kz_mode = 1
+    state, eigenvalue = solver.seed_linear_eigenmode(
+        m=m_seed,
+        kz_mode=kz_mode,
+        amp=float(initial.get("amplitude", 1.0e-4)),
+    )
+    # An axisymmetric eigenmode seed stays axisymmetric under nonlinear
+    # evolution, so production runs superpose a small non-axisymmetric
+    # solenoidal perturbation by default spec so the full 3D dynamics (and,
+    # for insulating walls, the non-axisymmetric vacuum-matching rows) are
+    # actually exercised.
+    sb_amp = float(initial.get("symmetry_break_amplitude", 0.0))
+    if sb_amp > 0.0:
+        state = solver.add_symmetry_breaking_perturbation(
+            state,
+            sb_amp,
+            m=int(initial.get("symmetry_break_m", 1)),
+            kz_mode=kz_mode,
+        )
+    state, tstep0, t0 = _resume_or_initial_state(
+        resume_checkpoint,
+        state,
+        spec=spec,
+        state_kind="tc_vector_potential_mhd_saturation",
+        quench=quench,
+    )
+    first_scalars = _tc_vp_scalars(solver, state)
+    _raise_on_divergence_drift(
+        solver,
+        state,
+        t=t0,
+        tstep=tstep0,
+        diagnostics={"divergence_b_l2": first_scalars["divergence_b_l2"]},
+        magnetic_limit=divergence_b_guard,
+    )
+    adaptive = adaptive_cfl_from_spec(spec)
+    if adaptive is None:
+        _target_steps, n_steps = _remaining_steps_from_resume(
+            spec, steps=steps, tstep0=tstep0
+        )
+        adaptive_elapsed = None
+    else:
+        adaptive_elapsed = _adaptive_elapsed_target(spec, steps=steps, t0=t0)
+
+    rows: list[dict[str, Any]] = []
+
+    def collect(t: float, tstep: int, diag: dict[str, Any]) -> None:
+        row = {
+            "t": float(t),
+            "kinetic_energy": float(diag["Ekin"]),
+            "magnetic_energy": float(diag["Emag"]),
+            "total_energy": float(diag["E"]),
+            "divergence_u_l2": float(diag["divu_l2"]),
+            "divergence_b_l2": float(diag["divb_l2"]),
+            "reynolds_stress": float(diag["reynolds_rt"]),
+            "maxwell_stress_rt": float(diag["maxwell_rt"]),
+            "total_stress": float(diag["total_stress"]),
+            "mean_bz": float(diag["mean_bz"]),
+            "dt": float(solver.dt),
+            **(
+                {"insulating_bc_residual": float(diag["insulating_bc_residual"])}
+                if "insulating_bc_residual" in diag
+                else {}
+            ),
+            **({"cfl_total": float(diag["cfl_total"])} if "cfl_total" in diag else {}),
+        }
+        rows.append(row)
+        if on_row is not None:
+            on_row(row)
+
+    health_observations: list[dict[str, float]] = []
+    adaptive_record: dict[str, Any] | None = None
+    if adaptive is not None:
+        if resume_checkpoint is not None or quench or checkpoint_bank:
+            raise ProductionOracleNotImplementedError(
+                "adaptive_cfl runs are wired for fresh starts without the "
+                "checkpoint-bank/quench machinery (experimental)"
+            )
+        out, adaptive_record = _run_vp_adaptive_blocks(
+            solver,
+            state,
+            elapsed_target=adaptive_elapsed,
+            config=adaptive,
+            spec=spec,
+            health_scalars_fn=health.tc_curl_health_scalars,
+            diagnostics_row_fn=collect,
+            health_observations=health_observations,
+            t0=t0,
+            tstep0=tstep0,
+            out_dir=out_dir,
+            state_kind="tc_vector_potential_mhd_saturation",
+            device_record=device_record,
+            magnetic_divergence_limit=divergence_b_guard,
+        )
+    else:
+        out = _solve_with_optional_checkpoints(
+            solver,
+            state,
+            n_steps,
+            spec=spec,
+            out_dir=out_dir,
+            checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            diagnostics_every=diagnostics_every,
+            state_kind="tc_vector_potential_mhd_saturation",
+            device_record=device_record,
+            on_diagnostics_row=collect,
+            t0=t0,
+            tstep0=tstep0,
+            health_block=_PRODUCTION_HEALTH_BLOCK,
+            health_scalars_fn=health.tc_curl_health_scalars,
+            health_observations=health_observations,
+            checkpoint_bank=checkpoint_bank,
+            plateau_rows=rows,
+            magnetic_divergence_limit=divergence_b_guard,
+        )
+    final_scalars = _tc_vp_scalars(solver, out)
+    if adaptive_record is not None:
+        elapsed = float(adaptive_record["elapsed_time"])
+        growth_rate = _growth_rate_from_elapsed(
+            first_scalars["total_energy"], final_scalars["total_energy"], elapsed
+        )
+    else:
+        elapsed = n_steps * float(spec["time"]["dt"])
+        growth_rate = _growth_rate_from_energy(
+            first_scalars["total_energy"],
+            final_scalars["total_energy"],
+            n_steps,
+            solver.dt,
+        )
+    magnetic_growth = (
+        final_scalars["magnetic_energy"] / first_scalars["magnetic_energy"]
+        if first_scalars["magnetic_energy"] > 0.0
+        else 0.0
+    )
+    saturation_passed = _saturation_passed(
+        magnetic_growth,
+        threshold=2.0,
+        final_energies=(
+            final_scalars["kinetic_energy"],
+            final_scalars["magnetic_energy"],
+            final_scalars["total_energy"],
+            final_scalars["divergence_u_l2"],
+            final_scalars["divergence_b_l2"],
+        ),
+    )
+    scalars = {
+        **final_scalars,
+        "growth_rate": float(growth_rate),
+        "growth_rate_linear": float(eigenvalue.real),
+        "magnetic_energy_growth_factor": float(magnetic_growth),
+        "saturation_check_passed": bool(saturation_passed),
+        "magnetic_bc": magnetic_bc,
+        "representation": "vector_potential",
+        "divergence_b_guard_l2": float(divergence_b_guard),
+        # 0.5 * integral |field|^2 r dr dtheta dz over the full annulus; the
+        # axisymmetric primitive family omits the 2*pi azimuthal factor.
+        "energy_convention": "half_integral_abs2_annulus",
+    }
+    if adaptive_record is not None:
+        scalars.update(_adaptive_scalars(adaptive_record))
+    first = {
+        "t": float(t0),
+        **{k: v for k, v in first_scalars.items() if _is_number_scalar(v)},
+        "growth_rate_linear": float(eigenvalue.real),
+    }
+    last = {
+        "t": float(t0) + elapsed,
+        "dt": float(
+            adaptive_record["dt_last_used"]
+            if adaptive_record is not None
+            else solver.dt
+        ),
+        **{k: v for k, v in final_scalars.items() if _is_number_scalar(v)},
+        "growth_rate": float(growth_rate),
+        "magnetic_energy_growth_factor": float(magnetic_growth),
+    }
+    series = _dedupe_time_rows([first, *rows, last])
+    analysis_rows, analysis_start = _analysis_window(
+        rows, t0=t0, dt=float(spec["time"]["dt"]), burn_in_steps=burn_in_steps
+    )
+    fit_series = (
+        series if analysis_start is None else _dedupe_time_rows([*analysis_rows, last])
+    )
+    scalars.update(_stationarity_scalars(fit_series, key="magnetic_energy"))
+    if analysis_start is not None:
+        scalars["analysis_burn_in_steps"] = int(burn_in_steps)
+        scalars["analysis_t_start"] = float(analysis_start)
+    scalars.update(_max_health_observations(health_observations))
+    tau = health.correlation_time(analysis_rows)
+    if tau is not None:
+        scalars["correlation_time_total_stress"] = float(tau)
+        independent = health.effective_independent_samples(
+            analysis_rows, correlation=tau
+        )
+        if independent is not None:
+            scalars["effective_independent_samples_total_stress"] = float(independent)
+    return {"scalars": scalars, "time_series": series}
+
+
 def _run_taylor_couette_mhd_dns(
     spec: dict[str, Any],
     *,
@@ -2180,6 +2649,7 @@ def _solve_with_optional_checkpoints(
     health_observations: list[dict[str, float]] | None = None,
     checkpoint_bank: bool = False,
     plateau_rows: list[dict[str, Any]] | None = None,
+    magnetic_divergence_limit: float | None = None,
 ) -> Any:
     if checkpoint_every is not None and checkpoint_every <= 0:
         raise ValueError("checkpoint_every must be positive")
@@ -2317,7 +2787,12 @@ def _solve_with_optional_checkpoints(
             solver, candidate_state, t=t, tstep=tstep, diagnostics=diag
         )
         _raise_on_divergence_drift(
-            solver, candidate_state, t=t, tstep=tstep, diagnostics=diag
+            solver,
+            candidate_state,
+            t=t,
+            tstep=tstep,
+            diagnostics=diag,
+            magnetic_limit=magnetic_divergence_limit,
         )
         evaluate_health(t, tstep, candidate_state)
         return False
@@ -2466,6 +2941,7 @@ def _raise_on_resolution_health(
     t: float,
     tstep: int,
     enforce_spectral: bool = True,
+    enforce_cfl: bool = True,
 ) -> None:
     """Abort as soon as CFL, spectral tails, or occupancy violate policy."""
 
@@ -2479,7 +2955,7 @@ def _raise_on_resolution_health(
             f"spectral_tail_max={scalars['spectral_tail_max']:.6g} > "
             f"{health.EARLY_ABORT_SPECTRAL_TAIL_LIMIT:g}"
         )
-    if scalars.get("cfl_total", 0.0) > health.CFL_LIMIT:
+    if enforce_cfl and scalars.get("cfl_total", 0.0) > health.CFL_LIMIT:
         offenders.append(f"cfl_total={scalars['cfl_total']:.6g} > {health.CFL_LIMIT:g}")
     if (
         enforce_spectral
@@ -2567,6 +3043,7 @@ def _raise_on_divergence_drift(
     t: float,
     tstep: int,
     diagnostics: dict[str, Any] | None = None,
+    magnetic_limit: float | None = None,
 ) -> None:
     if diagnostics is None:
         diagnostics_fn = getattr(solver, "diagnostics", None)
@@ -2583,13 +3060,21 @@ def _raise_on_divergence_drift(
         except (TypeError, ValueError):
             offenders.append(f"{key}=non-numeric")
             continue
-        if not math.isfinite(magnitude) or magnitude > _DIVERGENCE_GUARD_LIMIT:
-            offenders.append(f"{key}={magnitude:g}")
+        normalized = str(key).lower().replace("-", "_")
+        is_magnetic = normalized.startswith("divb") or normalized.startswith(
+            "divergence_b"
+        )
+        limit = (
+            float(magnetic_limit)
+            if is_magnetic and magnetic_limit is not None
+            else _DIVERGENCE_GUARD_LIMIT
+        )
+        if not math.isfinite(magnitude) or magnitude > limit:
+            offenders.append(f"{key}={magnitude:g} > {limit:g}")
     if offenders:
         details = ", ".join(offenders)
         raise FloatingPointError(
-            f"divergence guard failed at tstep={int(tstep)} t={float(t):g}: "
-            f"{details} > {_DIVERGENCE_GUARD_LIMIT:g}"
+            f"divergence guard failed at tstep={int(tstep)} t={float(t):g}: {details}"
         )
 
 
@@ -2817,6 +3302,15 @@ def _checkpoint_payload(state: Any) -> dict[str, Any]:
     if hasattr(state, "flow") and hasattr(state, "A"):
         # MHDState (curl / vector-potential family): KMM flow block + A coefficients.
         return {"flow_u": state.flow.u, "flow_g": state.flow.g, "A": state.A}
+    if hasattr(state, "u") and hasattr(state, "A"):
+        # TCVPState (vector-potential Taylor-Couette family).
+        return {
+            "u": state.u,
+            "p": state.p,
+            "A": state.A,
+            "nonlinear_old": state.nonlinear_old,
+            "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
+        }
     if hasattr(state, "u") and hasattr(state, "g"):
         return {"u": state.u, "g": state.g}
     if hasattr(state, "u"):
@@ -2834,6 +3328,124 @@ def _checkpoint_payload(state: Any) -> dict[str, Any]:
             "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
         }
     raise TypeError(f"unsupported checkpoint state type {type(state).__name__}")
+
+
+def _growth_rate_from_elapsed(e0: Any, e1: Any, elapsed: float) -> float:
+    """Growth rate over an exact elapsed time (adaptive-dt runs)."""
+    if elapsed <= 0.0:
+        raise ValueError("growth-rate diagnostics require positive elapsed time")
+    e0f = float(e0)
+    e1f = float(e1)
+    if not (math.isfinite(e0f) and math.isfinite(e1f)) or e0f <= 0.0 or e1f <= 0.0:
+        if math.isfinite(e0f) and e0f > 0.0 and e1f == 0.0:
+            return -math.inf
+        return math.nan
+    return 0.5 * math.log(e1f / e0f) / float(elapsed)
+
+
+def _adaptive_scalars(record: dict[str, Any]) -> dict[str, Any]:
+    """Numeric adaptive-CFL summary scalars (the per-change history lives in
+    the time series rows via their ``dt``/``cfl_total`` keys)."""
+    return {
+        "adaptive_cfl_target": float(record["adaptive_cfl_target"]),
+        "dt_final": float(record["dt_final"]),
+        "dt_last_used": float(record["dt_last_used"]),
+        "dt_min_used": float(record["dt_min_used"]),
+        "dt_max_used": float(record["dt_max_used"]),
+        "n_dt_changes": int(record["n_dt_changes"]),
+        "adaptive_steps_taken": int(record["steps_taken"]),
+        "adaptive_final_step_clipped": bool(record["final_step_clipped"]),
+        "cfl_total_max_observed": float(record["cfl_total_max_observed"]),
+    }
+
+
+def _run_vp_adaptive_blocks(
+    solver: Any,
+    state: Any,
+    *,
+    elapsed_target: float,
+    config: Any,
+    spec: dict[str, Any],
+    health_scalars_fn: Any,
+    diagnostics_row_fn: Any,
+    health_observations: list[dict[str, float]],
+    t0: float,
+    tstep0: int,
+    out_dir: str | Path | None,
+    state_kind: str,
+    device_record: dict[str, Any] | None,
+    magnetic_divergence_limit: float | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    """Adaptive-CFL block driver shared by the vector-potential runners.
+
+    The horizon is an explicit physical elapsed time: either the remaining
+    ``final_time`` or ``steps * initial dt`` for a CLI override.  The driver
+    adjusts the endpoint schedule to land exactly on that time, so growth
+    windows and saturation horizons keep the spec contract.  Every compiled
+    block produces a diagnostics row (with the exact accumulated time and
+    the dt actually used) and runs the full guard set: non-finite state,
+    energy runaway, divergence drift, and the resolution health gate.
+    A final production checkpoint is written when an output directory is set
+    (per-interval checkpoints under adaptive dt are not wired yet).
+    """
+
+    def on_block(
+        t: float, done: int, block_state: Any, health_values: dict[str, float]
+    ) -> None:
+        tstep = int(tstep0) + int(done)
+        if not _tree_all_finite(block_state):
+            raise FloatingPointError(
+                f"nonfinite solver state at tstep={tstep} t={float(t):g}"
+            )
+        diag = dict(solver.diagnostics(block_state))
+        if "cfl_total" in health_values:
+            diag["cfl_total"] = health_values["cfl_total"]
+        _raise_on_energy_runaway(
+            solver, block_state, t=t, tstep=tstep, diagnostics=diag
+        )
+        _raise_on_divergence_drift(
+            solver,
+            block_state,
+            t=t,
+            tstep=tstep,
+            diagnostics=diag,
+            magnetic_limit=magnetic_divergence_limit,
+        )
+        _raise_on_resolution_health(
+            health_values,
+            t=t,
+            tstep=tstep,
+            enforce_spectral=int(done) >= health.EARLY_ABORT_STARTUP_STEPS,
+            # An unsafe initial dt is recoverable in the pre-flight check, but
+            # a completed block above CFL=1 cannot be rolled back safely.
+            enforce_cfl=True,
+        )
+        health_observations.append(dict(health_values))
+        diagnostics_row_fn(float(t), tstep, diag)
+
+    out, record = run_adaptive_cfl(
+        solver,
+        state,
+        elapsed_target=float(elapsed_target),
+        config=config,
+        health_scalars_fn=health_scalars_fn,
+        on_block=on_block,
+        t0=float(t0),
+    )
+    if out_dir is not None:
+        checkpoint_path = Path(out_dir) / "checkpoints" / "checkpoints.h5"
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        write_production_checkpoint(
+            checkpoint_path,
+            {"state": _checkpoint_payload(out)},
+            t=float(t0) + float(record["elapsed_time"]),
+            tstep=int(tstep0) + int(record["steps_taken"]),
+            spec=spec,
+            state_kind=state_kind,
+            device_record=device_record,
+            diagnostics_path=None,
+        )
+    return out, record
 
 
 def _growth_rate_from_energy(e0: Any, e1: Any, steps: int, dt: float) -> float:

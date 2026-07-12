@@ -192,6 +192,67 @@ def curl_health_scalars(solver: Any, state: Any) -> dict[str, float]:
     return scalars
 
 
+def tc_curl_health_scalars(solver: Any, state: Any) -> dict[str, float]:
+    """Health scalars for the vector-potential Taylor-Couette family.
+
+    Native coefficient order is (theta, z, r).  The advective bound includes
+    the circular-Couette base flow V(r); the Alfven bound includes the imposed
+    axial B0.  Rotation/shear rate terms are zero here: the base rotation is
+    already part of the advective speed in the inertial frame.
+    """
+
+    fields = solver.fields_physical(state)
+    base_v = max(
+        abs(float(solver.base.V(solver.base.R1))),
+        abs(float(solver.base.V(solver.base.R2))),
+    )
+    u_max = (
+        _max_abs(fields[0]),
+        _max_abs(fields[1]) + base_v,
+        _max_abs(fields[2]),
+    )
+    b_max = (
+        _max_abs(fields[3]),
+        _max_abs(fields[4]),
+        _max_abs(fields[5]) + abs(float(solver.B0)),
+    )
+    r1d = np.sort(np.unique(np.asarray(solver.R)))
+    dr = float(np.diff(r1d).min())
+    spacings = (
+        dr,
+        float(solver.base.R1) * 2.0 * math.pi / int(solver.Ntheta),
+        float(solver.Lz) / int(solver.Nz),
+    )
+    scalars = _cfl_scalars(
+        u_max=u_max,
+        b_max=b_max,
+        spacings=spacings,
+        dt=float(solver.dt),
+        nu=float(solver.nu),
+        eta=float(solver.eta_mag),
+        rotation_rate=0.0,
+        shear_rate=0.0,
+    )
+    # Resolution qualification follows the physical evolved fields.  Using A
+    # here would hide one derivative of magnetic small-scale content and can
+    # therefore miss an under-resolved b=curl(A) tail.
+    b_coefficients = solver.b_coefficients(state.A, b_phys=fields[3:])
+    coefficients = list(state.u) + list(b_coefficients)
+    tail_t, tail_z, tail_r = spectral_tail_fractions(
+        coefficients, ("fourier_full", "fourier_full", "chebyshev")
+    )
+    scalars.update(
+        {
+            "spectral_tail_x": tail_r,
+            "spectral_tail_y": tail_t,
+            "spectral_tail_z": tail_z,
+            "spectral_tail_max": max(tail_r, tail_t, tail_z),
+            "mode_occupancy": mode_occupancy(coefficients),
+        }
+    )
+    return scalars
+
+
 def primitive_health_scalars(solver: Any, state: Any) -> dict[str, float]:
     """Health scalars for the primitive-b 3-D family (native order (y, z, x))."""
 

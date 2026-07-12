@@ -67,6 +67,40 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "807 MB HDF5 payload" in commands
 
 
+def test_vector_potential_bc_menu_docs_are_current():
+    """The docs must state which scripts/wall types preserve div B = 0, the
+    measured evidence, and the honest limits of the new configurations."""
+    readme = (ROOT / "production" / "README.md").read_text()
+    commands = (ROOT / "production" / "commands.md").read_text()
+    known = (ROOT / "production" / "KNOWN_ISSUES.md").read_text()
+
+    # All four solenoidal-preserving configurations are documented.
+    for pid in (
+        "exp_pcf_mri_vector_potential",
+        "exp_pcf_mri_vp_insulating",
+        "exp_tc_mri_vector_potential",
+        "exp_tc_mri_vp_insulating",
+    ):
+        assert pid in readme, pid
+        assert pid in commands, pid
+    assert "examples/taylor_couette_vp_jax.py" in readme
+    # Wall-condition menu: what exists and what deliberately does not.
+    assert "Magnetic wall-condition menu" in readme
+    assert "pseudo_vacuum" in readme
+    assert "Stress-free velocity walls: not implemented" in readme
+    # Adaptive CFL stepping is documented with its recorded scalars.
+    assert "Adaptive CFL stepping" in readme
+    assert "adaptive_cfl" in readme
+    assert "n_dt_changes" in readme
+    assert "adaptive_cfl" in commands
+    # Honest nuance: the TC witness is a resolution floor, not a fixed epsilon.
+    assert "forward-projected coefficient representation" in readme
+    assert "insulating_bc_residual" in readme
+    # The ledger records the CPU-only status and stated conventions.
+    assert "KI-9" in known
+    assert "trapped-flux Faraday row" in known
+
+
 def test_pipe_hydro_docs_describe_wired_cheap_parity():
     readme = (ROOT / "production" / "README.md").read_text()
     commands = (ROOT / "production" / "commands.md").read_text()

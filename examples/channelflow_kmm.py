@@ -536,6 +536,15 @@ class KMM:
 
         return KMMState(u=u_stage, g=g_stage)
 
+    def set_dt(self, dt: float) -> None:
+        """Rebuild the dt-dependent implicit factorizations for a new step.
+
+        Used by adaptive-CFL drivers; the spectral spaces and meshes are dt
+        independent, so only the implicit operators are reassembled.
+        """
+        self.dt = float(dt)
+        self._build_operators()
+
     def solve(self, state: KMMState, steps: int) -> KMMState:
         step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
         return scan_steps(step, state, int(steps))

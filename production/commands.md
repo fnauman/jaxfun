@@ -318,6 +318,51 @@ quarantined and forbidden from production seeding -- it is excluded from
 generated 385 MB HDF5 checkpoint is intentionally not committed; the comparator
 validates `golden/golden.json` against `spec.json`.
 
+## Vector-potential MHD/MRI runs (div B = 0 preserving, both geometries)
+
+The solenoidal-preserving `B = B0 + curl(A)` configurations for both
+geometries and both wall types:
+
+```bash
+# PCF, conducting (the selected workhorse)
+.venv/bin/python production/run_problem.py \
+  --config production/runs/exp_pcf_mri_vector_potential.json \
+  --out runs/exp_pcf_mri_vector_potential/smoke \
+  --resolution-tier start --steps 2
+
+# PCF, true insulating (vacuum-matched) walls
+.venv/bin/python production/run_problem.py \
+  --config production/runs/exp_pcf_mri_vp_insulating.json \
+  --out runs/exp_pcf_mri_vp_insulating/smoke \
+  --resolution-tier start --steps 2
+
+# Taylor-Couette, full 3D, conducting cylinders (E_tang = 0 exact)
+.venv/bin/python production/run_problem.py \
+  --config production/runs/exp_tc_mri_vector_potential.json \
+  --out runs/exp_tc_mri_vector_potential/smoke \
+  --resolution-tier start --steps 2
+
+# Taylor-Couette, full 3D, insulating cylinders (per-mode Bessel matching)
+.venv/bin/python production/run_problem.py \
+  --config production/runs/exp_tc_mri_vp_insulating.json \
+  --out runs/exp_tc_mri_vp_insulating/smoke \
+  --resolution-tier start --steps 2
+```
+
+All four seed the matching linear eigensolver and stamp
+`representation=vector_potential`; the insulating runs additionally emit
+`insulating_bc_residual` (the wall vacuum-matching witness). CPU anchor
+evidence and measured `div B` floors are recorded in
+[`README.md`](README.md#magnetic-representation-and-divergence-evidence);
+none of the four has a committed full-resolution GPU golden yet.
+
+To run with adaptive-CFL stepping (experimental; fresh starts only), add an
+`adaptive_cfl` block to the spec's `time` section, e.g.
+`"adaptive_cfl": {"target": 0.4, "check_every": 25, "dt_min": 1e-6,
+"dt_max": 0.01}`; the run then records `n_dt_changes`, `dt_final`,
+`dt_min_used`/`dt_max_used`, `cfl_total_max_observed`, and per-row `dt` and
+`cfl_total`.
+
 ## Taylor-Couette saturation smoke
 
 ```bash

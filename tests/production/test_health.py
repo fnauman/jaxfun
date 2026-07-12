@@ -72,6 +72,54 @@ def test_mode_occupancy_counts_active_fraction():
     assert health.mode_occupancy([arr]) == pytest.approx(0.3)
 
 
+def test_tc_curl_resolution_health_uses_b_not_vector_potential(monkeypatch):
+    class Base:
+        R1 = 1.0
+        R2 = 2.0
+
+        @staticmethod
+        def V(_r):
+            return 0.0
+
+    class State:
+        u = tuple(np.full((2, 2, 3), value) for value in (1.0, 2.0, 3.0))
+        A = tuple(np.full((2, 2, 3), 99.0) for _ in range(3))
+
+    class Solver:
+        base = Base()
+        B0 = 0.1
+        R = np.asarray([[[1.0, 1.5, 2.0]]])
+        Ntheta = 2
+        Nz = 2
+        Lz = 1.0
+        dt = 1.0e-3
+        nu = 1.0e-3
+        eta_mag = 1.0e-3
+
+        @staticmethod
+        def fields_physical(_state):
+            return tuple(np.ones((2, 2, 3)) for _ in range(6))
+
+        @staticmethod
+        def b_coefficients(A, *, b_phys):
+            assert A is State.A
+            assert len(b_phys) == 3
+            return tuple(np.full((2, 2, 3), value) for value in (7.0, 8.0, 9.0))
+
+    captured = {}
+
+    def capture_tail(coefficients, _axis_kinds):
+        captured["coefficients"] = coefficients
+        return (0.0, 0.0, 0.0)
+
+    monkeypatch.setattr(health, "spectral_tail_fractions", capture_tail)
+    monkeypatch.setattr(health, "mode_occupancy", lambda _coefficients: 0.5)
+    health.tc_curl_health_scalars(Solver(), State())
+    coefficients = captured["coefficients"]
+    assert all(np.max(array) < 10.0 for array in coefficients)
+    assert [float(np.max(array)) for array in coefficients[-3:]] == [7.0, 8.0, 9.0]
+
+
 def test_correlation_time_of_oscillation_is_finite_and_positive():
     t = np.arange(64) * 0.1
     rows = [{"t": float(ti), "total_stress": math.sin(0.5 * ti)} for ti in t]
@@ -170,4 +218,24 @@ def test_runtime_health_guard_aborts_obvious_underresolution():
             {"spectral_tail_max": 0.5, "cfl_total": 0.1, "mode_occupancy": 0.5},
             t=1.0,
             tstep=50,
+        )
+
+    with pytest.raises(RuntimeError, match="cfl_total"):
+        _raise_on_resolution_health({"cfl_total": 1.1}, t=1.0, tstep=50)
+
+
+def test_tc_projected_magnetic_divergence_uses_its_strict_ceiling():
+    from production.oracles import _raise_on_divergence_drift
+
+    # The generic 1e-2 guard would accept both values.  TC vector-potential
+    # campaigns qualify the projected magnetic witness against their explicit
+    # resolution-tier ceiling while retaining the generic velocity threshold.
+    with pytest.raises(FloatingPointError, match="divb_l2"):
+        _raise_on_divergence_drift(
+            None,
+            None,
+            t=1.0,
+            tstep=50,
+            diagnostics={"divb_l2": 2.0e-12, "divu_l2": 2.0e-12},
+            magnetic_limit=1.0e-12,
         )

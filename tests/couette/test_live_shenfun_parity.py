@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy.optimize import linear_sum_assignment
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_mhd_jax import PlaneCouetteMHDJax
@@ -66,6 +67,22 @@ def _keplerian_base():
 def _nested_complex(rows):
     arr = np.asarray(rows, dtype=float)
     return arr[..., 0] + 1j * arr[..., 1]
+
+
+def _assert_eigenvalue_multiset_close(got, expected, *, rtol, atol):
+    """Compare spectra without assigning significance to conjugate ordering.
+
+    LAPACK may perturb the nominally identical real parts of a conjugate pair
+    in opposite directions, so a raw lexicographic ordering is not stable
+    across the independent jaxfun and Shenfun solves.
+    """
+    got = np.asarray(got, dtype=complex)
+    expected = np.asarray(expected, dtype=complex)
+    assert got.shape == expected.shape
+    got_index, expected_index = linear_sum_assignment(
+        np.abs(got[:, None] - expected[None, :])
+    )
+    assert np.allclose(got[got_index], expected[expected_index], rtol=rtol, atol=atol)
 
 
 def _tc_axisymmetric_reference_layout(rows, *, axial_n: int):
@@ -796,7 +813,9 @@ def test_tc_linear_matches_live_shenfun_eigenvalues_and_nonmodal():
     solver = TaylorCouetteLinearJax(CircularCouette(), nu=0.002, N=12, family="L")
 
     w, _ = solver.eigs(m=0, kz=3.0, n_return=6)
-    assert np.allclose(w, tc_linear_eigenvalues(), rtol=1.0e-11, atol=1.0e-11)
+    _assert_eigenvalue_multiset_close(
+        w, tc_linear_eigenvalues(), rtol=1.0e-11, atol=1.0e-11
+    )
 
     rows = solver.nonmodal_growth(m=0, kz=3.0, times=[0.0, 0.5], n_modes=12)
     ref_rows = tc_linear_nonmodal()
@@ -887,7 +906,7 @@ def test_tc_mri_matches_live_shenfun_eigenvalues_and_nonmodal(magnetic_bc):
     )
 
     w, _ = solver.eigs(m=0, kz=3.0, n_return=6)
-    assert np.allclose(
+    _assert_eigenvalue_multiset_close(
         w,
         tc_mri_eigenvalues(magnetic_bc=magnetic_bc),
         rtol=1.0e-11,

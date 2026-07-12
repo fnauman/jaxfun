@@ -91,3 +91,39 @@ MRI production-requirements artifact still lacks measured net-flux saturation
 and a ZNF survival ensemble, and neither repository has an accepted immutable
 campaign release. Close only after all three legs produce the common diagnostic
 schema at two resolutions and half timestep from clean immutable releases.
+
+## KI-9: vector-potential insulating/TC configurations are CPU-anchored only
+
+The four `B = B0 + curl(A)` configurations (PCF/TC x conducting/insulating)
+have CPU eigenvalue anchors, cross-representation parity, and whole-horizon
+solenoidal gates, but none has a full-resolution GPU saturation golden, and
+the parity-saturation batch does not include them. Their run specs are
+`support_state=experimental` until a generated golden passes the standard
+gates. Additional stated conventions to keep in mind:
+
+- The TC insulating `(m=0, kz=0)` mean magnetic mode uses `b_theta = 0` at
+  both cylinders (no net axial current), `b_z(R2) = 0` (finite exterior
+  energy), and the exact trapped-flux Faraday row at `R1`. Alternatives (for
+  example a driven exterior field) are not implemented.
+- TC insulating *eigenmode seeding* remains anchored to the `m=0`
+  flux-function eigensolver (the only insulating linear solver). Because an
+  axisymmetric seed stays axisymmetric under nonlinear evolution, the TC
+  vector-potential run specs superpose a small non-axisymmetric solenoidal
+  perturbation by default (`initial_condition.symmetry_break_amplitude`,
+  wall rows satisfied identically by construction) so production runs
+  actually exercise the `m != 0` dynamics and, for insulating walls, the
+  non-axisymmetric Bessel matching rows.
+- The TC `div B` witness is the divergence of the projected coefficient
+  representation of `curl(A)`; for non-axisymmetric modes it is a spectrally
+  convergent resolution floor (`m=1`: `1.8e-12` at `Nr=24`, `3.7e-15` at
+  `Nr=40`), not a fixed machine epsilon. It saturates instead of growing.
+- The PCF vector-potential *conducting* convention (`A = 0`) enforces
+  `b_x = 0` exactly but carries an `O(eta)` tangential-electric-field gauge
+  residual; it intentionally matches the shenfun reference rather than the
+  primitive conducting set. (The TC conducting rows do impose `E_tang = 0`
+  exactly.) A PCF eigensolver anchor therefore exists only for the insulating
+  wall type, where linear and nonlinear conventions coincide.
+- Adaptive-CFL runs are fresh-start only: resume, quench, checkpoint banks,
+  and snapshot cadences under adaptive dt are not wired.
+- Stress-free velocity walls and a vector-potential pseudo-vacuum variant are
+  not implemented anywhere (see the wall-condition menu in README.md).
