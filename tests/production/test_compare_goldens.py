@@ -135,9 +135,19 @@ def test_bool_numeric_scalar_mismatch_fails_type_check():
         ("tc_mri_nonlinear_saturation", "magnetic_energy_growth_factor", 2.0),
     ],
 )
-def test_promoted_saturation_golden_validates_against_run_spec(
+def test_saturation_golden_growth_gate_and_spec_hash_hold(
     problem_id, growth_scalar, minimum_growth
 ):
+    """Regression on the growth gate + spec-hash binding of the retained
+    saturation goldens.
+
+    Passing here means the golden cleared its finite-amplitude growth gate and
+    still matches its run spec -- it does NOT certify production/campaign
+    readiness or solenoidality. `tc_mri_nonlinear_saturation` is primitive-`b`
+    and ends non-solenoidal (`div B=7.96e-4`, finite-divergence only per
+    production/README.md); the solenoidal MRI workhorse is the vector-potential
+    family, not these goldens.
+    """
     root = GOLDENS / problem_id
     spec = json.loads((root / "spec.json").read_text())
     golden = validate_golden(root / "golden" / "golden.json", spec=spec)

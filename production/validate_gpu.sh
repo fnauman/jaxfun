@@ -91,9 +91,13 @@ tc_dns_parity_ids=(
 
 dns_parity_ids=("${pcf_dns_parity_ids[@]}" "${tc_dns_parity_ids[@]}")
 
+# Retained (non-quarantined) saturation artifacts only. The primitive-`b`
+# exp_pcf_mri_shearbox_growth golden is quarantined (non-solenoidal, forbidden
+# from production seeding) and is excluded so `saturation` does not error on
+# assert_golden_not_quarantined; its rejection is covered by the quarantine
+# regression in tests/production/test_compare_goldens.py.
 saturation_parity_ids=(
   pcf_fluct_re400
-  exp_pcf_mri_shearbox_growth
   tc_supercritical_saturation
   tc_mri_nonlinear_saturation
 )

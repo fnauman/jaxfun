@@ -17,6 +17,14 @@ from production.oracles import run_supported_spec
 
 pytestmark = pytest.mark.slow
 
+# Solenoidal ceiling for the vector-potential (B = B0 + curl A) family: div B is
+# analytically zero and must stay at roundoff for the whole horizon (measured
+# ~2.5e-16 max over this 300-step CPU run). The gate is a few orders above that
+# floor so a regression into the primitive-`b` finite regime (~1e-4..1e-2) is
+# caught while benign roundoff accumulation is not flagged. See
+# tests/production/test_vector_potential_oracle.py for the full rationale.
+SOLENOIDAL_CEIL = 1e-12
+
 
 def _vp_spec():
     return {
@@ -52,8 +60,12 @@ def test_long_nonlinear_curl_run_holds_the_physics_contract():
     out = run_supported_spec(_vp_spec(), steps=300, diagnostics_every=10)
     sc = out["scalars"]
 
-    # Solenoidal by construction, for the whole horizon.
-    assert sc["divergence_b_l2"] < 1e-8
+    # Solenoidal by construction, for the whole horizon: div B must hold at the
+    # roundoff ceiling at the final step AND must not grow past it at any recorded
+    # step -- the primitive-`b` failure mode is div B drifting into the finite
+    # regime over the run, so a final-only check would miss a mid-horizon blowup.
+    assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
+    assert max(row["divergence_b_l2"] for row in out["time_series"]) < SOLENOIDAL_CEIL
     assert sc["divergence_u_l2"] < 1e-4
 
     # The shearing-box energy budget closes over the nonlinear horizon.

@@ -10,6 +10,23 @@ import pytest
 
 from production.oracles import load_resume_checkpoint, run_supported_spec
 
+# Solenoidal ceiling for the vector-potential (B = B0 + curl A) family. div B is
+# analytically zero, so the oracle holds it at roundoff for the whole horizon
+# (measured ~1e-18 GPU / ~1e-16 CPU, growing only linearly with roundoff
+# accumulation). The gate sits a few orders above that floor: tight enough that a
+# regression into the primitive-`b` finite regime (div B ~ 1e-4..1e-2) is caught
+# with margin, loose enough not to flake on benign roundoff growth. The invariant
+# that matters is that div B does NOT grow past this ceiling anywhere on the
+# horizon -- checked over the whole time series, not just the final scalar.
+SOLENOIDAL_CEIL = 1e-12
+
+
+def _max_div_b_over_horizon(out):
+    return max(
+        row["divergence_b_l2"] for row in out["time_series"] if "divergence_b_l2" in row
+    )
+
+
 # Final-state scalars that must agree between a straight run and a
 # checkpoint+resume continuation of the same spec (growth-family scalars are
 # excluded: they are measured from the evolved baseline, which differs by
@@ -76,8 +93,11 @@ def test_vector_potential_oracle_is_solenoidal_by_construction():
     out = run_supported_spec(_vp_spec(), steps=4, diagnostics_every=2)
     sc = out["scalars"]
     assert sc["representation"] == "vector_potential"
-    # B = curl A -> div B = 0 to roundoff (the invariant the primitive path lacks)
-    assert sc["divergence_b_l2"] < 1e-8
+    # B = curl A -> div B = 0 to roundoff (the invariant the primitive path lacks).
+    # It must hold at the solenoidal ceiling at the final step and, more
+    # importantly, must not grow past it anywhere on the horizon.
+    assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
+    assert _max_div_b_over_horizon(out) < SOLENOIDAL_CEIL
     for key in (
         "kinetic_energy",
         "magnetic_energy",
@@ -205,7 +225,9 @@ def test_vector_potential_quench_continues_with_new_physics(tmp_path):
     sc = out["scalars"]
     assert sc["representation"] == "vector_potential"
     assert math.isfinite(sc["magnetic_energy"]) and sc["magnetic_energy"] > 0.0
-    assert sc["divergence_b_l2"] < 1e-8
+    # The curl representation stays solenoidal across a quench (changed eta/Rm).
+    assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
+    assert _max_div_b_over_horizon(out) < SOLENOIDAL_CEIL
     # FJ-05 baseline: the first series row is the loaded parent state at the
     # checkpoint time, not a fresh seed at t=0.
     first = out["time_series"][0]

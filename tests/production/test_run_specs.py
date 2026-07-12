@@ -49,7 +49,7 @@ def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
     assert raw["resolution"]["start"] == {"Nx": 16, "Ny": 32, "Nz": 16}
 
 
-def test_promoted_saturation_goldens_track_run_spec_hashes():
+def test_retained_saturation_goldens_track_run_spec_hashes():
     # pcf_mhd_divfree and exp_pcf_mri_shearbox_growth were migrated to the FJ-01
     # numerics contract (v2) and their pre-fix goldens are quarantined, so their
     # run-spec hash intentionally no longer matches the (stale) golden.
