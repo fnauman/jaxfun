@@ -19,7 +19,7 @@ from production.adaptive import (
     adaptive_cfl_from_spec,
     run_adaptive_cfl,
 )
-from production.oracles import run_supported_spec
+from production.oracles import _adaptive_elapsed_target, run_supported_spec
 
 SOLENOIDAL_CEIL = 1.0e-12
 
@@ -89,7 +89,14 @@ def test_proposed_dt_shrinks_grows_and_holds():
     assert _proposed_dt(1.0e-2, float("nan"), config) is None
 
 
-def test_adaptive_driver_shrinks_after_a_newly_unsafe_state():
+def test_adaptive_horizon_uses_final_time_without_initial_dt_quantization():
+    spec = {"time": {"dt": 0.3, "final_time": 1.0}}
+    assert _adaptive_elapsed_target(spec, steps=None, t0=0.0) == pytest.approx(1.0)
+    assert _adaptive_elapsed_target(spec, steps=None, t0=0.4) == pytest.approx(0.6)
+    assert _adaptive_elapsed_target(spec, steps=2, t0=0.0) == pytest.approx(0.6)
+
+
+def test_adaptive_driver_aborts_after_a_newly_unsafe_state():
     class Solver:
         def __init__(self):
             self.dt = 1.0
@@ -110,22 +117,181 @@ def test_adaptive_driver_shrinks_after_a_newly_unsafe_state():
         dt_max=2.0,
         check_every=1,
     )
+    with pytest.raises(RuntimeError, match="completed block cannot be repaired"):
+        run_adaptive_cfl(
+            solver,
+            0.4,
+            elapsed_target=1.5,
+            config=config,
+            health_scalars_fn=lambda current_solver, state: {
+                "cfl_total": float(state) * current_solver.dt
+            },
+        )
+    assert solver.solve_dts == [pytest.approx(1.0)]
+
+
+def test_adaptive_driver_shrinks_a_safe_over_target_state():
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+            self.solve_dts = []
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, _state, _steps):
+            self.solve_dts.append(self.dt)
+            return 0.8
+
+    solver = Solver()
     _, record = run_adaptive_cfl(
         solver,
         0.4,
-        elapsed_target=1.5,
-        config=config,
+        elapsed_target=1.5625,
+        config=AdaptiveCFLConfig(
+            target=0.5, safety=0.9, dt_min=0.1, dt_max=2.0, check_every=1
+        ),
         health_scalars_fn=lambda current_solver, state: {
             "cfl_total": float(state) * current_solver.dt
         },
     )
-    assert solver.solve_dts[0] == pytest.approx(1.0)
-    assert solver.solve_dts[1] == pytest.approx(0.375)
+    assert solver.solve_dts == [pytest.approx(1.0), pytest.approx(0.5625)]
     cfl_change = next(
         change for change in record["dt_changes"] if change["reason"] == "cfl"
     )
-    assert cfl_change["cfl_total"] == pytest.approx(1.2)
+    assert cfl_change["cfl_total"] == pytest.approx(0.8)
     assert cfl_change["cfl_total_projected"] == pytest.approx(0.45)
+
+
+def test_adaptive_reporting_excludes_a_preflight_dt_that_was_never_used():
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+            self.solve_dts = []
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, state, _steps):
+            self.solve_dts.append(self.dt)
+            return state
+
+    solver = Solver()
+    _, record = run_adaptive_cfl(
+        solver,
+        1.0,
+        elapsed_target=0.45,
+        config=AdaptiveCFLConfig(
+            target=0.5, safety=0.9, dt_min=0.1, dt_max=2.0, check_every=2
+        ),
+        health_scalars_fn=lambda current_solver, state: {
+            "cfl_total": 2.0 * float(state) * current_solver.dt
+        },
+    )
+    assert solver.solve_dts == [pytest.approx(0.225)]
+    assert record["dt_min_used"] == pytest.approx(0.225)
+    assert record["dt_max_used"] == pytest.approx(0.225)
+
+
+def test_final_time_redistribution_never_steps_below_dt_min():
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+            self.solve_calls = []
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, state, steps):
+            self.solve_calls.append((self.dt, steps))
+            return state
+
+    solver = Solver()
+    _, record = run_adaptive_cfl(
+        solver,
+        None,
+        elapsed_target=1.1,
+        config=AdaptiveCFLConfig(target=0.5, dt_min=0.4, dt_max=2.0, check_every=2),
+        health_scalars_fn=lambda current_solver, _state: {
+            "cfl_total": 0.3 * current_solver.dt
+        },
+    )
+    assert solver.solve_calls == [(pytest.approx(0.55), 2)]
+    assert record["elapsed_time"] == pytest.approx(1.1)
+    assert record["dt_min_used"] == pytest.approx(0.55)
+    assert record["dt_last_used"] == pytest.approx(0.55)
+    assert record["dt_final"] == pytest.approx(1.0)
+    assert solver.dt == pytest.approx(1.0)
+    change = record["dt_changes"][-1]
+    assert change["reason"] == "final_time_redistribution"
+    assert change["cfl_total_projected"] == pytest.approx(0.165)
+
+
+def test_final_clip_projects_cfl_from_old_dt_and_restores_controller_dt():
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, state, _steps):
+            return state
+
+    solver = Solver()
+    _, record = run_adaptive_cfl(
+        solver,
+        None,
+        elapsed_target=1.5,
+        config=AdaptiveCFLConfig(target=0.5, dt_min=0.1, dt_max=2.0, check_every=1),
+        health_scalars_fn=lambda current_solver, _state: {
+            "cfl_total": 0.3 * current_solver.dt
+        },
+    )
+    clip = next(
+        change
+        for change in record["dt_changes"]
+        if change["reason"] == "final_time_clip"
+    )
+    assert clip["cfl_total"] == pytest.approx(0.3)
+    assert clip["cfl_total_projected"] == pytest.approx(0.15)
+    assert record["dt_last_used"] == pytest.approx(0.5)
+    assert record["dt_final"] == pytest.approx(1.0)
+    assert solver.dt == pytest.approx(1.0)
+
+
+def test_exact_horizon_shorter_than_dt_min_is_rejected_before_solving():
+    class Solver:
+        dt = 1.0
+
+        def set_dt(self, dt):  # pragma: no cover - must not be reached
+            self.dt = float(dt)
+
+        def solve(self, state, steps):  # pragma: no cover - must not be reached
+            raise AssertionError("sub-floor horizon advanced a solver step")
+
+    with pytest.raises(ValueError, match="smaller than dt_min"):
+        run_adaptive_cfl(
+            Solver(),
+            None,
+            elapsed_target=0.05,
+            config=AdaptiveCFLConfig(dt_min=0.1, dt_max=2.0),
+            health_scalars_fn=lambda _solver, _state: {"cfl_total": 0.2},
+        )
+
+
+@pytest.mark.parametrize("cadence", ["checkpoint_every", "snapshot_every"])
+def test_adaptive_cadence_flags_are_rejected_explicitly(tmp_path, cadence):
+    spec = _vp_spec(
+        {
+            "integrator": "IMEXRK222",
+            "dt": 1.0e-3,
+            "final_time": 0.01,
+            "adaptive_cfl": {},
+        }
+    )
+    with pytest.raises(NotImplementedError, match="does not yet support"):
+        run_supported_spec(spec, steps=1, out_dir=tmp_path, **{cadence: 1})
 
 
 def test_adaptive_driver_refuses_an_unsafe_dt_min_before_solving():
@@ -176,6 +342,7 @@ def test_adaptive_run_shrinks_an_unsafe_dt_before_the_first_block():
     assert sc["n_dt_changes"] >= 1
     assert sc["dt_final"] < 1.2
     assert sc["dt_min_used"] < 1.2
+    assert sc["dt_max_used"] < 1.2  # pre-flight dt was never advanced
     assert sc["adaptive_cfl_target"] == pytest.approx(0.15)
     # The unsafe initial dt must never evolve a block: every *observed* CFL
     # (all measured on evolved states or the pre-flight initial state) stays
@@ -225,8 +392,9 @@ def test_adaptive_run_grows_an_undersized_dt_and_keeps_the_final_time():
     assert sc["adaptive_steps_taken"] < 25
     assert out["time_series"][-1]["t"] == pytest.approx(0.025, rel=1e-12)
     assert sc["adaptive_final_step_clipped"] is True
-    assert sc["dt_final"] == pytest.approx(out["time_series"][-1]["dt"])
-    assert sc["dt_min_used"] <= sc["dt_final"] < sc["dt_max_used"]
+    assert sc["dt_final"] == pytest.approx(sc["dt_max_used"])
+    assert sc["dt_last_used"] == pytest.approx(out["time_series"][-1]["dt"])
+    assert sc["dt_min_used"] <= sc["dt_last_used"] < sc["dt_final"]
 
 
 @pytest.mark.integration

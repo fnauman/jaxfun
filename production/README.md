@@ -109,8 +109,8 @@ Wall-condition conventions of the vector-potential family:
 | PCF growing MRI, older full artifact (`exp_pcf_mri_shearbox_growth`) | primitive/direct `b` | no — grew to `2.67e-2` | `2.30e-2` | `2.67e-2` | quarantined and forbidden from production seeding |
 | PCF MRI, 300-step CPU qualification + GPU smoke (`exp_pcf_mri_vector_potential`) | vector potential, `B=B0+curl(A)`, conducting | yes — by construction, non-growing | `~1e-16` (CPU) | GPU `~1e-18`; CPU `~2.5e-16` (max over 300 steps) | selected conducting-wall workhorse; gated `< 1e-12` over the whole horizon; full-resolution GPU golden pending |
 | PCF MRI insulating, 300-step finite-amplitude CPU run + eigenmode anchor (`exp_pcf_mri_vp_insulating`) | vector potential, `B=B0+curl(A)`, vacuum-matched | yes — by construction, non-growing | `~1e-16` | max `9.9e-17` over 300 steps; matching-row residual `<=1.7e-16`; DNS growth matches the insulating eigensolver to `3.3e-8` | CPU-anchored candidate; gated `< 1e-12` whole-horizon; no GPU artifact yet |
-| TC MRI conducting, CPU anchors + finite-amplitude horizon (`exp_tc_mri_vector_potential`) | vector potential, `B=B0 e_z+curl(A)`, `E_tang=0` exact | yes — by construction, non-growing | `~1e-12` | `m=0`: max `~1e-19`; `m=1` (3D): `~4e-15` at `Nr=40` (spectrally convergent projection floor); finite amplitude (`3e-2`): `~1.5e-15` while the primitive solver is already at `~7e-8` | CPU-anchored candidate; growth matches the linear eigensolver at `m=0` (`1.5e-9`) and `m=1` (`9.7e-8`); nonlinear parity vs primitive `~1e-10`; no GPU artifact yet |
-| TC MRI insulating, CPU anchors (`exp_tc_mri_vp_insulating`) | vector potential, Bessel vacuum matching | yes — by construction, non-growing | `~1e-12` | max `1.2e-19` (`m=0`, 400 steps); matching-row residual `<=4.5e-22`; growth matches the flux eigensolver to `1.5e-7` | CPU-anchored candidate; no GPU artifact yet |
+| TC MRI conducting, CPU anchors + finite-amplitude horizon (`exp_tc_mri_vector_potential`) | vector potential, `B=B0 e_z+curl(A)`, `E_tang=0` exact | yes — by construction, non-growing | projected witness: smoke `<1e-9`; start/production `<1e-12`, enforced every block | `m=0`: max `~1e-19`; `m=1` (3D): `~4e-15` at `Nr=40` (spectrally convergent projection floor); finite amplitude (`3e-2`): `~1.5e-15` while the primitive solver is already at `~7e-8`; the start-tier `m=1` eigenmode scaled to `1e-1` measures `7.35e-13` | CPU-anchored candidate; growth matches the linear eigensolver at `m=0` (`1.5e-9`) and `m=1` (`9.7e-8`); nonlinear parity vs primitive `~1e-10`; no GPU artifact yet |
+| TC MRI insulating, CPU anchors (`exp_tc_mri_vp_insulating`) | vector potential, Bessel vacuum matching | yes — by construction, non-growing | projected witness: smoke `<1e-9`; start/production `<1e-12`, enforced every block | max `1.2e-19` (`m=0`, 400 steps); matching-row residual `<=4.5e-22`; growth matches the flux eigensolver to `1.5e-7` | CPU-anchored candidate; no GPU artifact yet |
 | Taylor-Couette conducting MHD/MRI, legacy full artifact (`tc_mri_nonlinear_saturation`) | primitive/direct `b` | no — grew to `7.96e-4` | `2.26e-5` | `7.96e-4` | finite-divergence only; saturated but not roundoff-solenoidal |
 
 Every `div u`/`div B` cell above is a **measured** emitted L2 diagnostic (not a
@@ -120,8 +120,8 @@ thresholds live in the Qualification column and in the tests
 `tests/production/test_workhorse_qualification.py`,
 `tests/production/test_vp_insulating_oracle.py`, and
 `tests/production/test_tc_vector_potential_oracle.py` gate the curl family at
-`div B < 1e-12` across the whole horizon). They are qualification flags, not a
-cross-geometry convergence comparison. The PCF GPU evidence is recorded in
+`div B < 1e-12` across their stated resolutions and amplitudes). They are
+qualification flags, not a cross-geometry convergence comparison. The PCF GPU evidence is recorded in
 [`promotions/fj03_gpu_smoke_findings.md`](promotions/fj03_gpu_smoke_findings.md);
 the full-artifact values come from the committed golden diagnostics.
 
@@ -129,11 +129,16 @@ One honest measurement nuance for Taylor-Couette: the reported TC `div B`
 witness is the divergence of the forward-projected coefficient representation
 of `b = curl(A)` (the representation the current density and diagnostics use),
 so it carries the spectrally convergent quadrature error of the cylindrical
-`1/r` projections. It is resolution-dependent (`m=1`: `1.8e-12` at `Nr=24`
-vs `3.7e-15` at `Nr=40`) but saturates instead of growing secularly, and the
-underlying pointwise `curl A` field is solenoidal to roundoff identically. The
-slab (PCF) witness has no `1/r` factors and sits at `~1e-16` independent of
-resolution.
+`1/r` projections. It is both resolution- and amplitude-dependent (`m=1`:
+`1.8e-12` at `Nr=24` vs `3.7e-15` at `Nr=40` for the same seed scale) but
+must remain at the corresponding projection floor instead of growing
+secularly. The shipped TC specs therefore state tiered absolute ceilings
+(`1e-9` for the deliberately coarse smoke tier and `1e-12` for start and
+production); the runner enforces the selected ceiling every health block and
+emits it as `divergence_b_guard_l2`. A start-tier `m=1` eigenmode amplified to
+a saturation-scale `0.1` is an explicit regression case. The underlying
+pointwise `curl A` field is solenoidal to roundoff identically. The slab (PCF)
+witness has no `1/r` factors and sits at `~1e-16` independent of resolution.
 
 ### Adaptive CFL stepping
 
@@ -142,24 +147,32 @@ Both vector-potential runners accept an optional `time.adaptive_cfl` block
 "check_every", "growth_cap", "grow_when_below"}`). The horizon is a **time**
 target (the elapsed time the fixed-`dt` run would cover, i.e. the spec
 `final_time` when no step override is given): `dt` changes alter the step
-count and the final step is clipped so the run lands exactly on the
+count and the endpoint schedule is adjusted so the run lands exactly on the
 requested time — a grown `dt` cannot overshoot the saturation window and a
 shrunk one cannot end early. The CFL is measured on the state **before**
 every compiled block (a pre-flight check covers the initial state), so an
 unsafe starting `dt` is shrunk before any stepping instead of tripping the
-production health gate mid-block; the post-block measurement of one block
-doubles as the pre-block check of the next. On a change the implicit
+production health gate. A block whose evolved state exceeds the hard
+`CFL=1` ceiling aborts immediately: shrinking the next block cannot repair
+statistics already produced in an unstable block. Safe values above the
+target still shrink before the next solve. On a change the implicit
 factorizations are rebuilt at the new `dt` (`solver.set_dt`), with the CNAB2
 family restarting its IMEX-Euler bootstrap so no stale multistep history is
 extrapolated. Elapsed time is accumulated exactly, every `dt` change is
-recorded (scalars `n_dt_changes`, `dt_final`, `dt_min_used`, `dt_max_used`,
+recorded (scalars `n_dt_changes`, controller `dt_final`, actual
+`dt_last_used`, `dt_min_used`, `dt_max_used`,
 `adaptive_steps_taken`, `adaptive_final_step_clipped`,
 `cfl_total_max_observed`; per-row `dt` and `cfl_total` in the time series).
-The exact-time endpoint clip is included in that record and may be smaller
-than the CFL proposal floor `dt_min`; `dt_min_used` reports the actual value.
+The endpoint step is never allowed below `dt_min`: a tiny remainder is
+redistributed over the final steps (subject to `dt_max` and projected CFL),
+and an impossible sub-floor horizon is rejected before solving. `dt_final`
+is restored to the controller value after an endpoint adjustment, while
+`dt_last_used` records the actual final step.
 The solenoidal gates run every block. Adaptive runs are currently wired
 for fresh starts (no resume/quench/checkpoint-bank) and write a final
-checkpoint only; tests: `tests/production/test_adaptive_cfl.py`. Fixed-`dt`
+checkpoint only. Passing `checkpoint_every` or `snapshot_every` is rejected
+explicitly rather than silently dropping output; tests:
+`tests/production/test_adaptive_cfl.py`. Fixed-`dt`
 remains the default and the committed goldens' semantics.
 
 ### Magnetic wall-condition menu (what exists, what does not)

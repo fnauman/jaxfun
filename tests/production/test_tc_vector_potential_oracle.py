@@ -96,6 +96,17 @@ def _max_series(out, key):
     return max(row[key] for row in out["time_series"] if key in row)
 
 
+def test_tc_vp_rejects_axial_nyquist_seeds_before_masking():
+    from examples.taylor_couette_vp_jax import _require_non_nyquist_kz
+
+    _require_non_nyquist_kz(1, 8, allow_zero=False)
+    _require_non_nyquist_kz(0, 8, allow_zero=True)
+    with pytest.raises(ValueError, match="Nyquist masking"):
+        _require_non_nyquist_kz(4, 8, allow_zero=False)
+    with pytest.raises(ValueError, match="kz_mode != 0"):
+        _require_non_nyquist_kz(0, 8, allow_zero=False)
+
+
 def test_tc_vp_conducting_oracle_is_solenoidal_for_the_whole_horizon():
     jax.config.update("jax_enable_x64", True)
     out = run_supported_spec(_tc_vp_spec(), steps=4, diagnostics_every=2)
@@ -141,7 +152,7 @@ def test_tc_vp_insulating_oracle_holds_divergence_and_matching_rows():
 
 
 @pytest.mark.integration
-def test_tc_vp_symmetry_breaking_populates_nonaxisymmetric_modes():
+def test_tc_vp_symmetry_breaking_populates_nonaxisymmetric_modes(monkeypatch):
     """The m=0 eigenmode seed is invariant under nonlinear evolution, so the
     non-axisymmetric insulating dynamics (including the m != 0 Bessel rows)
     are only exercised through the symmetry-breaking perturbation.  The
@@ -187,8 +198,31 @@ def test_tc_vp_symmetry_breaking_populates_nonaxisymmetric_modes():
     assert residual_perturbed <= residual_seed + 1.0e-14
     assert m1_content(state.u) == 0.0
 
+    # Residual diagnostics use the static rows cached during operator setup;
+    # they must not rebuild every Bessel row (or enter a host mode loop).
+    monkeypatch.setattr(
+        solver,
+        "_insulating_mode_rows",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("diagnostics rebuilt insulating mode rows")
+        ),
+    )
+    assert float(solver.insulating_bc_residual(state)) == pytest.approx(
+        residual_perturbed
+    )
+
     state = solver.solve(state, 10)
+    b_coefficient_calls = 0
+    original_b_coefficients = solver.b_coefficients
+
+    def counted_b_coefficients(*args, **kwargs):
+        nonlocal b_coefficient_calls
+        b_coefficient_calls += 1
+        return original_b_coefficients(*args, **kwargs)
+
+    monkeypatch.setattr(solver, "b_coefficients", counted_b_coefficients)
     diag = solver.diagnostics(state)
+    assert b_coefficient_calls == 1
     assert float(diag["divb_l2"]) < SOLENOIDAL_CEIL
     assert float(diag["insulating_bc_residual"]) < SOLENOIDAL_CEIL
     # MRI coupling feeds the non-axisymmetric velocity modes.
@@ -202,8 +236,14 @@ def test_tc_vp_checkpoint_resume_matches_straight_run(tmp_path):
 
     straight_dir = tmp_path / "straight"
     straight = run_supported_spec(
-        spec, steps=4, out_dir=straight_dir, checkpoint_every=2
+        spec,
+        steps=4,
+        out_dir=straight_dir,
+        checkpoint_every=2,
+        checkpoint_bank=True,
     )
+    assert (straight_dir / "checkpoints" / "bank" / "checkpoint_00000002.h5").exists()
+    assert (straight_dir / "checkpoints" / "bank" / "checkpoint_00000004.h5").exists()
     parent_dir = tmp_path / "parent"
     run_supported_spec(spec, steps=2, out_dir=parent_dir, checkpoint_every=2)
     record = load_resume_checkpoint(parent_dir)
@@ -225,6 +265,22 @@ def test_tc_vp_checkpoint_resume_matches_straight_run(tmp_path):
             rtol=1e-10,
             atol=1e-14,
         ), key
+
+    # A hash-changing quench must accept the TC checkpoint and apply the same
+    # burn-in analysis semantics as the PCF vector-potential workhorse.
+    child = {**spec, "spec_hash": "tc-vp-quench-child-hash"}
+    quenched = run_supported_spec(
+        child,
+        steps=4,
+        resume_checkpoint=record,
+        quench=True,
+        diagnostics_every=1,
+        burn_in_steps=1,
+    )
+    assert quenched["scalars"]["analysis_burn_in_steps"] == 1
+    assert quenched["scalars"]["analysis_t_start"] == pytest.approx(
+        record.t + spec["time"]["dt"]
+    )
 
 
 def test_tc_vp_rejects_unsupported_magnetic_bc():
@@ -296,6 +352,17 @@ def test_tc_vp_nonaxisymmetric_m1_growth_matches_linear_eigenvalue():
     )
     state, ev = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1e-6)
     assert ev.real > 0.05
+    # Saturation-scale witness: amplify the exact production seed by 1e5
+    # without changing its shape.  The projected witness scales with field
+    # amplitude but remains below the explicit start-tier qualification gate.
+    import dataclasses
+
+    saturated = dataclasses.replace(
+        state,
+        u=tuple(1.0e5 * component for component in state.u),
+        A=tuple(1.0e5 * component for component in state.A),
+    )
+    assert float(solver.diagnostics(saturated)["divb_l2"]) < SOLENOIDAL_CEIL
     state = solver.solve(state, 50)
     e0 = float(solver.energy(state))
     state = solver.solve(state, 250)

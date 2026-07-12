@@ -71,6 +71,7 @@ from scipy.special import ive, kve
 try:
     from examples.taylor_couette_dns_jax import (
         AxisymmetricTCDNSJax,
+        _cylindrical_laplacian_3d,
         _positive_pivot_phase,
         _require_resolved_m,
     )
@@ -79,6 +80,7 @@ try:
 except ModuleNotFoundError:  # direct script execution from examples/
     from taylor_couette_dns_jax import (
         AxisymmetricTCDNSJax,
+        _cylindrical_laplacian_3d,
         _positive_pivot_phase,
         _require_resolved_m,
     )
@@ -116,6 +118,20 @@ def _bessel_k_log_derivative(m: int, x: float) -> float:
     m = abs(int(m))
     num = -0.5 * (kve(m - 1, x) + kve(m + 1, x)) if m > 0 else -kve(1, x)
     return float(num / kve(m, x))
+
+
+def _require_non_nyquist_kz(kz_mode: int, nz: int, *, allow_zero: bool) -> None:
+    """Require an axial Fourier mode that survives Nyquist masking."""
+
+    kz_mode = int(kz_mode)
+    nz = int(nz)
+    if not allow_zero and kz_mode == 0:
+        raise ValueError("eigenmode seeding requires kz_mode != 0")
+    if 2 * abs(kz_mode) >= nz:
+        raise ValueError(
+            f"axial mode |kz_mode|={abs(kz_mode)} is unresolved by Nz={nz}; "
+            "require 2|kz_mode| < Nz so Nyquist masking cannot erase the seed"
+        )
 
 
 @jax.tree_util.register_pytree_node_class
@@ -298,10 +314,7 @@ class TaylorCouetteVPMRIDNSJax:
         raise ValueError("family must be 'L' or 'C'")
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
-        r = self.r
-        return (
-            Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
-        )
+        return _cylindrical_laplacian_3d(u, self.r)
 
     _dense = staticmethod(AxisymmetricTCDNSJax._dense)
     _put_block = staticmethod(AxisymmetricTCDNSJax._put_block)
@@ -603,10 +616,16 @@ class TaylorCouetteVPMRIDNSJax:
         m_all, kz_all = self._mode_wavenumbers()
         modes_np = np.array(modes)  # writable host copy for the row surgery
         dyn_positions = np.full(modes_np.shape[0], -1, dtype=int)
+        n = blocks["Ar"][1]
+        residual_rows = np.zeros((modes_np.shape[0], 6, 3, n), dtype=modes_np.dtype)
+        residual_mask = np.zeros((modes_np.shape[0], 6), dtype=bool)
+        component_index = {name: i for i, name in enumerate(("Ar", "At", "Az"))}
         for mode in range(modes_np.shape[0]):
             m = int(round(float(m_all[mode])))
             kz = float(kz_all[mode])
-            for comp, local, row in self._insulating_mode_rows(m, kz):
+            for slot, (comp, local, row) in enumerate(
+                self._insulating_mode_rows(m, kz)
+            ):
                 off, size = blocks[comp]
                 target = off + size - 2 + local
                 modes_np[mode, target, :] = 0.0
@@ -615,9 +634,18 @@ class TaylorCouetteVPMRIDNSJax:
                     modes_np[mode, target, o2 : o2 + s2] = vec
                 if m == 0 and kz == 0.0 and comp == "At" and local == 0:
                     dyn_positions[mode] = target
+                else:
+                    residual_mask[mode, slot] = True
+                    for name, vec in row.items():
+                        residual_rows[mode, slot, component_index[name], :] = vec
         self._insulating_dyn_row = int(dyn_positions.max())
         self._insulating_dyn_mode = int(np.argmax(dyn_positions))
         self._tau_row_positions = self._collect_tau_positions(blocks)
+        # Diagnostics reuse these already-derived static rows.  Keeping the
+        # contraction on device avoids the previous per-mode NumPy sync and
+        # repeated ive/kve work on every diagnostics cadence.
+        self._insulating_residual_rows = jnp.asarray(residual_rows)
+        self._insulating_residual_mask = jnp.asarray(residual_mask)
         return jnp.asarray(modes_np)
 
     def _collect_tau_positions(self, blocks) -> np.ndarray:
@@ -687,9 +715,11 @@ class TaylorCouetteVPMRIDNSJax:
         bz = At_r + invr * At_v - invr * Ar_t
         return br, bt, bz
 
-    def b_coefficients(self, A: Velocity) -> Velocity:
+    def b_coefficients(
+        self, A: Velocity, *, b_phys: Velocity | None = None
+    ) -> Velocity:
         """Forward-projected coefficient representation of b (T0 spaces)."""
-        br, bt, bz = self.b_physical(A, padded=False)
+        br, bt, bz = self.b_physical(A, padded=False) if b_phys is None else b_phys
         return (
             self.T0.mask_nyquist(self.T0.forward(br)),
             self.T0.mask_nyquist(self.T0.forward(bt)),
@@ -849,9 +879,11 @@ class TaylorCouetteVPMRIDNSJax:
         ur = self.TD.backward(state.u[0])
         return dur_dr + ur * self.inv_r + dut_dt * self.inv_r + duz_dz
 
-    def magnetic_divergence(self, state: TCVPState) -> Array:
+    def magnetic_divergence(
+        self, state: TCVPState, *, coefficients: Velocity | None = None
+    ) -> Array:
         """div b of the projected coefficient representation of b = curl(A)."""
-        Bc = self.b_coefficients(state.A)
+        Bc = self.b_coefficients(state.A) if coefficients is None else coefficients
         dbr_dr = self.T0.backward_primitive(Bc[0], (0, 0, 1))
         dbt_dt = self.T0.backward_primitive(Bc[1], (1, 0, 0))
         dbz_dz = self.T0.backward_primitive(Bc[2], (0, 1, 0))
@@ -862,14 +894,28 @@ class TaylorCouetteVPMRIDNSJax:
         squared = jnp.real(jnp.conj(values) * values) * self.R
         return jnp.sqrt(jnp.real(integrate(squared, self.T0)))
 
-    def divergence_linf(self, state: TCVPState) -> tuple[Array, Array]:
+    def divergence_linf(
+        self,
+        state: TCVPState,
+        *,
+        divu_field: Array | None = None,
+        divb_field: Array | None = None,
+    ) -> tuple[Array, Array]:
+        divu_field = (
+            self.velocity_divergence(state) if divu_field is None else divu_field
+        )
+        divb_field = (
+            self.magnetic_divergence(state) if divb_field is None else divb_field
+        )
         return (
-            jnp.max(jnp.abs(self.velocity_divergence(state))),
-            jnp.max(jnp.abs(self.magnetic_divergence(state))),
+            jnp.max(jnp.abs(divu_field)),
+            jnp.max(jnp.abs(divb_field)),
         )
 
-    def energy_parts(self, state: TCVPState) -> tuple[Array, Array]:
-        fields = self.fields_physical(state)
+    def energy_parts(
+        self, state: TCVPState, *, fields: tuple[Array, ...] | None = None
+    ) -> tuple[Array, Array]:
+        fields = self.fields_physical(state) if fields is None else fields
         return cylindrical_energy_parts(fields[:3], fields[3:], self.R, self.T0)
 
     def energy(self, state: TCVPState) -> Array:
@@ -880,13 +926,15 @@ class TaylorCouetteVPMRIDNSJax:
         R1, R2 = self.base.R1, self.base.R2
         return math.pi * (R2**2 - R1**2) * self.Lz
 
-    def stresses(self, state: TCVPState) -> tuple[Array, Array]:
+    def stresses(
+        self, state: TCVPState, *, fields: tuple[Array, ...] | None = None
+    ) -> tuple[Array, Array]:
         """Volume-mean Reynolds and Maxwell r-theta stresses.
 
         ``integrate`` over the 3D tensor space already covers the azimuthal
         quadrature, so the volume mean is the r-weighted integral over volume.
         """
-        fields = self.fields_physical(state)
+        fields = self.fields_physical(state) if fields is None else fields
         volume = self._volume()
         reynolds = (
             integrate(jnp.real(fields[0] * jnp.conj(fields[1])) * self.R, self.T0)
@@ -898,9 +946,10 @@ class TaylorCouetteVPMRIDNSJax:
         )
         return jnp.real(reynolds), jnp.real(maxwell)
 
-    def mean_bz_total(self, state: TCVPState) -> Array:
+    def mean_bz_total(self, state: TCVPState, *, bz: Array | None = None) -> Array:
         """Volume mean of the total axial field (imposed B0 included)."""
-        _, _, bz = self.b_physical(state.A, padded=False)
+        if bz is None:
+            _, _, bz = self.b_physical(state.A, padded=False)
         fluct = integrate(jnp.real(bz) * self.R, self.T0) / self._volume()
         return self.B0 + jnp.real(fluct)
 
@@ -908,43 +957,39 @@ class TaylorCouetteVPMRIDNSJax:
         """Max wall residual of the vacuum-matching rows applied to A."""
         if self.magnetic_bc != "insulating":
             return jnp.asarray(0.0)
-        # Rebuild per-mode A blocks (Ar, At, Az radial dofs concatenated).
-        blocks = self._a_block_offsets()
-        m_all, kz_all = self._mode_wavenumbers()
-        residual = 0.0
-        a_sizes = {name: blocks[name][1] for name in ("Ar", "At", "Az")}
-        n = a_sizes["Ar"]
-        Ar = np.asarray(state.A[0]).reshape(-1, n)
-        At = np.asarray(state.A[1]).reshape(-1, n)
-        Az = np.asarray(state.A[2]).reshape(-1, n)
-        for mode in range(Ar.shape[0]):
-            m = int(round(float(m_all[mode])))
-            kz = float(kz_all[mode])
-            comps = {"Ar": Ar[mode], "At": At[mode], "Az": Az[mode]}
-            for comp, local, row in self._insulating_mode_rows(m, kz):
-                if m == 0 and kz == 0.0 and comp == "At" and local == 0:
-                    continue  # dynamic Faraday row is not a static constraint
-                value = sum(np.dot(row[name], comps[name]) for name in comps)
-                residual = max(residual, abs(complex(value)))
-        return jnp.asarray(residual)
+        n = int(state.A[0].shape[-1])
+        a_modes = jnp.stack(
+            [component.reshape((-1, n)) for component in state.A], axis=1
+        )
+        values = jnp.einsum("mscn,mcn->ms", self._insulating_residual_rows, a_modes)
+        residuals = jnp.where(self._insulating_residual_mask, jnp.abs(values), 0.0)
+        return jnp.max(residuals)
 
     def diagnostics(self, state: TCVPState) -> dict[str, Array]:
-        ek, em = self.energy_parts(state)
-        divu, divb = self.divergence_linf(state)
-        reynolds, maxwell = self.stresses(state)
+        velocity = self.velocity_physical(state)
+        magnetic = self.b_physical(state.A, padded=False)
+        fields = (*velocity, *magnetic)
+        b_coefficients = self.b_coefficients(state.A, b_phys=magnetic)
+        divu_field = self.velocity_divergence(state)
+        divb_field = self.magnetic_divergence(state, coefficients=b_coefficients)
+        ek, em = self.energy_parts(state, fields=fields)
+        divu, divb = self.divergence_linf(
+            state, divu_field=divu_field, divb_field=divb_field
+        )
+        reynolds, maxwell = self.stresses(state, fields=fields)
         out = {
             "Ekin": ek,
             "Emag": em,
             "E": ek + em,
             "divu": divu,
             "divb": divb,
-            "divu_l2": self._weighted_l2(self.velocity_divergence(state)),
-            "divb_l2": self._weighted_l2(self.magnetic_divergence(state)),
+            "divu_l2": self._weighted_l2(divu_field),
+            "divb_l2": self._weighted_l2(divb_field),
             "reynolds_rt": reynolds,
             "maxwell_rt": maxwell,
             "total_stress": reynolds + maxwell,
-            "mean_bz": self.mean_bz_total(state),
-            "wall_u": wall_linf(self.velocity_physical(state)),
+            "mean_bz": self.mean_bz_total(state, bz=magnetic[2]),
+            "wall_u": wall_linf(velocity),
         }
         if self.magnetic_bc == "insulating":
             out["insulating_bc_residual"] = self.insulating_bc_residual(state)
@@ -989,8 +1034,6 @@ class TaylorCouetteVPMRIDNSJax:
             raise ValueError("eigenmode seeding requires kz != 0")
         r = np.asarray(jnp.squeeze(self.R))
         R1, R2 = self.base.R1, self.base.R2
-        int_bt = self._radial_antiderivative(bt)
-        total_bt = int_bt[-1] if abs(r[-1] - R2) < 1e-12 else None
         # Evaluate int_{R1}^{R2} b_theta dr from the polynomial fit directly.
         fit_re = np.polynomial.legendre.Legendre.fit(
             r, bt.real, len(r) - 1, domain=[R1, R2]
@@ -1017,6 +1060,7 @@ class TaylorCouetteVPMRIDNSJax:
         (available for ``m = 0`` only, the current insulating linear anchor).
         """
         _require_resolved_m(m, self.Ntheta)
+        _require_non_nyquist_kz(kz_mode, self.Nz, allow_zero=False)
         kz = 2.0 * math.pi * int(kz_mode) / self.Lz
         lin = TaylorCouetteMRIJax(
             self.base,
@@ -1134,6 +1178,7 @@ class TaylorCouetteVPMRIDNSJax:
         _require_resolved_m(m, self.Ntheta)
         if int(m) == 0:
             raise ValueError("the symmetry-breaking perturbation requires m != 0")
+        _require_non_nyquist_kz(kz_mode, self.Nz, allow_zero=True)
         kz = 2.0 * math.pi * int(kz_mode) / self.Lz
         gap = self.base.R2 - self.base.R1
         w = jnp.sin(math.pi * (self.R - self.base.R1) / gap) ** 2

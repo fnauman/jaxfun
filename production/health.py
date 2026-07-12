@@ -233,7 +233,11 @@ def tc_curl_health_scalars(solver: Any, state: Any) -> dict[str, float]:
         rotation_rate=0.0,
         shear_rate=0.0,
     )
-    coefficients = list(state.u) + list(state.A)
+    # Resolution qualification follows the physical evolved fields.  Using A
+    # here would hide one derivative of magnetic small-scale content and can
+    # therefore miss an under-resolved b=curl(A) tail.
+    b_coefficients = solver.b_coefficients(state.A, b_phys=fields[3:])
+    coefficients = list(state.u) + list(b_coefficients)
     tail_t, tail_z, tail_r = spectral_tail_fractions(
         coefficients, ("fourier_full", "fourier_full", "chebyshev")
     )

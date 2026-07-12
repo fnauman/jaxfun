@@ -127,8 +127,9 @@ def run_adaptive_cfl(
 
     The CFL is measured on the state *before* every compiled block (the
     post-block measurement of one block doubles as the pre-block measurement
-    of the next), so an unsafe initial or newly evolved dt is shrunk before
-    any stepping instead of tripping the production health gate mid-block.
+    of the next).  An unsafe initial dt is shrunk before any stepping.  If an
+    evolved block crosses the hard CFL ceiling, the run aborts because that
+    already-completed block cannot be repaired by shrinking the next one.
 
     ``health_scalars_fn(solver, state)`` must expose ``cfl_total`` (the
     family health contract).  ``on_block(t, tstep, state, health)`` runs
@@ -144,6 +145,12 @@ def run_adaptive_cfl(
         raise ValueError(
             f"initial dt={solver.dt:g} lies outside "
             f"[{config.dt_min:g}, {config.dt_max:g}]"
+        )
+    if 0.0 < elapsed_target < config.dt_min:
+        raise ValueError(
+            f"elapsed_target={elapsed_target:g} is smaller than "
+            f"dt_min={config.dt_min:g}; the exact horizon cannot be reached "
+            "without violating the configured timestep floor"
         )
 
     def measure(current_state: Any) -> tuple[dict[str, float], float]:
@@ -213,16 +220,17 @@ def run_adaptive_cfl(
             reason="cfl",
         )
         solver.set_dt(new_dt)
-        nonlocal dt_used_min, dt_used_max
-        dt_used_min = min(dt_used_min, float(new_dt))
-        dt_used_max = max(dt_used_max, float(new_dt))
         return _reset_multistep_history(current_state)
 
     t = float(t0)
     done = 0
     changes: list[dict[str, Any]] = []
-    dt_used_min = float(solver.dt)
-    dt_used_max = float(solver.dt)
+    # These bounds describe timesteps that actually advanced the state.  In
+    # particular, an unsafe configured dt removed by the pre-flight check was
+    # never "used" and must not pollute dt_max_used.
+    dt_used_min = math.inf
+    dt_used_max = 0.0
+    dt_last_used: float | None = None
     cfl_max = 0.0
     final_step_clipped = False
     time_left = elapsed_target
@@ -239,10 +247,65 @@ def run_adaptive_cfl(
     working_dt = float(solver.dt)
     while time_left > tiny:
         working_dt = float(solver.dt)
-        if time_left < working_dt * (1.0 - 1.0e-12):
+        restore_dt: float | None = None
+        n_full = int(time_left / working_dt + 1.0e-12)
+        remainder = time_left - n_full * working_dt
+        if (
+            n_full <= int(config.check_every)
+            and remainder > tiny
+            and remainder < config.dt_min * (1.0 - 1.0e-12)
+        ):
+            # A naive final clip would violate dt_min.  Redistribute the
+            # remaining horizon over equal endpoint steps.  Prefer one extra,
+            # smaller step (never worsens CFL); when that would fall below the
+            # floor, use fewer slightly larger steps only if the projected CFL
+            # and dt_max constraints remain safe.
+            n_endpoint = n_full + 1
+            endpoint_dt = time_left / n_endpoint
+            if endpoint_dt < config.dt_min * (1.0 - 1.0e-12):
+                if n_full < 1:
+                    raise RuntimeError(
+                        "exact final-time landing would require a timestep below "
+                        f"dt_min={config.dt_min:g}"
+                    )
+                n_endpoint = n_full
+                endpoint_dt = time_left / n_endpoint
+            endpoint_cfl = cfl_total * endpoint_dt / working_dt
+            if endpoint_dt > config.dt_max * (1.0 + 1.0e-12):
+                raise RuntimeError(
+                    "exact final-time redistribution would exceed "
+                    f"dt_max={config.dt_max:g}: dt={endpoint_dt:g}"
+                )
+            if endpoint_cfl > 1.0:
+                raise RuntimeError(
+                    "exact final-time redistribution would exceed the CFL "
+                    f"safety ceiling: projected cfl_total={endpoint_cfl:g}"
+                )
+            record_dt_change(
+                done=done,
+                t=t,
+                dt_old=working_dt,
+                dt_new=endpoint_dt,
+                cfl_total=cfl_total,
+                cfl_total_projected=endpoint_cfl,
+                reason="final_time_redistribution",
+            )
+            restore_dt = working_dt
+            solver.set_dt(endpoint_dt)
+            state = _reset_multistep_history(state)
+            final_step_clipped = True
+            n = n_endpoint
+        elif time_left < working_dt * (1.0 - 1.0e-12):
             # Clip the final step so the run lands exactly on the target time
             # and record the actual endpoint timestep just like a CFL change.
+            # Endpoint redistribution above guarantees this clip respects the
+            # configured dt_min floor.
             clipped_dt = float(time_left)
+            if clipped_dt < config.dt_min * (1.0 - 1.0e-12):
+                raise RuntimeError(
+                    "exact final-time landing would require "
+                    f"dt={clipped_dt:g} below dt_min={config.dt_min:g}"
+                )
             clipped_cfl = cfl_total * clipped_dt / working_dt
             record_dt_change(
                 done=done,
@@ -253,38 +316,55 @@ def run_adaptive_cfl(
                 cfl_total_projected=clipped_cfl,
                 reason="final_time_clip",
             )
+            restore_dt = working_dt
             solver.set_dt(clipped_dt)
-            dt_used_min = min(dt_used_min, clipped_dt)
-            dt_used_max = max(dt_used_max, clipped_dt)
-            working_dt = clipped_dt
             state = _reset_multistep_history(state)
             final_step_clipped = True
             n = 1
         else:
             n = min(int(config.check_every), int(time_left / working_dt + 1.0e-12))
             n = max(n, 1)
+        step_dt = float(solver.dt)
+        dt_used_min = min(dt_used_min, step_dt)
+        dt_used_max = max(dt_used_max, step_dt)
+        dt_last_used = step_dt
         state = solver.solve(state, n)
         done += n
-        advanced = n * float(solver.dt)
+        advanced = n * step_dt
         t += advanced
         time_left -= advanced
         health, cfl_total = measure(state)
         require_finite_cfl(cfl_total, done=done, t=t)
         cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
+        if cfl_total > 1.0:
+            raise RuntimeError(
+                "adaptive CFL safety ceiling exceeded after an evolved block "
+                f"at tstep={done} t={t:g}: cfl_total={cfl_total:g}; the "
+                "completed block cannot be repaired by shrinking the next dt"
+            )
         if on_block is not None:
             on_block(t, done, state, health)
+        if restore_dt is not None:
+            # The endpoint step is an exact-horizon implementation detail, not
+            # the controller's next working dt.  Restore the controller and
+            # clear AB2 history so the returned solver/state pair is honest.
+            solver.set_dt(restore_dt)
+            state = _reset_multistep_history(state)
         if time_left > tiny:
             # The post-block measurement doubles as the next pre-block check.
             state = maybe_adapt(state, cfl_total, done, t)
-        elif cfl_total > 1.0:
-            raise RuntimeError(
-                "adaptive CFL safety ceiling exceeded at the final state: "
-                f"cfl_total={cfl_total:g}"
-            )
+
+    if dt_last_used is None:
+        # A zero-horizon run advances no step; retain finite, unsurprising
+        # reporting without claiming the pre-flight configured dt was used.
+        dt_last_used = float(solver.dt)
+        dt_used_min = dt_last_used
+        dt_used_max = dt_last_used
 
     record = {
         "adaptive_cfl_target": float(config.target),
         "dt_final": float(solver.dt),
+        "dt_last_used": float(dt_last_used),
         "dt_min_used": float(dt_used_min),
         "dt_max_used": float(dt_used_max),
         "dt_changes": changes,

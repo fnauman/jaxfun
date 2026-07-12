@@ -69,6 +69,18 @@ def _require_resolved_m(m: int, ntheta: int) -> None:
         )
 
 
+def _cylindrical_laplacian_axisymmetric(u: sp.Expr, r: sp.Expr) -> sp.Expr:
+    """Scalar cylindrical Laplacian for native ``(z, r)`` tensors."""
+
+    return Dx(u, 1, 2) + (1 / r) * Dx(u, 1, 1) + Dx(u, 0, 2)
+
+
+def _cylindrical_laplacian_3d(u: sp.Expr, r: sp.Expr) -> sp.Expr:
+    """Scalar cylindrical Laplacian for native ``(theta, z, r)`` tensors."""
+
+    return Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
+
+
 def _positive_pivot_phase(vec):
     pivot_index = max(range(vec.shape[0]), key=lambda idx: abs(vec[idx]))
     pivot = vec[pivot_index]
@@ -214,8 +226,7 @@ class AxisymmetricTCDNSJax:
         raise ValueError("family must be 'L' or 'C'")
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
-        r = self.r
-        return Dx(u, 1, 2) + (1 / r) * Dx(u, 1, 1) + Dx(u, 0, 2)
+        return _cylindrical_laplacian_axisymmetric(u, self.r)
 
     @staticmethod
     def _dense(expr: sp.Expr) -> Array:
@@ -652,10 +663,7 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         )
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
-        r = self.r
-        return (
-            Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
-        )
+        return _cylindrical_laplacian_3d(u, self.r)
 
     def _add_avv_terms(
         self,
@@ -951,8 +959,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         )
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
-        r = self.r
-        return Dx(u, 1, 2) + (1 / r) * Dx(u, 1, 1) + Dx(u, 0, 2)
+        return _cylindrical_laplacian_axisymmetric(u, self.r)
 
     def _add_mhd_terms(
         self,
@@ -1345,10 +1352,7 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
         )
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
-        r = self.r
-        return (
-            Dx(u, 2, 2) + (1 / r) * Dx(u, 2, 1) + (1 / r**2) * Dx(u, 0, 2) + Dx(u, 1, 2)
-        )
+        return _cylindrical_laplacian_3d(u, self.r)
 
     def _add_mhd_terms(
         self,
