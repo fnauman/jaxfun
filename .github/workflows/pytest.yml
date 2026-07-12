@@ -96,7 +96,7 @@ jobs:
 
       - name: Install shenfun reference
         if: matrix.name == 'integration tests'
-        run: uv pip install numba -e .reference/shenfun
+        run: uv pip install "scipy<1.17" numba -e .reference/shenfun
 
       - name: Run tests
         env:
