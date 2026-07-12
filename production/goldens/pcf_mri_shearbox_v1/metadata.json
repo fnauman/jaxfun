@@ -1,0 +1,9 @@
+{
+  "artifact_id": "pcf_mri_shearbox_v1",
+  "geometry": "pcf",
+  "physics": "mri",
+  "problem_id": "pcf_mri_shearbox_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "7c75dd546bba682dcfc29f344f42243887f83d24d7e80de231f69938da290063",
+  "support_state": "production"
+}

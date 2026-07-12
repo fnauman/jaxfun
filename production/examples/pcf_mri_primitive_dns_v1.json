@@ -1,0 +1,120 @@
+{
+  "boundary_conditions": {
+    "magnetic": {
+      "details": "b_x=0 (Dirichlet, zero normal field); d_x b_y = d_x b_z = 0 (Neumann tangential)",
+      "type": "conducting"
+    },
+    "velocity": {
+      "type": "no_slip_walls",
+      "wall": "u=0 at x=+-1"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "growth_rate",
+    "growth_rate_linear",
+    "magnetic_energy",
+    "divergence_b"
+  ],
+  "diagnostics": [
+    "growth_rate",
+    "growth_rate_linear",
+    "kinetic_energy",
+    "magnetic_energy",
+    "divergence_u",
+    "divergence_b",
+    "magnetic_bc"
+  ],
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 6.283185307179586,
+    "z_period": 1.0
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p",
+    "b_x",
+    "b_y",
+    "b_z"
+  ],
+  "expected_oracle": {
+    "source": "nonlinear DNS demo/pcf_mri_primitive.py (AxisymmetricPCFMRIDNS, CNAB2, primitive b); linear-eigenmode seed, DNS growth rate cross-checked against demo/_pcf_linear.py",
+    "source_anchors": [
+      "demo/test_pcf_mri_primitive.py:1",
+      "demo/_pcf_linear.py:196"
+    ],
+    "type": "pcf_mri_dns_growth"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "B0": 0.1,
+    "type": "imposed_vertical_field"
+  },
+  "formulation": {
+    "internal": "primitive-variable plane-Couette shearing-box resistive-MHD axisymmetric (ky=0) CNAB2 saddle-point DNS; magnetic field evolved DIRECTLY (not vector potential)",
+    "pressure": "velocity pressure Pi; magnetic field direct components with conducting walls"
+  },
+  "geometry": "pcf",
+  "golden": {
+    "artifact_id": "pcf_mri_primitive_dns_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/pcf_mri_primitive_dns_v1.json --out demo/production/goldens/pcf_mri_primitive_dns_v1 --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 1e-07,
+    "type": "linear_eigenmode"
+  },
+  "mode": {
+    "axial_mode": 1,
+    "streamwise_wavenumber": 0.0
+  },
+  "native_axes": {
+    "axis_0": "z vertical (Fourier)",
+    "axis_1": "x wall-normal (Chebyshev)",
+    "axis_2": "y streamwise (invariant, ky=0 channel mode)"
+  },
+  "nondimensional_groups": {
+    "B0": 0.1,
+    "Omega": 0.6666666666666666,
+    "Pm": 1.0,
+    "Re": 1000.0,
+    "Rm": 1000.0,
+    "S": 1.0,
+    "eta_mag": 0.001,
+    "nu": 0.001
+  },
+  "physics": "mri",
+  "problem_id": "pcf_mri_primitive_dns_v1",
+  "random_seed": null,
+  "resolution": {
+    "Nx": 40,
+    "Nz": 16,
+    "family": "C"
+  },
+  "support_state": "production",
+  "time": {
+    "dt": 0.002,
+    "final_time": 0.6,
+    "integrator": "CNAB2"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b": 1e-09,
+      "divergence_u": 1e-09,
+      "growth_rate": 1e-06,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-09,
+      "magnetic_energy": 1e-09
+    }
+  },
+  "unsupported_subcases": []
+}

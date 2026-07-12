@@ -24,13 +24,28 @@ dependencies = [
   "optax>=0.2.6",
   "pre-commit>=4.3",
   "pytest-xdist[psutil]>=3.8",
+  "scipy>=1.14",
   "sympy>=1.14",
 ]
 
+optional-dependencies.cuda13 = [
+  "jax[cuda13]>=0.10.1",
+]
+optional-dependencies.io = [
+  "h5py>=3.16",
+]
+optional-dependencies.wandb = [
+  "wandb>=0.17",
+]
+
 [tool.pytest.ini_options]
+testpaths = [
+  "tests",
+]
 markers = [
   "slow: long-running tests excluded from local default",
   "integration: solves a complete problem or exercises several subsystems",
+  "live_shenfun: compares against the live shenfun reference subprocess",
   "smoke: small end-to-end test suitable for every PR",
   "spmd: requires multiple JAX devices",
   "pinn: neural-network/PINN tests",

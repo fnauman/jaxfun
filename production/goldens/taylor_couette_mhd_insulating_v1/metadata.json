@@ -1,0 +1,9 @@
+{
+  "artifact_id": "taylor_couette_mhd_insulating_v1",
+  "geometry": "taylor_couette",
+  "physics": "mhd",
+  "problem_id": "taylor_couette_mhd_insulating_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "15662c21f59fbbffaf8f87968479fba6ca96f1c6ccf39645bce0ed3b423102f0",
+  "support_state": "production"
+}

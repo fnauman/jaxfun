@@ -507,6 +507,90 @@ class CartesianProductSpace(CartesianBaseSpace):
 class VectorTensorProductSpace(CartesianTensorProductSpace):
     """Vector-valued tensor product space (rank-1 CartesianTensorProductSpace)."""
 
+    def __init__(
+        self,
+        *basespaces: MultiDimensionalSpace | Sequence[MultiDimensionalSpace],
+        name: str = "VTPS",
+        rank: int | RankTag = RankTag.VECTOR,
+    ) -> None:
+        """Build a vector space from variadic, tuple, or repeated scalar spaces.
+
+        The variadic form is the Cartesian-product API.  The tuple and single
+        TensorProductSpace forms preserve the original public API; a single
+        d-dimensional scalar space represents a d-component vector.
+        """
+        if len(basespaces) == 1 and isinstance(basespaces[0], Sequence):
+            normalized = tuple(basespaces[0])
+        elif len(basespaces) == 1 and isinstance(basespaces[0], TensorProductSpace):
+            normalized = (basespaces[0],) * basespaces[0].dims
+        else:
+            normalized = tuple(basespaces)
+        super().__init__(
+            *cast(tuple[MultiDimensionalSpace, ...], normalized),
+            name=name,
+            rank=RankTag.VECTOR if rank == RankTag.NONE else rank,
+        )
+        self.tensorspaces = tuple(self.flatten())
+
+    @staticmethod
+    def _stack_or_tuple(coeffs: Sequence[Array]) -> Array | tuple[Array, ...]:
+        """Stack equal-shaped components and preserve ragged ones as a tuple."""
+        shapes = [tuple(coeff.shape) for coeff in coeffs]
+        if all(shape == shapes[0] for shape in shapes[1:]):
+            return jnp.stack(coeffs)
+        return tuple(coeffs)
+
+    @property
+    def num_dofs(self) -> tuple[int, ...] | tuple[tuple[int, ...], ...]:
+        """Return a stacked shape when possible, otherwise component shapes."""
+        dofs = tuple(space.num_dofs for space in self.flatten())
+        if all(dof == dofs[0] for dof in dofs[1:]):
+            return (len(dofs),) + dofs[0]
+        return dofs
+
+    def evaluate(
+        self, x: Array, c: Array | tuple[Array, ...]
+    ) -> Array | tuple[Array, ...]:
+        """Evaluate vector components, retaining ragged component shapes."""
+        return self._stack_or_tuple(
+            [space.evaluate(x, c[i]) for i, space in enumerate(self.flatten())]
+        )
+
+    def forward(self, u: Array) -> Array | tuple[Array, ...]:
+        """Forward-transform vector components with ragged-shape support."""
+        return self._stack_or_tuple(
+            [space.forward(u[i]) for i, space in enumerate(self.flatten())]
+        )
+
+    def scalar_product(self, u: Array) -> Array | tuple[Array, ...]:
+        """Compute component scalar products with ragged-shape support."""
+        return self._stack_or_tuple(
+            [space.scalar_product(u[i]) for i, space in enumerate(self.flatten())]
+        )
+
+    def to_orthogonal(self, c: Array | tuple[Array, ...]) -> Array | tuple[Array, ...]:
+        """Convert vector coefficients to orthogonal bases."""
+        return self._stack_or_tuple(
+            [space.to_orthogonal(c[i]) for i, space in enumerate(self.flatten())]
+        )
+
+    def from_orthogonal(
+        self, c: Array | tuple[Array, ...]
+    ) -> Array | tuple[Array, ...]:
+        """Convert vector coefficients from orthogonal bases."""
+        return self._stack_or_tuple(
+            [space.from_orthogonal(c[i]) for i, space in enumerate(self.flatten())]
+        )
+
+    def get_dealiased(
+        self, padding_factor: float | Sequence[float] = 1.5
+    ) -> VectorTensorProductSpace:
+        """Return a vector space with padded component quadrature counts."""
+        return VectorTensorProductSpace(
+            tuple(space.get_dealiased(padding_factor) for space in self.flatten()),
+            name=self.name + "p",
+        )
+
     def __iter__(self) -> Iterator[TensorProductSpace]:
         """Iterate over component spaces."""
         return iter(cast(list[TensorProductSpace], self.basespaces))

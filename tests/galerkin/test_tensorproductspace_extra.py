@@ -258,3 +258,22 @@ def test_directsumtps():
     z0 = jnp.sum(jnp.array(a), axis=0)
     z1 = T.evaluate(xj, c)
     assert jnp.linalg.norm(z0 - z1) < jnp.sqrt(ulp(100))
+
+
+def test_tensorproduct_backward_supports_uniform_mesh_kind():
+    from jaxfun import Domain
+    from jaxfun.galerkin import FunctionSpace, TensorProduct
+    from jaxfun.galerkin.Fourier import Fourier
+    from jaxfun.galerkin.Legendre import Legendre
+
+    D = FunctionSpace(6, Legendre, domain=Domain(-1.0, 1.0))
+    F = FunctionSpace(8, Fourier, domain=Domain(0.0, 2.0 * jnp.pi))
+    T = TensorProduct(D, F)
+    coeff = jnp.zeros(T.num_dofs).at[1, 1].set(1.0)
+    N = (9, 10)
+
+    direct = T.backward(coeff, N=N, kind="uniform")
+    expected = T.evaluate_mesh(coeff, kind="uniform", N=N)
+
+    assert direct.shape == N
+    assert jnp.allclose(direct, expected)

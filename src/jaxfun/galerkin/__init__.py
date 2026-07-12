@@ -10,7 +10,9 @@ from . import (
     orthogonal as orthogonal,
 )
 from .arguments import (
+    Array as Array,
     JAXFunction as JAXFunction,
+    PhysicalArray as PhysicalArray,
     TestFunction as TestFunction,
     TrialFunction as TrialFunction,
 )
@@ -22,9 +24,16 @@ from .cartesianproductspace import (
 )
 from .composite import Composite as Composite, DirectSum as DirectSum
 from .functionspace import FunctionSpace as FunctionSpace
-from .inner import inner as inner, inner_items as inner_items
+from .inner import (
+    Project as Project,
+    inner as inner,
+    inner_items as inner_items,
+    integrate as integrate,
+)
 from .tensorproductspace import (
+    CoupledSpace as CoupledSpace,
     DirectSumTPS as DirectSumTPS,
+    K_over_K2 as K_over_K2,
     TensorProduct as TensorProduct,
     TensorProductSpace as TensorProductSpace,
 )

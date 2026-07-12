@@ -1,0 +1,15 @@
+{
+  "diagnostic_scalars": {
+    "divergence_b": 3.0017259463916302e-18,
+    "divergence_u": 6.5112481446622135e-18,
+    "growth_rate": 0.3403972182913979,
+    "growth_rate_linear": 0.3403972051440628,
+    "kinetic_energy": 7.339824415880832e-15,
+    "magnetic_bc": "conducting",
+    "magnetic_energy": 1.039589006705832e-14
+  },
+  "problem_id": "taylor_couette_mhd_dns_v1",
+  "schema_version": 1,
+  "spec_hash": "91840b2337b47a0a458118e6dfc5fb4a4f178a346b8a51adcb270321db9f55b7",
+  "time": 0.5
+}

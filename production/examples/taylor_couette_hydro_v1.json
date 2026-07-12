@@ -1,0 +1,107 @@
+{
+  "boundary_conditions": {
+    "magnetic": null,
+    "velocity": {
+      "inner": "Omega1*R1",
+      "outer": "Omega2*R2",
+      "type": "no_slip_rotating_cylinders"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "growth_rate",
+    "base_flow_coefficients",
+    "divergence_u"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "growth_rate",
+    "rayleigh_stable",
+    "divergence_l2"
+  ],
+  "domain": {
+    "r": [
+      1.0,
+      2.0
+    ],
+    "theta_period": 6.283185307179586,
+    "z_period": 6.283185307179586
+  },
+  "evolved_variables": [
+    "u_r",
+    "u_theta",
+    "u_z",
+    "p"
+  ],
+  "expected_oracle": {
+    "source": "analytic A*r+B/r + demo/taylor_couette_linear.py",
+    "source_anchors": [
+      "solver_survey.md:392",
+      "demo/test_taylor_couette.py:1"
+    ],
+    "type": "circular_couette_base_flow"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "type": "none"
+  },
+  "formulation": {
+    "internal": "primitive variables Galerkin generalized eigenproblem",
+    "pressure": "P_N/P_{N-2} pressure with null-space pinning"
+  },
+  "geometry": "taylor_couette",
+  "golden": {
+    "artifact_id": "taylor_couette_hydro_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/taylor_couette_hydro_v1.json --out demo/production/goldens/taylor_couette_hydro_v1 --write-golden"
+  },
+  "initial_condition": {
+    "type": "linear_eigenmode"
+  },
+  "mode": {
+    "axial_wavenumber": 3.14,
+    "azimuthal_wavenumber": 0
+  },
+  "native_axes": {
+    "axis_0": "r radial",
+    "axis_1": "theta azimuthal",
+    "axis_2": "z axial"
+  },
+  "nondimensional_groups": {
+    "Omega1": 1.0,
+    "Omega2": 0.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "Re": 500.0,
+    "nu": 0.002,
+    "radius_ratio": 0.5
+  },
+  "physics": "hydro",
+  "problem_id": "taylor_couette_hydro_v1",
+  "random_seed": null,
+  "resolution": {
+    "N": 28,
+    "family": "C"
+  },
+  "support_state": "production",
+  "time": {
+    "dt": 0.001,
+    "final_time": 0.01,
+    "integrator": "linear_eigenproblem"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "growth_rate": 1e-10,
+      "kinetic_energy": 1e-10,
+      "eigenvalue_imag": 1e-06,
+      "eigenvalue_real": 1e-06
+    }
+  },
+  "unsupported_subcases": []
+}

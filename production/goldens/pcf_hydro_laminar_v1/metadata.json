@@ -1,0 +1,9 @@
+{
+  "artifact_id": "pcf_hydro_laminar_v1",
+  "geometry": "pcf",
+  "physics": "hydro",
+  "problem_id": "pcf_hydro_laminar_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "8d9dcdb06559cf0e765efc628e8fae0c2c8ae622aabee86b5fafbc6798285daf",
+  "support_state": "production"
+}

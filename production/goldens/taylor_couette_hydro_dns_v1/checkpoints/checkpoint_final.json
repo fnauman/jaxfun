@@ -1,0 +1,13 @@
+{
+  "diagnostic_scalars": {
+    "divergence_linf": 6.484037211231669e-17,
+    "growth_rate": 0.1273035583309162,
+    "growth_rate_linear": 0.12730355815948557,
+    "kinetic_energy": 5.4823752189594825e-12,
+    "rayleigh_stable": false
+  },
+  "problem_id": "taylor_couette_hydro_dns_v1",
+  "schema_version": 1,
+  "spec_hash": "d7de2715251046b3671f2d695782872b62ba230ae60cc6bf711840e20fc30d46",
+  "time": 0.4
+}

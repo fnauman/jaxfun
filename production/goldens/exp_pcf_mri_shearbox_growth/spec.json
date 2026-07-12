@@ -1,0 +1,159 @@
+{
+  "boundary_conditions": {
+    "magnetic": {
+      "details": "b_x=0, d_x b_y=d_x b_z=0",
+      "type": "conducting"
+    },
+    "velocity": {
+      "type": "no_slip_shearbox_walls"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/shear-gradient direction",
+    "y": "streamwise direction",
+    "z": "spanwise/vertical-field direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "magnetic_energy",
+    "maxwell_stress_xy",
+    "reynolds_stress",
+    "transport_alpha"
+  ],
+  "diagnostics": [
+    "magnetic_energy",
+    "growth_rate",
+    "maxwell_stress_xy",
+    "reynolds_stress",
+    "transport_alpha",
+    "divergence_b_l2",
+    "butterfly_by_mean"
+  ],
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 4.0,
+    "z_period": 1.0
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p",
+    "b_x",
+    "b_y",
+    "b_z"
+  ],
+  "expected_oracle": {
+    "fallback_rungs": [
+      1,
+      2,
+      3
+    ],
+    "linear_window_check": "growth over t in [1,3]; saturation uses E_mag[-1] > 2*E_mag[0] and monotone-then-plateau",
+    "plan_inventory_id": "exp_PCF_MRI_shearbox_growth",
+    "source": "local ideal MRI optimum, pcf_mri_shearbox_v1, pcf_mri_primitive_dns_v1, then GPU-generated saturated DNS golden",
+    "type": "mri_saturation_ladder"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "B0": 0.025,
+    "by": 0.0,
+    "bz": 0.025,
+    "type": "rotation_shear_imposed_vertical_field"
+  },
+  "formulation": {
+    "internal": "primitive-b PCF MRI/shearbox DNS with direct magnetic-field evolution",
+    "pressure": "primitive velocity pressure with direct magnetic components"
+  },
+  "geometry": "pcf",
+  "golden": {
+    "artifact_id": "exp_pcf_mri_shearbox_growth",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/exp_pcf_mri_shearbox_growth.json --out runs/exp_pcf_mri_shearbox_growth/<timestamp> --device auto --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 0.001,
+    "seeded_modes": {
+      "ky": 0,
+      "kz": [
+        1,
+        2,
+        3
+      ]
+    },
+    "type": "mri_eigenmode_packet"
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "B0": 0.025,
+    "Omega": 0.6666666666666666,
+    "Pm": 1.0,
+    "Re": 1000.0,
+    "Rm": 1000.0,
+    "S": 1.0,
+    "eta_mag": 0.001,
+    "nu": 0.001,
+    "q_shear": 1.5
+  },
+  "physics": "mri",
+  "problem_id": "exp_pcf_mri_shearbox_growth",
+  "resolution": {
+    "dealias": [
+      1.0,
+      1.5,
+      1.5
+    ],
+    "family": "L",
+    "production": {
+      "Nx": 32,
+      "Ny": 32,
+      "Nz": 32
+    },
+    "smoke": {
+      "Nx": 8,
+      "Ny": 4,
+      "Nz": 8,
+      "dealias": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "start": {
+      "Nx": 16,
+      "Ny": 32,
+      "Nz": 16
+    }
+  },
+  "spec_hash": "96c9088d4cde5a5fdfdb1e20fb20175bb20b8e3b5dff951a15411b8ef3ee534b",
+  "support_state": "experimental",
+  "time": {
+    "dt": 0.005,
+    "final_time": 60.0,
+    "integrator": "IMEXRK222"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 1e-10,
+      "growth_rate": 0.002,
+      "magnetic_energy": 1e-06,
+      "maxwell_stress_xy": 1e-06,
+      "butterfly_by_mean": 1e-06,
+      "divergence_u_l2": 1e-06,
+      "growth_rate_linear": 1e-06,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy_growth_factor": 0.6392551117500747,
+      "reynolds_stress": 1e-06,
+      "total_energy": 1e-06,
+      "transport_alpha": 4.850302696228027e-06
+    }
+  },
+  "unsupported_subcases": []
+}

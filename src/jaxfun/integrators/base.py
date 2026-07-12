@@ -219,6 +219,24 @@ class BaseIntegrator(ABC, nnx.Module):
         """Apply the inverse mass operator to a coefficient-space right-hand side."""
         return self.mass_operator.solve(rhs)
 
+    def build_implicit_operator(
+        self, coefficient: float, dt: float
+    ) -> BaseMatrix | None:
+        """Build and warm ``M - coefficient*dt*L`` for implicit stages."""
+        scale = float(coefficient) * float(dt)
+        if scale == 0.0 or self.linear_operator.is_zero:
+            return None
+        operator = self.mass_operator - scale * self.linear_operator
+        _warm_operator_solve_cache(operator)
+        return operator
+
+    def apply_linear_scalar_product(self, uh: Array) -> Array:
+        """Apply the assembled linear operator without the mass inverse."""
+        rhs = self.linear_operator @ uh
+        if self.linear_forcing is not None:
+            rhs = rhs + jnp.asarray(self.linear_forcing)
+        return rhs
+
     def nonlinear_rhs(self, uh: Array, N: Padding = None) -> Array:
         """Return the nonlinear contribution in coefficient space."""
         if not self.has_nonlinear:
@@ -239,10 +257,7 @@ class BaseIntegrator(ABC, nnx.Module):
 
     def linear_rhs(self, uh: Array) -> Array:
         """Return the linear contribution after applying the inverse mass matrix."""
-        rhs = self.linear_operator @ uh
-        if self.linear_forcing is not None:
-            rhs = rhs + jnp.asarray(self.linear_forcing)
-        return self.apply_mass_inverse(rhs)
+        return self.apply_mass_inverse(self.apply_linear_scalar_product(uh))
 
     @jax.jit(static_argnums=(0, 2))
     def total_rhs(self, uh: Array, N: Padding = None) -> Array:

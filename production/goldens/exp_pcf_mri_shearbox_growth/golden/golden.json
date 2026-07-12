@@ -1,0 +1,105 @@
+{
+  "artifact_id": "exp_pcf_mri_shearbox_growth",
+  "comparison_fields": {
+    "scalars_sha256": "bde97a9dd115dd89c1d9d60fa252eec9923612a552c3f9daa768cb31a4ab346f"
+  },
+  "diagnostics": {
+    "scalars": {
+      "butterfly_by_mean": -1.7900951206684113e-05,
+      "divergence_b_l2": 0.026693018153309822,
+      "divergence_u_l2": 0.02295018546283245,
+      "growth_rate": 0.1262169497765562,
+      "growth_rate_linear": 0.22968577368750792,
+      "kinetic_energy": 0.3052440285682678,
+      "magnetic_bc": "conducting",
+      "magnetic_energy": 0.04445920139551163,
+      "magnetic_energy_growth_factor": 639255.1117500747,
+      "maxwell_stress_xy": 0.0025403271429240704,
+      "reynolds_stress": 0.0004911121213808656,
+      "saturation_check_passed": true,
+      "total_energy": 0.34970322251319885,
+      "transport_alpha": 4.850302696228027
+    },
+    "time_series": [
+      {
+        "butterfly_by_mean": -2.000888343900442e-11,
+        "divergence_b_l2": 1.2129696642659837e-06,
+        "divergence_u_l2": 1.312025347033341e-06,
+        "growth_rate_linear": 0.22968577368750792,
+        "kinetic_energy": 2.2891704531957657e-08,
+        "magnetic_energy": 6.954844877782307e-08,
+        "maxwell_stress_xy": 6.20497608849746e-09,
+        "reynolds_stress": 2.2780823893953084e-09,
+        "t": 0.0,
+        "total_energy": 9.244015330978073e-08,
+        "transport_alpha": 1.3572894204116892e-05
+      },
+      {
+        "butterfly_by_mean": -1.7900951206684113e-05,
+        "divergence_b_l2": 0.026693018153309822,
+        "divergence_u_l2": 0.02295018546283245,
+        "growth_rate": 0.1262169497765562,
+        "kinetic_energy": 0.3052440285682678,
+        "magnetic_energy": 0.04445920139551163,
+        "maxwell_stress_xy": 0.0025403271429240704,
+        "reynolds_stress": 0.0004911121213808656,
+        "t": 60.0,
+        "total_energy": 0.34970322251319885,
+        "transport_alpha": 4.850302696228027
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax": {
+      "captured_at_utc": "2026-06-10T01:10:28+00:00",
+      "cuda_visible_devices": null,
+      "default_backend": "gpu",
+      "degraded": false,
+      "devices": [
+        "cuda:0"
+      ],
+      "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+      "jax_default_scalar_dtype": "float32",
+      "jax_enable_x64": false,
+      "jax_enable_x64_env": "0",
+      "jax_platforms": null,
+      "jax_version": "0.10.1",
+      "jaxfun_enable_x64": "0",
+      "jaxlib_version": "0.10.1",
+      "mode": "gpu",
+      "production_run_dtype": "float32",
+      "xla_python_client_preallocate": "false"
+    }
+  },
+  "generated_at_utc": "2026-06-10T01:15:04+00:00",
+  "git": {},
+  "problem_id": "exp_pcf_mri_shearbox_growth",
+  "schema_version": 1,
+  "source_anchors": [],
+  "spec_hash": "96c9088d4cde5a5fdfdb1e20fb20175bb20b8e3b5dff951a15411b8ef3ee534b",
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 1e-10,
+      "growth_rate": 0.002,
+      "magnetic_energy": 1e-06,
+      "maxwell_stress_xy": 1e-06,
+      "butterfly_by_mean": 1e-06,
+      "divergence_u_l2": 1e-06,
+      "growth_rate_linear": 1e-06,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy_growth_factor": 0.6392551117500747,
+      "reynolds_stress": 1e-06,
+      "total_energy": 1e-06,
+      "transport_alpha": 4.850302696228027e-06
+    }
+  },
+  "quarantined": {
+    "reason": "pre-FJ-01 invalid nonlinear reference (div_b_l2=0.0267, div_u_l2=0.0230 > 1e-2 guard). GPU smoke under the corrected FJ-01 contract CONFIRMS the primitive-b path cannot regenerate this solenoidal: div_b drifts past the 1e-2 guard by t=30 even with correct dealiasing (primitive b evolution does not enforce div b=0 at finite MRI amplitude). Must be regenerated through the vector-potential/curl oracle (representation: vector_potential), which is solenoidal by construction. See production/promotions/fj03_gpu_smoke_findings.md.",
+    "numerics_contract_version": 1,
+    "regression_only": true,
+    "forbidden_from_seeding_production": true,
+    "gpu_smoke_confirmed_2026_07_10": true
+  }
+}

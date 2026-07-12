@@ -54,10 +54,11 @@ class Jacobi(OrthogonalSpace):
         fun_str: str = "J",
         alpha: Number | float = 0,
         beta: Number | float = 0,
+        **kw,
     ) -> None:
         domain = Domain(-1, 1) if domain is None else domain
         OrthogonalSpace.__init__(
-            self, N, domain=domain, system=system, name=name, fun_str=fun_str
+            self, N, domain=domain, system=system, name=name, fun_str=fun_str, **kw
         )
         self.alpha: Number | float = alpha
         self.beta: Number | float = beta
@@ -569,5 +570,10 @@ class Jacobi(OrthogonalSpace):
             A = self.A().power(q)
         if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
-            return M if A is None else A.T @ M
+            z = M if A is None else A.T @ M
+            if z.shape == (self.num_dofs, u.num_dofs):
+                return z
+            if isinstance(z, DiaMatrix):
+                return z.crop(self.num_dofs, u.num_dofs)
+            return Matrix(z.todense()[: self.num_dofs, : u.num_dofs])
         return None

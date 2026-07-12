@@ -1,0 +1,14 @@
+{
+  "diagnostic_scalars": {
+    "divergence_l2": 0.0,
+    "eigenvalue_imag": 2.773705684522106e-17,
+    "eigenvalue_real": 0.371383777641364,
+    "growth_rate": 0.371383777641364,
+    "kinetic_energy": 0.9923087622739892,
+    "rayleigh_stable": false
+  },
+  "problem_id": "taylor_couette_hydro_v1",
+  "schema_version": 1,
+  "spec_hash": "64b62254a7685b7b8cf75f80d32df3f905dc1f318c895f7bd73db60fe0b34e79",
+  "time": 0.01
+}

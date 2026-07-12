@@ -1,0 +1,61 @@
+{
+  "artifact_id": "pcf_hydro_primitive_dns_v1",
+  "comparison_fields": {
+    "scalars_sha256": "2fac0b8ba8299234fed3f790666bfee12bab2c43a60f3d31fb50f337a305acc0"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_u": 2.2372833005765998e-23,
+      "growth_rate": -0.4194582116466933,
+      "growth_rate_linear": -0.4194581870462016,
+      "kinetic_energy": 1.3173846238454914e-10,
+      "magnetic_energy": 0.0
+    },
+    "time_series": [
+      {
+        "growth_rate_linear": -0.4194581870462016,
+        "kinetic_energy": 1.842668872496685e-10,
+        "t": 0.0
+      },
+      {
+        "growth_rate": -0.4194582116466933,
+        "kinetic_energy": 1.3173846238454914e-10,
+        "t": 0.4
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-08T00:00:00+00:00",
+  "git": {
+    "branch": "shenfun-production-dns",
+    "commit": "4852042be5ca3aeb140eb5ec621862dacda83db4",
+    "worktree_status_short": []
+  },
+  "problem_id": "pcf_hydro_primitive_dns_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "demo/test_pcf_mri_primitive.py:1",
+    "demo/_pcf_linear.py:196"
+  ],
+  "spec_hash": "59aaa99e9970f971a6c1e690bdccc3edd41487f7615def7c1ae31ca5df69852f",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_u": 1e-09,
+      "growth_rate": 1e-06,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-09,
+      "magnetic_energy": 1e-06
+    }
+  }
+}

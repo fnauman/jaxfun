@@ -1,0 +1,60 @@
+{
+  "artifact_id": "taylor_couette_hydro_dns_v1",
+  "comparison_fields": {
+    "scalars_sha256": "f5ee2ec247f931c1d45b442a7abdecd219481be5d46f683f7c30653cd53a584a"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_linf": 6.484037211231669e-17,
+      "growth_rate": 0.1273035583309162,
+      "growth_rate_linear": 0.12730355815948557,
+      "kinetic_energy": 5.4823752189594825e-12,
+      "rayleigh_stable": false
+    },
+    "time_series": [
+      {
+        "growth_rate_linear": 0.12730355815948557,
+        "kinetic_energy": 4.951524923572814e-12,
+        "t": 0.0
+      },
+      {
+        "growth_rate": 0.1273035583309162,
+        "kinetic_energy": 5.4823752189594825e-12,
+        "t": 0.4
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-08T00:00:00+00:00",
+  "git": {
+    "branch": "shenfun-production-dns",
+    "commit": "c9f37cdcffb3d6b7200a53fa63f5fa512b93f173",
+    "worktree_status_short": []
+  },
+  "problem_id": "taylor_couette_hydro_dns_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:392",
+    "demo/test_taylor_couette_dns.py:87"
+  ],
+  "spec_hash": "d7de2715251046b3671f2d695782872b62ba230ae60cc6bf711840e20fc30d46",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_linf": 1e-09,
+      "growth_rate": 1e-06,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-09
+    }
+  }
+}

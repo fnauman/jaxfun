@@ -1,0 +1,12 @@
+{
+  "diagnostic_scalars": {
+    "divergence_l2": 0.0,
+    "flow_rate": 0.14086018105469958,
+    "forcing_phase": 0.9959527330119943,
+    "kinetic_energy": 0.023835073392743992
+  },
+  "problem_id": "pipe_womersley_v1",
+  "schema_version": 1,
+  "spec_hash": "e633d0a97893a3b6b8984c73b4be701b674e10f6c031192273b2c9af8b9e009f",
+  "time": 0.01
+}

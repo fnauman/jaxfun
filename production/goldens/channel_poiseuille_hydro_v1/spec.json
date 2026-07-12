@@ -1,0 +1,99 @@
+{
+  "boundary_conditions": {
+    "magnetic": null,
+    "velocity": {
+      "type": "no_slip_stationary_walls"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "flow_rate",
+    "pressure_gradient",
+    "divergence_u"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "flow_rate",
+    "pressure_gradient",
+    "divergence_l2"
+  ],
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 4.0,
+    "z_period": 4.0
+  },
+  "evolved_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p"
+  ],
+  "expected_oracle": {
+    "source": "analytic + solver_survey.md",
+    "source_anchors": [
+      "solver_survey.md:154"
+    ],
+    "type": "plane_poiseuille_laminar"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "dpdy": "minus 2/Re",
+    "type": "pressure_gradient"
+  },
+  "formulation": {
+    "internal": "analytic primitive-variable channel oracle",
+    "pressure": "constant streamwise pressure gradient"
+  },
+  "geometry": "channel",
+  "golden": {
+    "artifact_id": "channel_poiseuille_hydro_v1",
+    "regeneration_command": "python demo/production/run_problem.py --config demo/production/examples/channel_poiseuille_hydro_v1.json --out demo/production/goldens/channel_poiseuille_hydro_v1 --write-golden"
+  },
+  "initial_condition": {
+    "formula": "u_y=1-x^2",
+    "type": "laminar_profile"
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "Re": 1000.0,
+    "U_center": 1.0
+  },
+  "physics": "hydro",
+  "problem_id": "channel_poiseuille_hydro_v1",
+  "random_seed": null,
+  "resolution": {
+    "family": "C",
+    "nx": 64,
+    "ny": 8,
+    "nz": 8
+  },
+  "spec_hash": "133ffbbd3b8837c96203c74d02dffa88a2d7d358a1458893b06b5e23a9192b49",
+  "support_state": "production",
+  "time": {
+    "dt": 0.0,
+    "final_time": 0.0,
+    "integrator": "analytic"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "flow_rate": 1e-10,
+      "kinetic_energy": 1e-10,
+      "pressure_gradient": 1e-10
+    }
+  },
+  "unsupported_subcases": []
+}

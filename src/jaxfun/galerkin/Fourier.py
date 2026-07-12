@@ -1,3 +1,5 @@
+import math
+
 import jax
 import jax.numpy as jnp
 import sympy as sp
@@ -157,7 +159,9 @@ class Fourier(OrthogonalSpace):
         Returns:
             Coefficients scaled by 2π / domain_factor.
         """
-        out = jnp.fft.fft(c, norm="forward") * 2 * jnp.pi / float(self.domain_factor)
+        out = jnp.fft.fft(c, norm="forward")
+        scale = jnp.asarray(math.tau / float(self.domain_factor), dtype=out.real.dtype)
+        out = out * scale
         if len(c) > self.N:
             return out[self.wavenumbers()]
         return out

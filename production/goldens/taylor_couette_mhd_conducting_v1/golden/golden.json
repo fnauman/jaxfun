@@ -1,0 +1,64 @@
+{
+  "artifact_id": "taylor_couette_mhd_conducting_v1",
+  "comparison_fields": {
+    "scalars_sha256": "0d48349f0f101b1812322bd4f7306c5797454df4781ad2e5523a943e92c6b332"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_b_l2": 0.0,
+      "eigenvalue_imag": 1.0166707854400283e-15,
+      "eigenvalue_real": 0.2562860457534498,
+      "growth_rate": 0.2562860457534498,
+      "kinetic_energy": 0.3604330156096868,
+      "magnetic_bc": "conducting",
+      "magnetic_energy": 0.6395669843903131,
+      "total_energy": 1.0
+    },
+    "time_series": [
+      {
+        "energy_factor": 1.0,
+        "t": 0.0
+      },
+      {
+        "energy_factor": 1.0051388798959997,
+        "t": 0.01
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-07T00:00:00+00:00",
+  "git": {
+    "branch": "main",
+    "commit": "1507c20ffc1b798bf92bf119876fba097df57e93",
+    "worktree_status_short": []
+  },
+  "problem_id": "taylor_couette_mhd_conducting_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:510",
+    "demo/test_taylor_couette.py:230"
+  ],
+  "spec_hash": "b1b3ed4c4ec2364c1cffec1fb3b9c96f07936b6486a4ac5159a7cf65c1e82cf5",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b_l2": 1e-08,
+      "growth_rate": 1e-08,
+      "magnetic_energy": 1e-08,
+      "eigenvalue_imag": 1e-06,
+      "eigenvalue_real": 1e-06,
+      "kinetic_energy": 1e-06,
+      "total_energy": 1e-06
+    }
+  }
+}

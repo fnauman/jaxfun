@@ -93,6 +93,40 @@ def test_prepare_assembles_mass_and_linear_forms_for_first_order() -> None:
     assert sp.simplify(integrator.nonlinear_expr - expected_nonlin) == 0
 
 
+def test_base_integrator_helpers_build_implicit_operator_and_linear_rhs() -> None:
+    F = Fourier(8, Domain(-1, 1))
+    (x,) = F.system.base_scalars()
+    t = F.system.base_time()
+
+    v = TestFunction(F, name="v")
+    u = TrialFunction(F, name="u", transient=True)
+
+    nu = Constant("nu", 0.125)
+    eq = v * (u.diff(t) - nu * u.diff(x, 2))
+    integrator = ETDRK4(
+        F,
+        eq,
+        time=(0.0, 1.0),
+        initial=sp.cos(sp.pi * x),
+        sparse=True,
+    )
+
+    coefficient = 0.25
+    dt = 0.125
+    implicit = integrator.build_implicit_operator(coefficient, dt)
+    assert implicit is not None
+    expected = integrator.mass_operator.todense()
+    expected = expected - coefficient * dt * integrator.linear_operator.todense()
+    assert jnp.allclose(implicit.todense(), expected)
+
+    u_hat = integrator.initial_coefficients()
+    linear_scalar = integrator.apply_linear_scalar_product(u_hat)
+    assert jnp.allclose(linear_scalar, integrator.linear_operator @ u_hat)
+    assert jnp.allclose(
+        integrator.linear_rhs(u_hat), integrator.apply_mass_inverse(linear_scalar)
+    )
+
+
 def test_prepare_assembles_weighted_time_derivative_operator() -> None:
     F = Fourier(8, Domain(-1, 1))
     (x,) = F.system.base_scalars()

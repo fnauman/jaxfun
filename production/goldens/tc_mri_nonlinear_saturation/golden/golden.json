@@ -1,0 +1,84 @@
+{
+  "artifact_id": "tc_mri_nonlinear_saturation",
+  "comparison_fields": {
+    "scalars_sha256": "a793edb8c2fd0b77904c4f4ce8bb693fad56611d8d034e2e61df8b6fe7f57d1a"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_b": 0.0007959605427458882,
+      "divergence_b_l2": 0.0007959605427458882,
+      "divergence_u": 2.263486385345459e-05,
+      "growth_rate": 0.25371599501283015,
+      "growth_rate_linear": 0.3403902242584997,
+      "kinetic_energy": 0.026153631508350372,
+      "magnetic_bc": "conducting",
+      "magnetic_energy": 0.02052982710301876,
+      "magnetic_energy_growth_factor": 8232443.0,
+      "maxwell_stress_xy": -0.0010734881507232785,
+      "reynolds_stress": 0.0003300016396678984,
+      "saturation_check_passed": true
+    },
+    "time_series": [
+      {
+        "divergence_b_l2": 4.038156475871801e-09,
+        "growth_rate_linear": 0.3403902242584997,
+        "kinetic_energy": 1.6478065578695578e-09,
+        "magnetic_energy": 2.4937709675043607e-09,
+        "t": 0.0
+      },
+      {
+        "divergence_b_l2": 0.0007959605427458882,
+        "growth_rate": 0.25371599501283015,
+        "kinetic_energy": 0.026153631508350372,
+        "magnetic_energy": 0.02052982710301876,
+        "maxwell_stress_xy": -0.0010734881507232785,
+        "reynolds_stress": 0.0003300016396678984,
+        "t": 32.0
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax": {
+      "captured_at_utc": "2026-06-10T01:43:29+00:00",
+      "cuda_visible_devices": null,
+      "default_backend": "gpu",
+      "degraded": false,
+      "devices": [
+        "cuda:0"
+      ],
+      "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+      "jax_default_scalar_dtype": "float32",
+      "jax_enable_x64": false,
+      "jax_enable_x64_env": "0",
+      "jax_platforms": null,
+      "jax_version": "0.10.1",
+      "jaxfun_enable_x64": "0",
+      "jaxlib_version": "0.10.1",
+      "mode": "gpu",
+      "production_run_dtype": "float32",
+      "xla_python_client_preallocate": "false"
+    }
+  },
+  "generated_at_utc": "2026-06-10T01:47:42+00:00",
+  "git": {},
+  "problem_id": "tc_mri_nonlinear_saturation",
+  "schema_version": 1,
+  "source_anchors": [],
+  "spec_hash": "f948df630923eb9af8265e6ba0471eef3db492a788dc6352b6edf459c31a8753",
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 0.0001,
+      "growth_rate": 0.002,
+      "magnetic_energy": 1e-06,
+      "maxwell_stress_xy": 1e-06,
+      "divergence_b": 1e-06,
+      "divergence_u": 1e-06,
+      "growth_rate_linear": 1e-06,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy_growth_factor": 8.232443,
+      "reynolds_stress": 1e-06
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "artifact_id": "pcf_fluct_re400",
+  "comparison_fields": {
+    "scalars_sha256": "ceed2bef5955667f52712886158d10c2773001d306d27e93e128ed171a201dda"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_l2": 0.0009791291086003184,
+      "energy_growth_factor": 36.18966868220214,
+      "growth_rate": 0.03588773682579396,
+      "kinetic_energy": 22.859962463378906,
+      "mean_shear": 1.6385924816131592,
+      "roll_rms": 0.1258600652217865,
+      "saturation_check_passed": true,
+      "streak_rms": 0.32550811767578125,
+      "total_kinetic_energy": 24.288536071777344,
+      "wall_shear_lower": 3.5324831008911133,
+      "wall_shear_upper": 3.5282719135284424,
+      "wall_velocity_lower": -0.9975451231002808,
+      "wall_velocity_upper": 0.9975480437278748
+    },
+    "time_series": [
+      {
+        "divergence_l2": 1.1925770044326782,
+        "kinetic_energy": 0.6316709518432617,
+        "mean_shear": 1.0,
+        "t": 0.0,
+        "total_kinetic_energy": 53.26957321166992
+      },
+      {
+        "divergence_l2": 0.0009791291086003184,
+        "growth_rate": 0.03588773682579396,
+        "kinetic_energy": 22.859962463378906,
+        "mean_shear": 1.6385924816131592,
+        "roll_rms": 0.1258600652217865,
+        "streak_rms": 0.32550811767578125,
+        "t": 50.0,
+        "total_kinetic_energy": 24.288536071777344,
+        "wall_shear_lower": 3.5324831008911133,
+        "wall_shear_upper": 3.5282719135284424
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax": {
+      "captured_at_utc": "2026-06-10T02:12:07+00:00",
+      "cuda_visible_devices": null,
+      "default_backend": "gpu",
+      "degraded": false,
+      "devices": [
+        "cuda:0"
+      ],
+      "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+      "jax_default_scalar_dtype": "float32",
+      "jax_enable_x64": false,
+      "jax_enable_x64_env": "0",
+      "jax_platforms": null,
+      "jax_version": "0.10.1",
+      "jaxfun_enable_x64": "0",
+      "jaxlib_version": "0.10.1",
+      "mode": "gpu",
+      "production_run_dtype": "float32",
+      "xla_python_client_preallocate": "false"
+    }
+  },
+  "generated_at_utc": "2026-06-10T02:23:21+00:00",
+  "git": {},
+  "problem_id": "pcf_fluct_re400",
+  "schema_version": 1,
+  "source_anchors": [],
+  "spec_hash": "395c95913ed2d52498e4ef2bed56a93302256691b798917caadf0e47ed4cff24",
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_l2": 1e-06,
+      "growth_rate": 0.002,
+      "kinetic_energy": 0.0001,
+      "energy_growth_factor": 3.618966868220214e-05,
+      "mean_shear": 1.6385924816131591e-06,
+      "roll_rms": 1e-06,
+      "streak_rms": 1e-06,
+      "total_kinetic_energy": 2.4288536071777343e-05,
+      "wall_shear_lower": 3.532483100891113e-06,
+      "wall_shear_upper": 3.528271913528442e-06,
+      "wall_velocity_lower": 1e-06,
+      "wall_velocity_upper": 1e-06
+    }
+  }
+}

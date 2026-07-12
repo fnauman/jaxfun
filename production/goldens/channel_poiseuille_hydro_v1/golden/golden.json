@@ -1,0 +1,55 @@
+{
+  "artifact_id": "channel_poiseuille_hydro_v1",
+  "comparison_fields": {
+    "scalars_sha256": "0c1a0dedc8af707b5928ef72abea419499dede9f171b8ca3b2ce465469ec5e63"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_l2": 0.0,
+      "flow_rate": 1.3329973964894601,
+      "kinetic_energy": 0.5333332994772644,
+      "pressure_gradient": -0.002
+    },
+    "time_series": [
+      {
+        "divergence_l2": 0.0,
+        "flow_rate": 1.3329973964894601,
+        "kinetic_energy": 0.5333332994772644,
+        "pressure_gradient": -0.002,
+        "t": 0.0
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/miniconda3/envs/shenfun/bin/python",
+    "packages": {
+      "h5py": "3.15.1",
+      "mpi4py": "4.1.1",
+      "mpi4py-fft": "2.0.6",
+      "numpy": "2.3.5",
+      "scipy": "1.16.3",
+      "shenfun": "4.2.2"
+    }
+  },
+  "generated_at_utc": "2026-06-07T00:00:00+00:00",
+  "git": {
+    "branch": "main",
+    "commit": "1507c20ffc1b798bf92bf119876fba097df57e93",
+    "worktree_status_short": []
+  },
+  "problem_id": "channel_poiseuille_hydro_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:154"
+  ],
+  "spec_hash": "133ffbbd3b8837c96203c74d02dffa88a2d7d358a1458893b06b5e23a9192b49",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_l2": 1e-10,
+      "flow_rate": 1e-10,
+      "kinetic_energy": 1e-10,
+      "pressure_gradient": 1e-10
+    }
+  }
+}

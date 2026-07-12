@@ -1,0 +1,135 @@
+{
+  "boundary_conditions": {
+    "velocity": {
+      "lower_wall_u_y": -1.0,
+      "type": "no_slip_moving_walls",
+      "upper_wall_u_y": 1.0
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal direction",
+    "y": "streamwise direction",
+    "z": "spanwise direction"
+  },
+  "diagnostic_variables": [
+    "u_x",
+    "u_y",
+    "u_z",
+    "p"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "wall_shear_lower",
+    "wall_shear_upper",
+    "mean_shear",
+    "growth_rate",
+    "divergence_l2",
+    "rms_profiles",
+    "energy_spectra",
+    "ssp_streak_roll"
+  ],
+  "domain": {
+    "x": [
+      -1.0,
+      1.0
+    ],
+    "y_period": 12.566370614359172,
+    "z_period": 6.283185307179586
+  },
+  "evolved_variables": [
+    "u",
+    "g"
+  ],
+  "expected_oracle": {
+    "fallback_rungs": [
+      3
+    ],
+    "notes": "pcf_hydro_laminar_v1 is a decaying linear golden and does not bound turbulent SSP growth",
+    "plan_inventory_id": "pcf_fluct_Re400",
+    "source": "PLAN_jaxfun_production_ready.md Phase J5 inventory; no committed saturated golden exists",
+    "type": "gpu_generated_saturated_dns"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "dpdy": 0.0,
+    "type": "moving_wall_shear"
+  },
+  "formulation": {
+    "internal": "KMM velocity-vorticity plane-Couette fluctuation DNS about U_wall*x e_y",
+    "pressure": "pressure recovered from Poisson diagnostics"
+  },
+  "geometry": "pcf",
+  "golden": {
+    "artifact_id": "pcf_fluct_re400",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/pcf_fluct_re400.json --out runs/pcf_fluct_re400/<timestamp> --device auto --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 0.1,
+    "type": "finite_amplitude_fluctuation"
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal",
+    "axis_1": "y streamwise",
+    "axis_2": "z spanwise"
+  },
+  "nondimensional_groups": {
+    "Re": 400.0,
+    "U_wall": 1.0,
+    "nu": 0.0025
+  },
+  "physics": "hydro",
+  "problem_id": "pcf_fluct_re400",
+  "resolution": {
+    "dealias": [
+      1.0,
+      1.5,
+      1.5
+    ],
+    "family": "L",
+    "production": {
+      "Nx": 64,
+      "Ny": 128,
+      "Nz": 64
+    },
+    "smoke": {
+      "Nx": 9,
+      "Ny": 4,
+      "Nz": 4,
+      "dealias": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "start": {
+      "Nx": 32,
+      "Ny": 64,
+      "Nz": 32
+    }
+  },
+  "spec_hash": "395c95913ed2d52498e4ef2bed56a93302256691b798917caadf0e47ed4cff24",
+  "support_state": "experimental",
+  "time": {
+    "dt": 0.01,
+    "final_time": 50.0,
+    "integrator": "IMEXRK222"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_l2": 1e-06,
+      "growth_rate": 0.002,
+      "kinetic_energy": 0.0001,
+      "energy_growth_factor": 3.618966868220214e-05,
+      "mean_shear": 1.6385924816131591e-06,
+      "roll_rms": 1e-06,
+      "streak_rms": 1e-06,
+      "total_kinetic_energy": 2.4288536071777343e-05,
+      "wall_shear_lower": 3.532483100891113e-06,
+      "wall_shear_upper": 3.528271913528442e-06,
+      "wall_velocity_lower": 1e-06,
+      "wall_velocity_upper": 1e-06
+    }
+  },
+  "unsupported_subcases": []
+}

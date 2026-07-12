@@ -1,0 +1,114 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from production.problem_spec import (
+    ProblemSpecError,
+    UnsupportedSpecError,
+    load_spec,
+    spec_hash,
+    validate_spec,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES = ROOT / "production" / "examples"
+GOLDENS = ROOT / "production" / "goldens"
+PROMOTIONS = ROOT / "production" / "promotions"
+
+
+ACCEPTED = [
+    "pcf_hydro_laminar_v1",
+    "channel_poiseuille_hydro_v1",
+    "pcf_mhd_conducting_v1",
+    "pcf_mri_shearbox_v1",
+    "pcf_hydro_primitive_dns_v1",
+    "pcf_mri_primitive_dns_v1",
+    "taylor_couette_hydro_v1",
+    "taylor_couette_hydro_dns_v1",
+    "taylor_couette_mhd_conducting_v1",
+    "taylor_couette_mhd_insulating_v1",
+    "taylor_couette_mhd_dns_v1",
+    "pipe_hagen_poiseuille_v1",
+    "pipe_womersley_v1",
+]
+
+
+@pytest.mark.parametrize("problem_id", ACCEPTED)
+def test_specs_validate_and_match_vendored_golden_hash(problem_id):
+    spec = load_spec(EXAMPLES / f"{problem_id}.json")
+    assert spec["problem_id"] == problem_id
+    golden = json.loads((GOLDENS / problem_id / "golden" / "golden.json").read_text())
+    assert spec["spec_hash"] == golden["spec_hash"]
+
+
+def test_pipe_hydro_promotion_record_names_parity_and_remaining_dns_scope():
+    record = (PROMOTIONS / "pipe_hydro_axis_regular_basis.md").read_text()
+    assert "axisymmetric pipe hydro parity" in record
+    assert "pipe_hagen_poiseuille_v1" in record
+    assert "pipe_womersley_v1" in record
+    assert "full 3D non-axisymmetric pipe DNS" in record
+
+
+def test_pipe_mhd_rejection_matches_shenfun_contract():
+    with pytest.raises(UnsupportedSpecError, match="pipe MHD/MRI is unsupported"):
+        load_spec(EXAMPLES / "unsupported" / "pipe_mhd_unsupported_v1.json")
+
+
+def test_tc_insulating_m1_rejection_names_axisymmetric_requirement():
+    with pytest.raises(UnsupportedSpecError, match="axisymmetric m=0"):
+        load_spec(
+            EXAMPLES
+            / "unsupported"
+            / "taylor_couette_mhd_insulating_m1_unsupported_v1.json"
+        )
+
+
+def test_domain_required_keys_are_rejected_before_solver_setup():
+    spec = json.loads((EXAMPLES / "channel_poiseuille_hydro_v1.json").read_text())
+    spec["domain"].pop("z_period")
+
+    with pytest.raises(ProblemSpecError, match="schema validation failed.*z_period"):
+        validate_spec(spec)
+
+
+def test_pm_equals_rm_over_re_invariant_is_enforced():
+    spec = json.loads((EXAMPLES / "pcf_mhd_conducting_v1.json").read_text())
+    spec["nondimensional_groups"]["Pm"] = 2.0
+    with pytest.raises(ValueError, match="Pm must equal Rm/Re"):
+        validate_spec(spec)
+
+
+def test_pcf_mri_requires_positive_rotation_and_shear():
+    spec = json.loads((EXAMPLES / "pcf_mri_shearbox_v1.json").read_text())
+    spec["nondimensional_groups"]["Omega"] = 0.0
+
+    with pytest.raises(ProblemSpecError, match="Omega.*positive"):
+        validate_spec(spec)
+
+
+def test_spec_hash_ignores_existing_hash_field():
+    spec = json.loads((EXAMPLES / "pcf_hydro_laminar_v1.json").read_text())
+    expected = spec_hash(spec)
+    spec["spec_hash"] = "not-used"
+    assert spec_hash(spec) == expected
+
+
+def test_unknown_jaxfun_oracle_is_rejected_before_solver_setup():
+    spec = json.loads((EXAMPLES / "pcf_hydro_laminar_v1.json").read_text())
+    spec["problem_id"] = "pcf_hydro_unwired_test"
+    spec["expected_oracle"] = {**spec["expected_oracle"], "type": "unwired_test"}
+    spec["golden"] = {**spec["golden"], "artifact_id": spec["problem_id"]}
+
+    with pytest.raises(
+        UnsupportedSpecError, match="not in the jaxfun implementation allowlist"
+    ):
+        validate_spec(spec)
+
+
+def test_json_schema_validation_runs_before_solver_setup():
+    spec = json.loads((EXAMPLES / "pcf_hydro_laminar_v1.json").read_text())
+    spec["diagnostics"] = []
+
+    with pytest.raises(ProblemSpecError, match="schema validation failed"):
+        validate_spec(spec)

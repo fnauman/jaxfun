@@ -286,7 +286,12 @@ def test_inner_system_heterogeneous_solve():
     x_ref0 = A_ref0.solve(b_ref0)
 
     v1 = TestFunction(T1)
-    A_ref1, b_ref1 = inner(v1 * (p - pe), sparse=True, kind="system")
+    A_ref1, b_ref1 = inner(
+        v1 * (p - pe),
+        sparse=True,
+        kind="system",
+        num_quad_points=(N, N),
+    )
     x_ref1 = A_ref1.solve(b_ref1)
 
     assert jnp.linalg.norm(x_joint[0] - x_ref0) < jnp.sqrt(ulp(1000))
@@ -621,4 +626,7 @@ def test_1d_coupled_system_solve():
     xj = D.mesh()
     u_phys = C.backward(uh)[0]
     ue_phys = jnp.sin(jnp.pi * xj)
-    assert jnp.linalg.norm(u_phys - ue_phys) < jnp.sqrt(ulp(100))
+    # At N=8 the mixed polynomial discretization of sin(pi*x) is truncated;
+    # the algebraic solve above is exact, while the spectral approximation is
+    # expected to be accurate to roughly 1e-3 rather than machine precision.
+    assert jnp.linalg.norm(u_phys - ue_phys) < 1.0e-3

@@ -41,6 +41,14 @@ def _dense_derivative_matrix(
     return Matrix(_dense_derivative_matrix_data(test_modes, trial_modes, derivative))
 
 
+def _crop_matrix(z: Matrix | DiaMatrix, rows: int, cols: int) -> Matrix | DiaMatrix:
+    if z.shape == (rows, cols):
+        return z
+    if isinstance(z, DiaMatrix):
+        return z.crop(rows, cols)
+    return Matrix(z.todense()[:rows, :cols])
+
+
 class Chebyshev(Jacobi):
     """Chebyshev (first kind) polynomial basis space.
 
@@ -72,6 +80,8 @@ class Chebyshev(Jacobi):
         fun_str: str = "T",
         **kw,
     ) -> None:
+        kw.pop("alpha", None)
+        kw.pop("beta", None)
         Jacobi.__init__(
             self,
             N,
@@ -81,6 +91,7 @@ class Chebyshev(Jacobi):
             fun_str=fun_str,
             alpha=-sp.S.Half,
             beta=-sp.S.Half,
+            **kw,
         )
 
     @jit_vmap(in_axes=(0, None))
@@ -431,7 +442,7 @@ class Chebyshev(Jacobi):
 
         if i == 0 and j == 0:
             M = diags([self.norm_squared()], offsets=(0,), shape=(self.N, u.N))
-            return M if A is None else A.T @ M
+            return _crop_matrix(M if A is None else A.T @ M, self.num_dofs, u.num_dofs)
 
         if i in (1, 2) and j == 0:
             m = u._matrices(j, (self, i), q=q)
@@ -442,8 +453,10 @@ class Chebyshev(Jacobi):
         if j >= u.N:
             return None
 
+        if A is None:
+            return _dense_derivative_matrix(self.num_dofs, u.num_dofs, j)
         M = _dense_derivative_matrix(self.N, u.N, j)
-        return M if A is None else A.T @ M
+        return _crop_matrix(A.T @ M, self.num_dofs, u.num_dofs)
 
 
 ##### Predefined Composite spaces #####

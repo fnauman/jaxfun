@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from jaxfun.galerkin import (
         CartesianProductSpace,
         CartesianTensorProductSpace,
+        CoupledSpace,
         DirectSum,
         DirectSumTPS,
         TensorProductSpace,
@@ -53,6 +54,7 @@ type FunctionSpaceType = (
     OrthogonalSpace
     | TensorProductSpace
     | VectorTensorProductSpace
+    | CoupledSpace
     | CartesianTensorProductSpace
     | CartesianProductSpace
     | DirectSum
@@ -164,6 +166,7 @@ type InnerBilinearResult = Array | BaseMatrix
 type InnerBilinearResults = list[Array | BaseMatrix]
 type InnerLinearResults = list[Array]
 type InnerItems = tuple[list[BaseMatrix | GlobalMatrix], list[GlobalArray]]
+type GalerkinOperator = BaseMatrix
 type GalerkinAssembledForm = (
     BaseMatrix | Array | BlockArray | tuple[BaseMatrix, Array | BlockArray]
 )

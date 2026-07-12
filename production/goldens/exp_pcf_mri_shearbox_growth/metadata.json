@@ -1,0 +1,37 @@
+{
+  "artifact_id": "exp_pcf_mri_shearbox_growth",
+  "geometry": "pcf",
+  "physics": "mri",
+  "problem_id": "exp_pcf_mri_shearbox_growth",
+  "runner": "production.validate_gpu",
+  "spec_hash": "96c9088d4cde5a5fdfdb1e20fb20175bb20b8e3b5dff951a15411b8ef3ee534b",
+  "support_state": "experimental",
+  "validation_scope": "generated_saturated_golden",
+  "source_run": {
+    "command": "production/validate_gpu.sh exp_pcf_mri_shearbox_growth --full",
+    "completed_at_utc": "2026-06-10T01:15:06+00:00",
+    "duration_seconds": 280,
+    "timestamp": "20260610T011026Z"
+  },
+  "device": {
+    "backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "jax_default_scalar_dtype": "float32",
+    "production_run_dtype": "float32"
+  },
+  "saturation_checks": {
+    "magnetic_energy_growth_factor": 639255.1117500747,
+    "passed": true,
+    "required": true
+  },
+  "checkpoint_policy": "The full run wrote checkpoints/checkpoints.h5 for restart provenance, but the 385 MB HDF5 payload is omitted from git because golden comparison only requires golden/golden.json and spec.json.",
+  "quarantined": {
+    "reason": "pre-FJ-01 invalid nonlinear reference (div_b_l2=0.0267, div_u_l2=0.0230 > 1e-2 guard). GPU smoke under the corrected FJ-01 contract CONFIRMS the primitive-b path cannot regenerate this solenoidal: div_b drifts past the 1e-2 guard by t=30 even with correct dealiasing (primitive b evolution does not enforce div b=0 at finite MRI amplitude). Must be regenerated through the vector-potential/curl oracle (representation: vector_potential), which is solenoidal by construction. See production/promotions/fj03_gpu_smoke_findings.md.",
+    "numerics_contract_version": 1,
+    "regression_only": true,
+    "forbidden_from_seeding_production": true,
+    "gpu_smoke_confirmed_2026_07_10": true
+  }
+}

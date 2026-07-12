@@ -1,0 +1,78 @@
+{
+  "artifact_id": "tc_supercritical_saturation",
+  "comparison_fields": {
+    "scalars_sha256": "9767aced31c8dff320024306f9752ce83ba2700ccde80cf9f8f06d306e70c5ad"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_l2": 8.660182970743335e-08,
+      "divergence_linf": 4.0937215089797974e-05,
+      "energy_growth_factor": 2301520.0,
+      "growth_rate": 0.09155675212993059,
+      "growth_rate_linear": 0.12731694177847666,
+      "kinetic_energy": 0.032094258815050125,
+      "radial_velocity_linf": 0.15969887375831604,
+      "saturation_check_passed": true,
+      "torque": 0.21806299686431885
+    },
+    "time_series": [
+      {
+        "divergence_l2": 3.89314518123296e-11,
+        "growth_rate_linear": 0.12731694177847666,
+        "kinetic_energy": 1.3944809751365028e-08,
+        "radial_velocity_linf": 8.140402496792376e-05,
+        "t": 0.0
+      },
+      {
+        "divergence_l2": 8.660182970743335e-08,
+        "growth_rate": 0.09155675212993059,
+        "kinetic_energy": 0.032094258815050125,
+        "radial_velocity_linf": 0.15969887375831604,
+        "t": 80.0,
+        "torque": 0.21806299686431885
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax": {
+      "captured_at_utc": "2026-06-10T01:32:50+00:00",
+      "cuda_visible_devices": null,
+      "default_backend": "gpu",
+      "degraded": false,
+      "devices": [
+        "cuda:0"
+      ],
+      "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+      "jax_default_scalar_dtype": "float32",
+      "jax_enable_x64": false,
+      "jax_enable_x64_env": "0",
+      "jax_platforms": null,
+      "jax_version": "0.10.1",
+      "jaxfun_enable_x64": "0",
+      "jaxlib_version": "0.10.1",
+      "mode": "gpu",
+      "production_run_dtype": "float32",
+      "xla_python_client_preallocate": "false"
+    }
+  },
+  "generated_at_utc": "2026-06-10T01:35:14+00:00",
+  "git": {},
+  "problem_id": "tc_supercritical_saturation",
+  "schema_version": 1,
+  "source_anchors": [],
+  "spec_hash": "5d737f0e7051be81ca973cca228d8a262a9122d763bad6a74ba10db48bf98fc2",
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_l2": 0.01,
+      "growth_rate": 0.002,
+      "kinetic_energy": 1e-06,
+      "torque": 1e-06,
+      "divergence_linf": 1e-06,
+      "energy_growth_factor": 2.30152,
+      "growth_rate_linear": 1e-06,
+      "radial_velocity_linf": 1e-06
+    }
+  }
+}

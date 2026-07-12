@@ -1,0 +1,9 @@
+{
+  "artifact_id": "channel_poiseuille_hydro_v1",
+  "geometry": "channel",
+  "physics": "hydro",
+  "problem_id": "channel_poiseuille_hydro_v1",
+  "runner": "demo.production.run_problem",
+  "spec_hash": "133ffbbd3b8837c96203c74d02dffa88a2d7d358a1458893b06b5e23a9192b49",
+  "support_state": "production"
+}

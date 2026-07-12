@@ -9,12 +9,30 @@ import sympy as sp
 from sympy.core.function import AppliedUndef
 
 from jaxfun.galerkin import TestFunction, TrialFunction
-from jaxfun.galerkin.arguments import ArgumentTag, JAXFunction, get_arg
+from jaxfun.galerkin.arguments import ArgumentTag, get_arg
 from jaxfun.typing import Array, Padding, ScalarSpaceType
 from jaxfun.utils import lambdify
 
-type NodeValueCache = dict[sp.Basic, Array]
+
+def physical_cross(
+    a: tuple[Array, Array, Array], b: tuple[Array, Array, Array]
+) -> tuple[Array, Array, Array]:
+    """Return the pointwise cross product of two physical vector fields.
+
+    Reference: the PCF MHD Couette scripts use this primitive for Lorentz
+    forces J x B and electromotive terms U x B.
+    """
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+type NodeValueCache = dict[object, Array]
 type NodeEvaluator = Callable[[NodeValueCache, Padding], Array]
+
+_CURRENT_COEFFS = object()
 
 
 @dataclass(frozen=True)
@@ -106,16 +124,14 @@ class NonlinearCompiler:
     def compile_primitive(self, node: sp.Basic) -> NodeEvaluator:
         """Compile a primitive field or spatial derivative evaluation."""
         space = self.context.functionspace
-        jaxf = cast(JAXFunction[ScalarSpaceType], self.context.jaxfunction)
         if _is_jaxfunction_leaf(node):
 
             def evaluate_leaf(
-                _cache: NodeValueCache,
+                cache: NodeValueCache,
                 N: Padding = None,
                 space: ScalarSpaceType = space,
-                jaxf: JAXFunction[ScalarSpaceType] = jaxf,
             ) -> Array:
-                return space.backward(jaxf.array, N=N)  # ty: ignore[invalid-argument-type]
+                return space.backward(cache[_CURRENT_COEFFS], N=N)  # ty: ignore[invalid-argument-type]
 
             return self.memoize(node, evaluate_leaf)
 
@@ -139,13 +155,14 @@ class NonlinearCompiler:
             derivative_order = derivative_counts
 
         def evaluate_derivative(
-            _cache: NodeValueCache,
+            cache: NodeValueCache,
             N: Padding = None,
             space: ScalarSpaceType = space,
-            jaxf: JAXFunction[ScalarSpaceType] = jaxf,
             derivative_order: int | tuple[int, ...] = derivative_order,
         ) -> Array:
-            return space.backward_primitive(jaxf.array, k=derivative_order, N=N)  # ty: ignore[invalid-argument-type]
+            return space.backward_primitive(  # ty: ignore[invalid-argument-type]
+                cache[_CURRENT_COEFFS], k=derivative_order, N=N
+            )
 
         return self.memoize(node, evaluate_derivative)
 
@@ -320,12 +337,8 @@ def compile_nonlinear_evaluator(
         jaxfunction=jaxfunction,
     )
     compiled = NonlinearCompiler(context).compile(expr)
-    jaxfunction: JAXFunction[ScalarSpaceType] = cast(
-        JAXFunction[ScalarSpaceType], jaxfunction
-    )
 
     def evaluate(uh: Array, N: Padding = None) -> Array:
-        jaxfunction.array = uh
-        return compiled({}, N)
+        return compiled({_CURRENT_COEFFS: uh}, N)
 
     return evaluate

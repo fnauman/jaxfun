@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import math
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, NoReturn, cast
@@ -10,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array, shard_map
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 from jaxfun.coordinates import CartCoordSys, CoordSys
 from jaxfun.sharding import (
@@ -18,6 +19,7 @@ from jaxfun.sharding import (
     _build_local_apply_fn,
     physical_sharding,
     spectral_sharding,
+    spmd_mesh,
 )
 from jaxfun.typing import MeshKind, RankTag
 from jaxfun.utils.common import jit_vmap, lambdify
@@ -33,6 +35,68 @@ if TYPE_CHECKING:
 
 
 IndivisibleError = ValueError
+
+
+def _has_multiple_devices(value: Array) -> bool:
+    devices = getattr(value, "devices", None)
+    if devices is None:
+        return False
+    try:
+        return len(devices()) > 1
+    except (jax.errors.ConcretizationTypeError, TypeError, AttributeError):
+        return False
+
+
+def _separable_axis_order(dim: int, sharding: NamedSharding) -> tuple[int, ...]:
+    """Return the local transform order used by the SPMD separable path."""
+    spec = sharding.spec
+    sharded = tuple(ax for ax in range(dim) if ax < len(spec) and spec[ax] is not None)
+    unsharded = tuple(ax for ax in range(dim) if ax not in sharded)
+    return unsharded + sharded
+
+
+def _apply_separable_local(c: Array, fns: tuple, sharding: NamedSharding) -> Array:
+    """Apply separable transforms in the same axis order as SPMD execution."""
+    for ax in _separable_axis_order(c.ndim, sharding):
+        c = fns[ax](c)
+    return c
+
+
+def _apply_separable_replicated(
+    c: Array, fns: tuple, sharding: NamedSharding, cache: dict
+) -> Array:
+    """Apply the SPMD kernel to a replicated array when devices are available."""
+    if jax.device_count() > 1 and isinstance(c, jax.Array):
+        try:
+            out = _apply_separable_spmd_shard_map(
+                jax.device_put(c, sharding), fns, sharding, cache
+            )
+            return jax.device_put(out, jax.devices()[0])
+        except (TypeError, ValueError):
+            pass
+    return _apply_separable_local(c, fns, sharding)
+
+
+def K_over_K2(
+    K: Sequence[Array], axes: Sequence[int] | None = None
+) -> tuple[Array, ...]:
+    """Return Fourier ``K_i / |K|^2`` factors with the zero mode guarded.
+
+    This is the coefficient-space helper used by the Couette KMM
+    velocity-vorticity reconstruction in ``couette/ChannelFlow.py:168-171``.
+    Non-Fourier axes in ``K`` are usually all-zero grids; pass *axes* to select
+    only the periodic directions.
+    """
+    selected = (
+        tuple(range(len(K))) if axes is None else tuple(int(axis) for axis in axes)
+    )
+    if not selected:
+        raise ValueError("At least one wavenumber axis is required")
+    k2 = jnp.zeros_like(K[selected[0]])
+    for axis in selected:
+        k2 = k2 + K[axis] * K[axis]
+    denom = jnp.where(k2 == 0, 1, k2)
+    return tuple(K[axis] / denom for axis in selected)
 
 
 class TensorProductSpace:
@@ -186,6 +250,48 @@ class TensorProductSpace:
             list(itertools.product(*[m.flatten() for m in mesh])), dtype=mesh[0].dtype
         )
 
+    def wavenumbers(
+        self, *, scaled: bool = True, broadcast: bool = True
+    ) -> tuple[Array, ...]:
+        """Return per-axis Fourier wavenumber grids for this tensor space.
+
+        Non-Fourier axes are returned as zeros.  When scaled is true,
+        Fourier wavenumbers are multiplied by the true-domain derivative scale
+        2*pi / L.  This mirrors the scaled local wavenumber grids used by
+        shenfun's Couette KMM reconstruction.
+        """
+        grids = []
+        for axis, space in enumerate(self.basespaces):
+            if hasattr(space, "wavenumbers"):
+                k = space.wavenumbers()
+                if scaled:
+                    k = k * float(space.domain_factor)
+            else:
+                k = jnp.zeros(space.num_dofs)
+            grids.append(self.broadcast_to_ndims(k, axis) if broadcast else k)
+        return tuple(grids)
+
+    local_wavenumbers = wavenumbers
+
+    def get_mask_nyquist(self) -> Array:
+        """Return a boolean mask for Fourier Nyquist modes.
+
+        Reference: shenfun's ChannelFlow KMM masks Nyquist modes after pseudo
+        spectral products; see couette/ChannelFlow.py:94 and :224.
+        """
+        mask = jnp.zeros(self.num_dofs, dtype=bool)
+        for axis, space in enumerate(self.basespaces):
+            if not hasattr(space, "wavenumbers") or space.N % 2:
+                continue
+            k = space.wavenumbers()
+            axis_mask = jnp.abs(k) == (space.N // 2)
+            mask = mask | self.broadcast_to_ndims(axis_mask, axis)
+        return mask
+
+    def mask_nyquist(self, coeffs: Array) -> Array:
+        """Return coeffs with Fourier Nyquist modes set to zero."""
+        return jnp.where(self.get_mask_nyquist(), 0, coeffs)
+
     def cartesian_mesh(
         self,
         kind: MeshKind | str = MeshKind.QUADRATURE,
@@ -252,13 +358,13 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            c = fn(c)
-        return c
+        return _apply_separable_replicated(
+            c, fns, spectral_sharding, self._spmd_local_fn_cache
+        )
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0,), ndim=1)
     def _evaluate_single_device(self, x: Array, c: Array) -> Array:
@@ -282,7 +388,7 @@ class TensorProductSpace:
         Returns:
             Scalar or (n_pts,) array of evaluated values.
         """
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             dim = len(self)
             T = self.basespaces
 
@@ -320,6 +426,29 @@ class TensorProductSpace:
 
         return self._evaluate_single_device(x, c)
 
+    def get_dealiased(
+        self, padding_factor: float | Sequence[float] = 1.5
+    ) -> TensorProductSpace:
+        """Return a tensor space with padded quadrature counts.
+
+        Reference: shenfun TensorProductSpace.get_dealiased used by the Couette
+        pseudo-spectral nonlinear terms.  Modal dimensions are unchanged.
+        """
+        if isinstance(padding_factor, int | float):
+            factors = (float(padding_factor),) * len(self)
+        else:
+            factors = tuple(float(pf) for pf in padding_factor)
+        if len(factors) != len(self):
+            raise ValueError("padding_factor length must match tensor rank")
+        return TensorProductSpace(
+            tuple(
+                space.get_dealiased(pf)
+                for space, pf in zip(self.basespaces, factors, strict=True)
+            ),
+            system=self.system,
+            name=self.name + "p",
+        )
+
     def get_orthogonal(self) -> TensorProductSpace:
         """Return underlying orthogonal basis instance."""
         orthogonal_spaces = [space.get_orthogonal() for space in self.basespaces]
@@ -331,16 +460,21 @@ class TensorProductSpace:
         self,
         c: Array,
         N: tuple[int | None, ...] | None = None,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
     ) -> Array:
         """Backward transform.
 
         Args:
             c: Coefficient array.
             N: Optional per-axis counts (defaults each to space.num_quad_points).
+            kind: Mesh kind for evaluation; use ``"uniform"`` for output grids.
 
         Returns:
-            Array of backward transform values on quadrature mesh.
+            Array of backward transform values on the requested mesh.
         """
+        kind = MeshKind(kind)
+        if kind is not MeshKind.QUADRATURE:
+            return self.evaluate_mesh(c, kind=kind, N=N)
         N = tuple(
             self.basespaces[ax].num_quad_points if N is None else N[ax]
             for ax in range(len(self))
@@ -356,13 +490,13 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            c = fn(c)
-        return c
+        return _apply_separable_replicated(
+            c, fns, spectral_sharding, self._spmd_local_fn_cache
+        )
 
     def scalar_product(self, u: Array) -> Array:
         """Return tensor of inner products along each axis (separable).
@@ -384,13 +518,13 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding and len(u.devices()) > 1:
+        if self._physical_sharding and _has_multiple_devices(u):
             return _apply_separable_spmd_shard_map(
                 u, fns, physical_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            u = fn(u)
-        return u
+        return _apply_separable_replicated(
+            u, fns, physical_sharding, self._spmd_local_fn_cache
+        )
 
     def forward(self, u: Array) -> Array:
         """Forward transform with optional truncation.
@@ -408,13 +542,13 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._physical_sharding and len(u.devices()) > 1:
+        if self._physical_sharding and _has_multiple_devices(u):
             return _apply_separable_spmd_shard_map(
                 u, fns, physical_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            u = fn(u)
-        return u
+        return _apply_separable_replicated(
+            u, fns, physical_sharding, self._spmd_local_fn_cache
+        )
 
     def backward_primitive(
         self,
@@ -451,13 +585,13 @@ class TensorProductSpace:
                 for ax in range(len(self))
             )
         fns = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and len(c.devices()) > 1:
+        if self._spectral_sharding and _has_multiple_devices(c):
             return _apply_separable_spmd_shard_map(
                 c, fns, spectral_sharding, self._spmd_local_fn_cache
             )
-        for fn in fns:
-            c = fn(c)
-        return c
+        return _apply_separable_replicated(
+            c, fns, spectral_sharding, self._spmd_local_fn_cache
+        )
 
     def to_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped to underlying orthogonal basis.
@@ -502,6 +636,383 @@ class TensorProductSpace:
             except IndivisibleError:
                 pass
         return z
+
+
+class CoupledSpace:
+    """Mixed scalar tensor-product space for coupled systems.
+
+    This mirrors the part of shenfun's CompositeSpace needed by the
+    Taylor-Couette DNS unknown (u_r, u_theta, u_z, p): components may have
+    different tensor spaces and coefficient shapes, and fields are represented
+    as pytrees of component arrays instead of stacked arrays.
+    """
+
+    is_transient = False
+
+    def __init__(
+        self, tensorspaces: Sequence[TensorProductSpace], name: str = "CoupledSpace"
+    ) -> None:
+        if len(tensorspaces) == 0:
+            raise ValueError("CoupledSpace needs at least one component space")
+        self.tensorspaces = tuple(tensorspaces)
+        self.system: CoordSys = self.tensorspaces[0].system
+        if any(space.system != self.system for space in self.tensorspaces):
+            raise ValueError("All component spaces must share a coordinate system")
+        self.name = name
+        self.tensorname = multiplication_sign.join(
+            space.name for space in self.tensorspaces
+        )
+
+    def __len__(self) -> int:
+        """Return number of coupled scalar components."""
+        return len(self.tensorspaces)
+
+    def __iter__(self) -> Iterator[TensorProductSpace]:
+        return iter(self.tensorspaces)
+
+    def __getitem__(self, i: int) -> TensorProductSpace:
+        return self.tensorspaces[i]
+
+    @property
+    def rank(self) -> int:
+        """Coupled scalar systems are not geometric vectors."""
+        return 0
+
+    @property
+    def dims(self) -> int:
+        """Return spatial dimension of each component space."""
+        return self.tensorspaces[0].dims
+
+    @property
+    def dim(self) -> int:
+        """Return total active degrees of freedom across all components."""
+        return sum(self.block_sizes)
+
+    @property
+    def block_sizes(self) -> tuple[int, ...]:
+        """Return flattened active size of each component block."""
+        return tuple(math.prod(space.num_dofs) for space in self)
+
+    @property
+    def block_slices(self) -> tuple[slice, ...]:
+        """Return flat slices for each component block."""
+        starts = [0]
+        for size in self.block_sizes[:-1]:
+            starts.append(starts[-1] + size)
+        return tuple(
+            slice(start, start + size)
+            for start, size in zip(starts, self.block_sizes, strict=True)
+        )
+
+    @property
+    def num_dofs(self) -> tuple[tuple[int, ...], ...]:
+        """Return active coefficient shapes per component."""
+        return tuple(space.num_dofs for space in self)
+
+    @property
+    def num_quad_points(self) -> tuple[tuple[int, ...], ...]:
+        """Return quadrature shapes per component."""
+        return tuple(space.num_quad_points for space in self)
+
+    @property
+    def is_orthogonal(self) -> bool:
+        return all(space.is_orthogonal for space in self)
+
+    def shape(self) -> tuple[tuple[int, ...], ...]:
+        """Return raw modal shape for each component."""
+        return tuple(space.shape() for space in self)
+
+    def flatten(self, coeffs: Sequence[Array]) -> Array:
+        """Pack component coefficient arrays into one flat vector."""
+        if len(coeffs) != len(self):
+            raise ValueError("Coefficient component count does not match CoupledSpace")
+        return jnp.concatenate([jnp.ravel(c) for c in coeffs])
+
+    def unflatten(self, coeffs: Array) -> tuple[Array, ...]:
+        """Unpack one flat vector into component coefficient arrays."""
+        flat = jnp.ravel(coeffs)
+        if flat.size != self.dim:
+            raise ValueError(f"Expected flat size {self.dim}, got {flat.size}")
+        return tuple(
+            flat[s].reshape(space.num_dofs)
+            for s, space in zip(self.block_slices, self, strict=True)
+        )
+
+    def forward(self, values: Sequence[Array]) -> tuple[Array, ...]:
+        """Forward-transform each component independently."""
+        return tuple(
+            space.forward(value) for space, value in zip(self, values, strict=True)
+        )
+
+    def scalar_product(self, values: Sequence[Array]) -> tuple[Array, ...]:
+        """Return scalar products for each component independently."""
+        return tuple(
+            space.scalar_product(value)
+            for space, value in zip(self, values, strict=True)
+        )
+
+    def backward(
+        self,
+        coeffs: Sequence[Array],
+        N: tuple[tuple[int | None, ...], ...] | None = None,
+    ) -> tuple[Array, ...]:
+        """Backward-transform each component independently."""
+        return tuple(
+            space.backward(coeff, N=N[i] if N is not None else None)
+            for i, (space, coeff) in enumerate(zip(self, coeffs, strict=True))
+        )
+
+
+class VectorTensorProductSpace:
+    """Vector-valued tensor product space.
+
+    Represents a tuple of identical (or differing in boundary conditions)
+    TensorProductSpace objects corresponding to vector components.
+
+    Attributes:
+        tensorspaces: Tuple of component tensor spaces.
+        system: Shared coordinate system.
+        name: Label.
+        tensorname: Joined printable representation.
+    """
+
+    is_transient = False
+
+    def __init__(
+        self,
+        tensorspace: TensorProductSpace | tuple[TensorProductSpace, ...],
+        name: str = "VTPS",
+    ) -> None:
+        if isinstance(tensorspace, TensorProductSpace):
+            n = len(tensorspace)
+            tensorspaces: tuple[TensorProductSpace, ...] = (tensorspace,) * n
+        else:
+            tensorspaces = tensorspace
+        self.tensorspaces = tensorspaces
+        self.system: CoordSys = self.tensorspaces[0].system
+        self.name = name
+        self.tensorname = multiplication_sign.join([b.name for b in self.tensorspaces])
+        self.mesh = self.tensorspaces[0].mesh
+        self.num_quad_points = self.tensorspaces[0].num_quad_points
+        # Slab decomposition for vector spaces
+        # First index is vector component, which is not sharded.
+        self._spectral_sharding: NamedSharding | None = (
+            None if len(jax.devices()) == 1 else NamedSharding(spmd_mesh, P(None, "k"))
+        )
+        # Sharding of arrays in physical space.
+        self._physical_sharding: NamedSharding | None = (
+            None
+            if len(jax.devices()) == 1
+            else NamedSharding(spmd_mesh, P(None, None, "k"))
+        )
+
+    def __len__(self) -> int:
+        """Return number of vector components."""
+        return len(self.tensorspaces)
+
+    def __iter__(self) -> Iterator[TensorProductSpace]:
+        """Iterate over component tensor spaces."""
+        return iter(self.tensorspaces)
+
+    def __getitem__(self, i: int) -> TensorProductSpace:
+        """Return component tensor space i."""
+        return self.tensorspaces[i]
+
+    @staticmethod
+    def _stack_or_tuple(coeffs: list[Array]) -> Array | tuple[Array, ...]:
+        """Stack equal-shaped vector components, otherwise return a pytree tuple."""
+        shapes = [tuple(coeff.shape) for coeff in coeffs]
+        if all(shape == shapes[0] for shape in shapes[1:]):
+            return jnp.stack(coeffs)
+        return tuple(coeffs)
+
+    @property
+    def rank(self) -> int:
+        """Return tensor rank (1 for vector fields)."""
+        return 1
+
+    @property
+    def dims(self) -> int:
+        """Return spatial dimension of each component space."""
+        return len(self.tensorspaces[0])
+
+    @property
+    def dim(self) -> int:
+        """Return total number of modes."""
+        return sum([space.dim for space in self.tensorspaces])
+
+    @property
+    def num_dofs(self) -> tuple[int, ...] | tuple[tuple[int, ...], ...]:
+        """Return active degrees of freedom, preserving ragged components."""
+        dofs = tuple(space.num_dofs for space in self.tensorspaces)
+        if all(dof == dofs[0] for dof in dofs[1:]):
+            return (self.dims,) + dofs[0]
+        return dofs
+
+    @property
+    def is_orthogonal(self) -> bool:
+        """Return True if underlying bases are all orthogonal."""
+        return all(space.is_orthogonal for space in self.tensorspaces)
+
+    def shape(self) -> tuple[int, ...] | tuple[tuple[int, ...], ...]:
+        """Return raw modal shape, preserving ragged components."""
+        shapes = tuple(space.shape() for space in self.tensorspaces)
+        if all(shape == shapes[0] for shape in shapes[1:]):
+            return (self.dims,) + shapes[0]
+        return shapes
+
+    def evaluate(self, x: Array, c: Array) -> Array:
+        """Evaluate vector expansion at scattered points.
+
+        Args:
+            x: Array of per-axis coordinates stacked (N, d).
+            c: Coefficient array shaped (dims, N0, N1, ...).
+
+        Returns:
+            Evaluated values with shape determined by leading dims of x.
+        """
+        vals = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = c[i]
+            vi = space.evaluate(x, ci)
+            vals.append(vi)
+        return self._stack_or_tuple(vals)
+
+    def evaluate_mesh(
+        self,
+        u: Array,
+        kind: MeshKind | str = MeshKind.QUADRATURE,
+        N: tuple[tuple[int | None, ...], ...] | None = None,
+    ) -> Array:
+        """Evaluate vector expansion on a mesh with optional padding.
+
+        Args:
+            u: Input array.
+            kind: Type of mesh to evaluate on.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of evaluated values on the mesh.
+        """
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.evaluate_mesh(u[i], kind=kind, N=N[i] if N is not None else None)
+            coeffs.append(ci)
+        return self._stack_or_tuple(coeffs)
+
+    def forward(self, u: Array) -> Array:
+        """Forward transform with optional truncation.
+
+        Args:
+            u: Input array.
+
+        Returns:
+            Array of forward transform values.
+        """
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.forward(u[i])
+            coeffs.append(ci)
+        return self._stack_or_tuple(coeffs)
+
+    def scalar_product(self, u: Array) -> Array:
+        """Return tensor of inner products along each axis (separable).
+        Args:
+            u: Input array.
+
+        Returns:
+            Array of inner products along each axis.
+        """
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.scalar_product(u[i])
+            coeffs.append(ci)
+        return self._stack_or_tuple(coeffs)
+
+    def backward(
+        self,
+        u: Array,
+        N: tuple[tuple[int | None, ...], ...] | None = None,
+    ) -> Array:
+        """Backward transform with optional padding.
+
+        Args:
+            u: Input array.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of backward transform values.
+        """
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.backward(u[i], N=N[i] if N is not None else None)
+            coeffs.append(ci)
+        return self._stack_or_tuple(coeffs)
+
+    def backward_primitive(
+        self,
+        u: Array,
+        k: tuple[int, ...],
+        N: tuple[tuple[int | None, ...], ...] | None = None,
+    ) -> Array:
+        """Backward primitive transform with optional padding.
+
+        Args:
+            u: Input array.
+            k: Tuple of derivative orders.
+            N: Optional per-axis counts (defaults each to space.num_quad_points).
+
+        Returns:
+            Array of backward primitive transform values.
+        """
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.backward_primitive(u[i], k=k, N=N[i] if N is not None else None)
+            coeffs.append(ci)
+        return self._stack_or_tuple(coeffs)
+
+    def to_orthogonal(self, c: Array) -> Array:
+        """Convert coefficients to orthogonal basis.
+
+        Args:
+            c: Input array of coefficients.
+
+        Returns:
+            Array of coefficients in orthogonal basis.
+        """
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.to_orthogonal(c[i])
+            coeffs.append(ci)
+        return self._stack_or_tuple(coeffs)
+
+    def from_orthogonal(self, c: Array) -> Array:
+        """Convert coefficients from orthogonal basis.
+
+        Args:
+            c: Input array of coefficients.
+
+        Returns:
+            Array of coefficients in the original basis.
+        """
+        coeffs = []
+        for i, space in enumerate(self.tensorspaces):
+            ci = space.from_orthogonal(c[i])
+            coeffs.append(ci)
+        return self._stack_or_tuple(coeffs)
+
+    def get_dealiased(
+        self, padding_factor: float | Sequence[float] = 1.5
+    ) -> VectorTensorProductSpace:
+        """Return component tensor spaces with padded quadrature counts."""
+        return VectorTensorProductSpace(
+            tuple(space.get_dealiased(padding_factor) for space in self.tensorspaces),
+            name=self.name + "p",
+        )
+
+    def get_orthogonal(self) -> VectorTensorProductSpace:
+        orthogonal_spaces = [space.get_orthogonal() for space in self.tensorspaces]
+        return VectorTensorProductSpace(tuple(orthogonal_spaces), name=self.name + "o")
 
 
 def TensorProduct(

@@ -1,0 +1,122 @@
+{
+  "boundary_conditions": {
+    "velocity": {
+      "type": "no_slip_rotating_cylinders"
+    }
+  },
+  "canonical_axes": {
+    "x": "radial direction",
+    "y": "azimuthal direction",
+    "z": "axial direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "torque",
+    "divergence_l2"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "growth_rate",
+    "divergence_l2",
+    "torque",
+    "radial_velocity_linf"
+  ],
+  "domain": {
+    "r": [
+      1.0,
+      2.0
+    ],
+    "theta_period": 6.283185307179586,
+    "z_period": 2.007407446944818
+  },
+  "evolved_variables": [
+    "u_r",
+    "u_theta",
+    "u_z",
+    "p"
+  ],
+  "expected_oracle": {
+    "fallback_rungs": [
+      2,
+      3
+    ],
+    "saturation_check": "kinetic energy grows then plateaus; late relative change below 1e-2",
+    "source": "taylor_couette_hydro_v1, taylor_couette_hydro_dns_v1, then GPU-generated saturated DNS golden",
+    "type": "tc_hydro_saturation_ladder"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "type": "rotating_cylinders"
+  },
+  "formulation": {
+    "internal": "axisymmetric primitive perturbation Taylor-Couette CNAB2 DNS",
+    "pressure": "primitive pressure with truncated orthogonal pressure space"
+  },
+  "geometry": "taylor_couette",
+  "golden": {
+    "artifact_id": "tc_supercritical_saturation",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/tc_supercritical_saturation.json --out runs/tc_supercritical_saturation/<timestamp> --device auto --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 0.0001,
+    "type": "linear_eigenmode"
+  },
+  "mode": {
+    "axial_wavenumber": 3.13,
+    "azimuthal_wavenumber": 0
+  },
+  "native_axes": {
+    "axis_0": "r radial",
+    "axis_1": "theta azimuthal",
+    "axis_2": "z axial"
+  },
+  "nondimensional_groups": {
+    "Omega1": 1.0,
+    "Omega2": 0.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "Re": 100.0,
+    "nu": 0.01,
+    "radius_ratio": 0.5
+  },
+  "physics": "hydro",
+  "problem_id": "tc_supercritical_saturation",
+  "resolution": {
+    "dealias": 1.5,
+    "family": "C",
+    "production": {
+      "Nr": 64,
+      "Nz": 32
+    },
+    "smoke": {
+      "Nr": 10,
+      "Nz": 6,
+      "dealias": 1.0
+    },
+    "start": {
+      "Nr": 40,
+      "Nz": 16
+    }
+  },
+  "spec_hash": "5d737f0e7051be81ca973cca228d8a262a9122d763bad6a74ba10db48bf98fc2",
+  "support_state": "experimental",
+  "time": {
+    "dt": 0.004,
+    "final_time": 80.0,
+    "integrator": "CNAB2"
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_l2": 0.01,
+      "growth_rate": 0.002,
+      "kinetic_energy": 1e-06,
+      "torque": 1e-06,
+      "divergence_linf": 1e-06,
+      "energy_growth_factor": 2.30152,
+      "growth_rate_linear": 1e-06,
+      "radial_velocity_linf": 1e-06
+    }
+  },
+  "unsupported_subcases": []
+}

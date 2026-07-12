@@ -1,0 +1,37 @@
+{
+  "artifact_id": "pcf_mhd_divfree",
+  "checkpoint_policy": "The full run wrote checkpoints/checkpoints.h5 for restart provenance, but the 64 MB HDF5 payload is omitted from git because golden comparison only requires golden/golden.json and spec.json.",
+  "device": {
+    "backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "jax_default_scalar_dtype": "float32",
+    "production_run_dtype": "float32"
+  },
+  "geometry": "pcf",
+  "physics": "mhd",
+  "problem_id": "pcf_mhd_divfree",
+  "promotion_status": "failed: magnetic_energy_growth_factor below 2.0 saturation threshold",
+  "runner": "production.validate_gpu",
+  "saturation_checks": {
+    "magnetic_energy_growth_factor": 0.35251543110025796,
+    "passed": false,
+    "required": true
+  },
+  "source_run": {
+    "command": "production/validate_gpu.sh pcf_mhd_divfree --full",
+    "completed_at_utc": "2026-06-10T02:36:34+00:00",
+    "duration_seconds": 46,
+    "timestamp": "20260610T023548Z"
+  },
+  "spec_hash": "55b47fc3e3fe274bc2e971882e7fbc35cd78664cb3fd36cda622d66f135a4e38",
+  "support_state": "experimental",
+  "validation_scope": "failed_generated_saturated_candidate",
+  "quarantined": {
+    "reason": "pre-FJ-01: generated before the FJ-01 named-axis dealias fix (streamwise nonlinearity was undealiased). Solenoidal and correctly classified as decaying, but retained as regression-only evidence; forbidden from seeding post-fix production (FJ-01.6).",
+    "numerics_contract_version": 1,
+    "regression_only": true,
+    "forbidden_from_seeding_production": true
+  }
+}

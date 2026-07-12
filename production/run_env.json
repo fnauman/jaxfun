@@ -1,0 +1,45 @@
+{
+  "captured_at_utc": "2026-06-09T17:23:49+00:00",
+  "cuda_visible_devices": null,
+  "default_backend": "gpu",
+  "degraded": false,
+  "devices": [
+    "cuda:0"
+  ],
+  "golden_path_policy": "vendored",
+  "golden_root": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/production/goldens",
+  "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+  "jax_default_scalar_dtype": "float64",
+  "jax_enable_x64": true,
+  "jax_platforms": null,
+  "jax_version": "0.10.1",
+  "jaxlib_version": "0.10.1",
+  "known_gated_tests": [
+    "live_shenfun",
+    "spmd",
+    "gpu",
+    "slow",
+    "integration"
+  ],
+  "mode": "gpu",
+  "output_locations": {
+    "checkpoints": "runs/<problem_id>/<timestamp>/checkpoints",
+    "goldens": "runs/<problem_id>/<timestamp>/golden/golden.json",
+    "runs": "runs/<problem_id>/<timestamp>",
+    "vendored_goldens": "production/goldens/<problem_id>/golden/golden.json"
+  },
+  "production_run_dtype": "float32",
+  "production_run_specs": [
+    "exp_pcf_mri_shearbox_growth",
+    "pcf_fluct_re400",
+    "pcf_mhd_divfree",
+    "tc_mri_nonlinear_saturation",
+    "tc_supercritical_saturation"
+  ],
+  "test_commands": [
+    ".venv/bin/python -m pytest -q tests/test_x64_default.py",
+    ".venv/bin/python -m pytest -q tests/couette/test_taylor_couette_linear_jax.py",
+    ".venv/bin/python -m pytest -q tests/production"
+  ],
+  "xla_python_client_preallocate": "false"
+}

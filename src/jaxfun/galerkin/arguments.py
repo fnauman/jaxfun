@@ -8,6 +8,7 @@ Key constructs:
     * TestFunction / TrialFunction: Weak form symbolic arguments.
     * ScalarFunction / VectorFunction: Physical-domain symbolic fields. No basis.
     * JAXFunction: Galerkin functions with JAX-backed coefficients.
+    * Array / PhysicalArray: physical-space values paired with a function space.
 """
 
 from __future__ import annotations
@@ -855,7 +856,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         if isinstance(self.array, tuple):
             assert isinstance(a, tuple) and len(self.array) == len(a)
             return tuple(ai @ ai_ for ai, ai_ in zip(self.array, a))
-        assert isinstance(a, Array)
+        assert isinstance(a, JAXArray)
         return self.array @ a
 
     @overload
@@ -869,7 +870,7 @@ class JAXFunction[SpaceT: FunctionSpaceType](ExpansionFunction):
         if isinstance(self.array, tuple):
             assert isinstance(a, tuple) and len(self.array) == len(a)
             return tuple(ai_ @ ai for ai, ai_ in zip(a, self.array))
-        assert isinstance(a, Array)
+        assert isinstance(a, JAXArray)
         return a @ self.array
 
     @jax.jit(static_argnums=0)
@@ -967,4 +968,103 @@ def evaluate_jaxfunction_expr_quad(
     jaxf = jaxfs.pop()
     V = jaxf.functionspace
     fun = compile_nonlinear_evaluator(cast(sp.Expr, a), V, cast(AppliedUndef, jaxf))
-    return fun(cast(Array, jaxf.array), N)
+    return fun(jaxf.array, N)
+
+
+JAXArray = Array
+
+
+@jax.tree_util.register_pytree_node_class
+class PhysicalArray[SpaceT: FunctionSpaceType]:
+    """Physical-space values paired with a Galerkin function space.
+
+    This is the JAX counterpart of shenfun's physical ``Array`` for the common
+    spectral workflow: keep samples on a function-space mesh and explicitly
+    project them to coefficient space with :meth:`forward`.
+    """
+
+    values: Any
+    functionspace: SpaceT
+    name: str | None
+
+    def __init__(
+        self,
+        V: SpaceT,
+        values: Any | None = None,
+        *,
+        val: int | float | complex | None = None,
+        name: str | None = None,
+    ) -> None:
+        if values is None:
+            values = self._full_like_physical_space(V, 0 if val is None else val)
+        elif val is not None:
+            raise ValueError("Specify either values or val, not both")
+        self.functionspace = V
+        self.values = jax.tree.map(jnp.asarray, values)
+        self.name = name
+
+    @classmethod
+    def from_coefficients(
+        cls,
+        coeffs: Any,
+        V: SpaceT,
+        *,
+        N: Padding = None,
+        name: str | None = None,
+    ) -> Self:
+        """Build physical values by backward-transforming coefficients."""
+        return cls(V, V.backward(coeffs, N=N), name=name)  # ty:ignore[invalid-argument-type]
+
+    @staticmethod
+    def _full_like_physical_space(
+        V: FunctionSpaceType, val: int | float | complex
+    ) -> Any:
+        try:
+            coeffs = jax.tree.map(jnp.zeros_like, V.backward(jnp.zeros(V.num_dofs)))  # ty:ignore[arg-type]
+        except TypeError:
+            coeffs = tuple(
+                space.backward(jnp.zeros(space.num_dofs)) for space in cast(Any, V)
+            )
+        return jax.tree.map(lambda x: jnp.full(x.shape, val, dtype=x.dtype), coeffs)
+
+    @property
+    def shape(self) -> Any:
+        """Shape of the stored physical values, preserving ragged pytrees."""
+        return jax.tree.map(lambda x: x.shape, self.values)
+
+    def backward(self) -> Any:
+        """Return the stored physical values."""
+        return self.values
+
+    def coefficients(self) -> Any:
+        """Project the physical values to spectral coefficients."""
+        return self.functionspace.forward(self.values)  # ty:ignore[arg-type]
+
+    def scalar_product(self) -> Any:
+        """Return weighted scalar products with the basis functions."""
+        return self.functionspace.scalar_product(self.values)  # ty:ignore[arg-type]
+
+    def forward(self, *, name: str | None = None) -> JAXFunction[SpaceT]:
+        """Project physical values and return a :class:`JAXFunction`."""
+        return JAXFunction(
+            self.coefficients(), self.functionspace, name=name or self.name
+        )
+
+    def tree_flatten(self) -> tuple[tuple[Any], tuple[SpaceT, str | None]]:
+        return (self.values,), (self.functionspace, self.name)
+
+    @classmethod
+    def tree_unflatten(
+        cls,
+        aux_data: tuple[SpaceT, str | None],
+        children: tuple[Any],
+    ) -> Self:
+        functionspace, name = aux_data
+        (values,) = children
+        return cls(functionspace, values, name=name)
+
+    def __jax_array__(self) -> JAXArray:
+        return self.values
+
+
+Array = PhysicalArray
