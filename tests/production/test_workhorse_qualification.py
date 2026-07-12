@@ -65,9 +65,7 @@ def test_long_nonlinear_curl_run_holds_the_physics_contract():
     # step -- the primitive-`b` failure mode is div B drifting into the finite
     # regime over the run, so a final-only check would miss a mid-horizon blowup.
     assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
-    assert (
-        max(row["divergence_b_l2"] for row in out["time_series"]) < SOLENOIDAL_CEIL
-    )
+    assert max(row["divergence_b_l2"] for row in out["time_series"]) < SOLENOIDAL_CEIL
     assert sc["divergence_u_l2"] < 1e-4
 
     # The shearing-box energy budget closes over the nonlinear horizon.

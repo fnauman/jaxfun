@@ -23,9 +23,7 @@ SOLENOIDAL_CEIL = 1e-12
 
 def _max_div_b_over_horizon(out):
     return max(
-        row["divergence_b_l2"]
-        for row in out["time_series"]
-        if "divergence_b_l2" in row
+        row["divergence_b_l2"] for row in out["time_series"] if "divergence_b_l2" in row
     )
 
 
