@@ -2,8 +2,9 @@
 
 This package is the jaxfun side of the shared shenfun production contract. It
 vendors the neutral problem-spec schema, example specs, 13 committed shenfun
-goldens, and five generated jaxfun saturation goldens so parity checks do not
-import or require a live shenfun process.
+goldens, and five generated jaxfun saturation artifacts so parity checks do not
+import or require a live shenfun process. The saturation artifacts do not all
+carry production-ready status: one is quarantined and one is a failed candidate.
 
 The intended rotating-MHD campaign compares the Jaxfun plane-Couette and
 Taylor-Couette runners here with the shearing box in
@@ -15,32 +16,79 @@ authoritative in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
 
 | problem_id | geometry | physics | solver file | status | fallback rung |
 |---|---|---|---|---|---|
-| `pcf_fluct_re400` | pcf | hydro | `examples/pcf_fluctuations_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full Phase J5 `N=(64,128,64)` float32 GPU run passed and is promoted as a generated saturated golden | rung 3 |
-| `pcf_mhd_divfree` | pcf | mhd | `examples/pcf_mri_primitive_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full Phase J5 `N=(32,64,32)` float32 candidate and follow-up float64 GPU run both decayed, so this remains a failed generated-saturation candidate, not promoted | rung 3 |
-| `exp_pcf_mri_shearbox_growth` | pcf | mri | `examples/pcf_mri_primitive_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full Phase J5 `N=(32,32,32)` float32 GPU saturation passed and is promoted as a generated saturated golden | rung 1/2/3 |
-| `tc_supercritical_saturation` | taylor_couette | hydro | `examples/taylor_couette_dns_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full Phase J5 `Nr=64,Nz=32` float32 GPU saturation passed and is promoted as a generated saturated golden | rung 2/3 |
-| `tc_mri_nonlinear_saturation` | taylor_couette | mri | `examples/taylor_couette_dns_jax.py` | production runner wired; bounded start/smoke-tier smoke tested and labeled `bounded_saturation_smoke`; full Phase J5 `Nr=64,Nz=48` float32 GPU saturation passed and is promoted as a generated saturated golden | rung 1/2/3 |
+| `pcf_fluct_re400` | pcf | hydro | `examples/pcf_fluctuations_jax.py` | qualified candidate: runner, smoke coverage, and a legacy full-resolution GPU saturation artifact exist; regenerate under the current contract before release | rung 3 |
+| `pcf_mhd_divfree` | pcf | mhd | `examples/pcf_mri_primitive_jax.py` | finite-divergence only: the direct/primitive-`b` full `N=(32,64,32)` candidates completed with small finite `div B`, but decayed and failed the saturation gate | rung 3 |
+| `exp_pcf_mri_shearbox_growth` | pcf | mri | `examples/pcf_mri_primitive_jax.py` | quarantined: direct/primitive-`b` MRI reached `div B=1.34e-2` by `t=30`; its old saturated artifact is regression-only and forbidden from production seeding | rung 1/2/3 |
+| `exp_pcf_mri_vector_potential` | pcf | mri | `examples/pcf_mhd_mri_shearpy_jax.py` | selected workhorse pending full run: `B=B0+curl(A)`, 300-step CPU qualification and start-tier GPU smoke pass with roundoff `div B`; full-resolution GPU golden still required | rung 1/2/3 |
+| `tc_supercritical_saturation` | taylor_couette | hydro | `examples/taylor_couette_dns_jax.py` | qualified candidate: runner, smoke coverage, and a legacy full-resolution GPU saturation artifact exist; current TC diagnostic-contract and release gates remain | rung 2/3 |
+| `tc_mri_nonlinear_saturation` | taylor_couette | mri | `examples/taylor_couette_dns_jax.py` | finite-divergence only: the direct-`b` legacy full run saturated but ended at `div B=7.96e-4`; below the generic health ceiling, not roundoff-solenoidal or campaign-ready | rung 1/2/3 |
 | `stab_PCF_MRI_stability` | pcf | mri | `examples/pcf_mhd_mri_shearpy_jax.py` | config-undetermined placeholder | not executable |
 
 `pcf_mhd_divfree` is not a no-field run: the spec includes `B0=0.05`, but it
 does not declare rotation, so production defaults `Omega=0.0`. The follow-up
 float64 full run therefore tested stable plain PCF-MHD; its leading seeded linear
 eigenvalue was negative (`growth_rate_linear=-0.0526771745766`) and the nonlinear
-run decayed (`magnetic_energy_growth_factor=0.35249`). Use
-`exp_pcf_mri_shearbox_growth` for the rotating PCF MRI/shearbox comparison.
+run decayed (`magnetic_energy_growth_factor=0.35249`). For rotating PCF
+MRI/shearbox production work, use the vector-potential configuration
+`exp_pcf_mri_vector_potential`; the primitive-`b`
+`exp_pcf_mri_shearbox_growth` artifact is quarantined.
+
+## Readiness terminology
+
+Readiness is implementation- and configuration-specific, not a blanket status
+for a geometry:
+
+- `production_ready_limited_scope`: fully wired and parity-tested for the narrow
+  analytic or axisymmetric scope stated in the table. It does not imply a full
+  3-D nonlinear campaign solver.
+- `qualified_candidate`: the nonlinear runner and legacy full-resolution
+  evidence exist, but current-contract regeneration, open diagnostics, or
+  release gates remain.
+- `selected_workhorse_pending_full_run`: the implementation selected for the
+  campaign passes current nonlinear qualification and GPU smoke, but lacks its
+  full-resolution production golden.
+- `finite_divergence_only`: the run emits finite divergence below the generic
+  `1e-2` health ceiling. This ceiling catches catastrophic constraint failure;
+  it does **not** establish `div B = 0` to discretization error or roundoff.
+- `quarantined`: retained only for regression/provenance and rejected as a
+  production seed or comparison reference.
+- `linear_only` and `unsupported`: no qualified nonlinear DNS path exists for
+  that case.
+
+No nonlinear magnetic Couette implementation currently has an immutable
+campaign release. The conducting PCF vector-potential/curl family is the
+selected magnetic workhorse, while the direct/primitive-`b` PCF and TC cases
+below are explicitly distinguished as finite-divergence or quarantined.
+
+### Magnetic representation and divergence evidence
+
+| Case and evidence | Magnetic representation | `div u` | `div B` | Qualification |
+|---|---|---:|---:|---|
+| PCF plain MHD, corrected decaying GPU smoke | primitive/direct `b` | `1.05e-8` | `7.15e-6` | finite-divergence only; the run decayed and is not a saturation reference |
+| PCF growing MRI, corrected GPU smoke at `t=30` | primitive/direct `b` | not recorded at guard exit | `1.34e-2` | guard failure; primitive MRI is not production-ready |
+| PCF growing MRI, older full artifact | primitive/direct `b` | `2.30e-2` | `divergence_b_l2=2.67e-2` | quarantined and forbidden from production seeding |
+| PCF MRI GPU smoke / 300-step CPU qualification | vector potential, `B=B0+curl(A)` | CPU qualification requires `<1e-4` | GPU `~1e-18`; CPU requires `<1e-8` | selected conducting-wall workhorse; full-resolution GPU golden pending |
+| Taylor-Couette conducting MHD/MRI, legacy full artifact | primitive/direct `b` | `2.26e-5` | `divergence_b_l2=7.96e-4` | finite-divergence only; below the coarse `1e-2` ceiling, not roundoff-solenoidal |
+
+These are emitted L2 diagnostics from different resolutions, horizons, and
+solver families. They are qualification flags, not a cross-geometry convergence
+comparison. The PCF GPU evidence is recorded in
+[`promotions/fj03_gpu_smoke_findings.md`](promotions/fj03_gpu_smoke_findings.md);
+the full-artifact values come from the committed golden diagnostics.
 
 ## Support matrix
 
 | Geometry | Physics path | Support state | Internal formulation | jaxfun source files | Axis mapping | Boundary/sign conventions | Golden / fallback | Divergence keys | Tests |
 |---|---|---|---|---|---|---|---|---|---|
-| pcf | hydro | parity_pending | laminar/linear cheap golden, primitive linear-window DNS golden, and `pcf_fluct_re400` runner path wired in `production/oracles.py` with `--resolution-tier start` smoke coverage; full Phase J5 KMM-style run passed as a promoted generated saturated golden | `examples/pcf_fluctuations_jax.py`, `examples/pcf_linear_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip moving walls, `U_b=U_wall*x e_y` | `pcf_hydro_laminar_v1`; DNS precheck `pcf_hydro_primitive_dns_v1`; heavy `pcf_fluct_re400` rung 3 | `divergence_l2`; DNS `divergence_u` | `tests/production/test_run_problem.py`; DNS golden comparison, production smoke, and generated saturation golden validated |
-| channel | hydro | production | driven KMM pressure-gradient steady state wired in `production/oracles.py`, with golden-normalized Poiseuille observables | `examples/channelflow_kmm.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip walls, pressure-gradient drive | `channel_poiseuille_hydro_v1` | `divergence_l2` | `tests/production/test_run_problem.py`; KMM steady-profile regression and CLI golden comparison |
-| pcf | mhd | parity_pending | cheap linear golden and `pcf_mhd_divfree` primitive-`b` runner path wired in `production/oracles.py` with `--resolution-tier start` smoke coverage; full Phase J5 `N=(32,64,32)` float64 run completed and decayed as predicted by the negative seeded linear eigenvalue, so it is retained as a failed generated-saturation candidate, not promoted | `examples/pcf_mhd_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting magnetic walls; `B0=0.05`; `Omega` omitted/defaults to `0.0`, so this is plain MHD rather than MRI | `pcf_mhd_conducting_v1`; heavy `pcf_mhd_divfree` rung 3 | `divergence_u_l2`, `divergence_b_l2` | `tests/production/test_run_problem.py`; primitive 3D smoke tests, production smoke, and generated saturation golden validated |
-| pcf | mri | parity_pending | cheap shearbox linear golden, axisymmetric primitive `b` DNS golden, and `exp_pcf_mri_shearbox_growth` primitive-`b` runner path wired in `production/oracles.py` with `--resolution-tier start` smoke coverage; full Phase J5 saturation run passed as a promoted generated saturated golden | `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting walls, Coriolis/shear, imposed `B0 e_z` | `pcf_mri_shearbox_v1`, DNS `pcf_mri_primitive_dns_v1`, heavy `exp_pcf_mri_shearbox_growth` | `divergence_u_l2`, `divergence_b_l2`; DNS `divergence_u`, `divergence_b` | `tests/production/test_run_problem.py`; primitive PCF DNS golden comparison, production smoke wired, and generated saturation golden validated |
-| taylor_couette | hydro | parity_pending | linear/laminar cheap golden, linear-window DNS golden, and `tc_supercritical_saturation` runner path wired in `production/oracles.py` with `--resolution-tier start` smoke coverage; full Phase J5 saturation run passed as a promoted generated saturated golden | `examples/taylor_couette_dns_jax.py`, `examples/taylor_couette_linear_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | rotating no-slip cylinders, `V=A*r+B/r` | `taylor_couette_hydro_v1`, DNS `taylor_couette_hydro_dns_v1`, heavy `tc_supercritical_saturation` | `divergence_l2`; DNS `divergence_linf` | `tests/production/test_run_problem.py`; DNS golden comparison, production smoke, and generated saturation golden validated |
-| taylor_couette | mhd/mri conducting | parity_pending | cheap linear golden, conducting linear-window DNS golden, and `tc_mri_nonlinear_saturation` runner path wired in `production/oracles.py` with `--resolution-tier start` smoke coverage; full Phase J5 saturation run passed as a promoted generated saturated golden | `examples/taylor_couette_dns_jax.py`, `examples/taylor_couette_mri_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | conducting walls, Alfven units, `Pm=Rm/Re` | `taylor_couette_mhd_conducting_v1`, DNS `taylor_couette_mhd_dns_v1`, heavy `tc_mri_nonlinear_saturation` | `divergence_b_l2`; DNS `divergence_u`, `divergence_b` | `tests/production/test_run_problem.py`; DNS golden comparison, production smoke, and generated saturation golden validated |
-| taylor_couette | mhd insulating | parity_pending | cheap insulating linear golden wired in `production/oracles.py` | `examples/taylor_couette_mri_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | insulating only for `m=0`, `kz!=0` | `taylor_couette_mhd_insulating_v1` | `divergence_b_l2` | `tests/production/test_run_problem.py`; loader rejection test for `m!=0` |
-| pipe | hydro | production | axisymmetric regular-axis Hagen-Poiseuille and Womersley production oracle; full 3D non-axisymmetric pipe DNS remains out of scope | `examples/pipe_flow_dns_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | no-slip wall, regular axis at `r=0` | `pipe_hagen_poiseuille_v1`, `pipe_womersley_v1` | `divergence_l2` | golden comparisons wired for both pipe hydro goldens; pipe MHD/MRI rejection test |
+| pcf | hydro | qualified_candidate | cheap and linear-window DNS parity, wired nonlinear runner, smoke coverage, and a legacy full GPU saturation artifact; regenerate under the current contract before release | `examples/pcf_fluctuations_jax.py`, `examples/pcf_linear_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip moving walls, `U_b=U_wall*x e_y` | `pcf_hydro_laminar_v1`; DNS `pcf_hydro_primitive_dns_v1`; heavy `pcf_fluct_re400` | `divergence_l2`; DNS `divergence_u` | cheap/DNS parity, smoke, and legacy saturation regressions |
+| channel | hydro | production_ready_limited_scope | driven KMM pressure-gradient steady state with golden-normalized Poiseuille observables | `examples/channelflow_kmm.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip walls, pressure-gradient drive | `channel_poiseuille_hydro_v1` | `divergence_l2` | KMM steady-profile regression and CLI golden comparison |
+| pcf | plain mhd, primitive `b` | finite_divergence_only | direct magnetic components; cheap linear parity and low-amplitude/decaying nonlinear execution work, but the full candidate decayed and was not promoted | `examples/pcf_mhd_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting walls; `B0=0.05`; `Omega=0` | `pcf_mhd_conducting_v1`; failed `pcf_mhd_divfree` candidate | `divergence_u_l2`, `divergence_b_l2` | finite-divergence smoke and failed-candidate regression |
+| pcf | mri, primitive `b` | quarantined | direct magnetic components do not preserve the solenoidal constraint at finite MRI amplitude; linear and short DNS parity remain diagnostic-only | `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting or pseudo-vacuum walls, Coriolis/shear, imposed `B0 e_z` | cheap `pcf_mri_shearbox_v1`; DNS `pcf_mri_primitive_dns_v1`; quarantined `exp_pcf_mri_shearbox_growth` | `divergence_u_l2`, `divergence_b_l2` | quarantine and divergence-guard regressions |
+| pcf | mri, vector potential | selected_workhorse_pending_full_run | nonlinear `B=B0+curl(A)` workhorse; current 300-step CPU qualification and GPU start-tier smoke pass, with checkpoint/resume/quench support; full production golden pending | `examples/pcf_mhd_mri_shearpy_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting walls only, Coriolis/shear, imposed `B0 e_z` | fallback rungs 1/2/3; full curl golden not yet committed | `divergence_u_l2`, `divergence_b_l2` | vector-potential oracle and long nonlinear workhorse qualification |
+| taylor_couette | hydro | qualified_candidate | cheap and linear-window DNS parity, wired nonlinear runner, smoke coverage, and a legacy full GPU saturation artifact; current TC diagnostic contract remains open | `examples/taylor_couette_dns_jax.py`, `examples/taylor_couette_linear_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | rotating no-slip cylinders, `V=A*r+B/r` | `taylor_couette_hydro_v1`; DNS `taylor_couette_hydro_dns_v1`; heavy `tc_supercritical_saturation` | `divergence_l2`; DNS `divergence_linf` | cheap/DNS parity, smoke, and legacy saturation regressions |
+| taylor_couette | mhd/mri conducting, primitive `b` | finite_divergence_only | direct magnetic components; cheap and linear-window DNS parity plus a legacy full GPU saturation artifact, but not roundoff-solenoidal and not on the current TC diagnostic contract | `examples/taylor_couette_dns_jax.py`, `examples/taylor_couette_mri_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | conducting walls, Alfven units, `Pm=Rm/Re` | `taylor_couette_mhd_conducting_v1`; DNS `taylor_couette_mhd_dns_v1`; legacy `tc_mri_nonlinear_saturation` | `divergence_b_l2`; DNS `divergence_u`, `divergence_b` | cheap/DNS parity, smoke, and legacy saturation regressions |
+| taylor_couette | mhd insulating | linear_only | cheap insulating linear parity only; no qualified nonlinear insulating DNS path | `examples/taylor_couette_mri_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | insulating only for `m=0`, `kz!=0` | `taylor_couette_mhd_insulating_v1` | `divergence_b_l2` | linear golden and loader rejection for `m!=0` |
+| pipe | hydro | production_ready_limited_scope | axisymmetric regular-axis Hagen-Poiseuille and Womersley oracle; full 3-D non-axisymmetric pipe DNS remains out of scope | `examples/pipe_flow_dns_jax.py`, `production/oracles.py` | `axis_0=r`, `axis_1=theta`, `axis_2=z` | no-slip wall, regular axis at `r=0` | `pipe_hagen_poiseuille_v1`, `pipe_womersley_v1` | `divergence_l2` | golden comparisons wired for both pipe hydro goldens |
 | pipe | mhd/mri | unsupported | no shenfun production formulation | none | `axis_0=r`, `axis_1=theta`, `axis_2=z` | unsupported | rejected to match shenfun | n/a | loader rejection test |
 
 ## Validation scripts
@@ -57,8 +105,10 @@ Current implemented entry points:
   the resumed step.
 - `make -C production parity-cheap` runs the nine cheap golden comparisons, including the two pipe hydro goldens, and writes `runs/_report/results.json`.
 - `make -C production parity-dns` runs the four committed non-pipe linear-window DNS golden comparisons and writes `runs/_report/results.json`; `parity-dns-pcf` and `parity-dns-tc` run geometry-specific subsets.
-- `make -C production parity-saturation` compares the promoted generated
-  saturation goldens; this is a full-window mode and may be long.
+- `make -C production parity-saturation` evaluates the retained saturation
+  artifact set. It currently includes the quarantined primitive-`b` PCF MRI
+  artifact and therefore is not a green production-release gate; the curl
+  workhorse golden must replace that artifact.
 - `production/validate_gpu.sh cheap|dns|dns-pcf|dns-tc` runs the same wired parity groups with a 30-minute timeout per run, writes `logs/<problem_id>.log` with command/status/duration, and writes `runs/_report/results.json`; strict parity subprocesses default to `JAXFUN_VALIDATE_PARITY_DTYPE=float64` for the committed `1e-10` goldens. `all`, `heavy`, and direct production run IDs execute bounded start-tier float32 smoke by default (`--resolution-tier start --steps 2`) unless `--full`, `--validate-only`, `--smoke`, or explicit run args are supplied; `--smoke` selects the lighter checked-in `smoke` resolution tier. Non-validate heavy runs also write `golden/golden.json` and `checkpoints/checkpoints.h5` by default, but reduced/step-limited saturation artifacts are labeled `bounded_saturation_smoke`, not full production saturation goldens.
 - `production/run_problem.py --checkpoint-every K` writes HDF5 coefficient checkpoints for wired DNS paths through `production/checkpoint.py`, including spec hash, dtype/shape metadata, device metadata, and diagnostics pointer attrs.
 - `production/run_problem.py --snapshot-every K` writes uniform HDF5 snapshots as atomic per-step HDF5 shards,
@@ -79,7 +129,7 @@ Current implemented entry points:
 - `cpu_smoke_fallback_oracle`: CPU smoke for a saturation run with rung-1 or rung-2 fallback checks available.
 - `cpu_smoke_finiteness_divergence_only`: CPU smoke for rung-3-only saturation specs such as `pcf_fluct_re400` and `pcf_mhd_divfree`; this proves solver completion, finite diagnostics, and emitted divergence diagnostics, not production parity.
 - `bounded_saturation_smoke`: GPU or CPU saturation execution with `--steps`, `--resolution-tier start`, or `--resolution-tier smoke`; generated golden/checkpoint files are smoke artifacts, not full production saturation goldens, and report rows are skipped rather than counted as production passes.
-- `generated_saturated_golden`: full saturation execution without bounded smoke overrides; if `saturation_check_passed` is missing or false (including non-boolean values), stationarity fails, or validation-floor diagnostics are non-finite/missing divergence, the runner marks metadata failed and exits nonzero instead of writing a passing full-saturation artifact.
+- `generated_saturated_golden`: full saturation execution without bounded smoke overrides; if `saturation_check_passed` is missing or false (including non-boolean values), stationarity fails, diagnostics are non-finite/missing divergence, or final divergence exceeds the generic `1e-2` ceiling, the runner marks metadata failed and exits nonzero. Passing this coarse floor alone is not proof of a solenoidal magnetic discretization.
 - `oracle_execution`: analytic, linear, or DNS oracle execution without a committed-golden comparison.
 
 Long-run Phase J5/J6 entry point:
