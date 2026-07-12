@@ -97,12 +97,9 @@
     "final_time": 60.0
   },
   "initial_condition": {
-    "type": "linear_eigenmode",
-    "velocity_amplitude": 0.0,
-    "magnetic_amplitude": 0.0,
-    "amplitude": 1e-06,
-    "seeded_ky_mode": 0,
-    "seeded_kz_mode": 1
+    "type": "shearpy_channel_modes",
+    "velocity_amplitude": 0.05,
+    "magnetic_amplitude": 0.001
   },
   "forcing": {
     "type": "rotation_shear_imposed_vertical_field",
