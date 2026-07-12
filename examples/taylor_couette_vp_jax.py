@@ -1116,10 +1116,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="3D vector-potential Taylor-Couette MHD/MRI DNS"
     )
-    parser.add_argument("--Nr", type=int, default=24)
-    parser.add_argument("--Ntheta", type=int, default=8)
-    parser.add_argument("--Nz", type=int, default=16)
-    parser.add_argument("--steps", type=int, default=5)
+    # Demo defaults are a light smoke footprint (tests/test_demos.py executes
+    # every example main under xdist); production resolutions live in the
+    # run specs (production/runs/exp_tc_mri_*.json).
+    parser.add_argument("--Nr", type=int, default=16)
+    parser.add_argument("--Ntheta", type=int, default=4)
+    parser.add_argument("--Nz", type=int, default=8)
+    parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--dt", type=float, default=2.0e-3)
     parser.add_argument("--nu", type=float, default=1.0e-3)
     parser.add_argument("--eta-mag", type=float, default=1.0e-3)

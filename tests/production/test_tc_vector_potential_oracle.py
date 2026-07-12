@@ -206,14 +206,17 @@ def test_tc_vp_nonaxisymmetric_m1_growth_matches_linear_eigenvalue():
     from examples.taylor_couette_vp_jax import TaylorCouetteVPMRIDNSJax
 
     base = CircularCouette(1.0, 2.0, 1.0, 0.5**1.5)
+    # Ntheta=4 resolves the seeded m=1 mode (2|m| < Ntheta); at amplitude 1e-6
+    # the truncated m=2 harmonics are ~1e-12 and irrelevant to the growth
+    # measurement.  Kept lean so four xdist workers fit the CI runner memory.
     solver = TaylorCouetteVPMRIDNSJax(
         base,
         B0=0.1,
         nu=1e-3,
         eta_mag=1e-3,
         Nr=32,
-        Ntheta=8,
-        Nz=12,
+        Ntheta=4,
+        Nz=8,
         dt=1e-3,
         family="L",
         dealias=1.5,
