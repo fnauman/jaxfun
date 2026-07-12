@@ -51,7 +51,7 @@ jobs:
       matrix:
         include:
           - name: integration tests
-            command: uv run pytest -rs -m "integration and not slow and not spmd and not pinn and not examples and not gpu"
+            command: uv run --no-sync pytest -rs -m "integration and not slow and not spmd and not pinn and not examples and not gpu"
 
           - name: slow tests
             command: uv run pytest -m "slow and not examples and not spmd and not pinn and not gpu"
