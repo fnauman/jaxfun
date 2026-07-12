@@ -54,9 +54,15 @@ production runner and a 30-minute timeout per run. Use `parity-dns-pcf` or
 make -C production parity-saturation
 ```
 
-This compares current code against the promoted generated saturation goldens. It
-uses the full checked-in saturation specs and can be long; it deliberately does
-not apply the bounded smoke defaults used by `validate-all`.
+This compares current code against the three retained non-quarantined saturation
+goldens (`pcf_fluct_re400`, `tc_supercritical_saturation`,
+`tc_mri_nonlinear_saturation`); the quarantined `exp_pcf_mri_shearbox_growth`
+artifact is excluded so the batch does not error on the quarantine guard. These
+remain qualified-candidate / finite-divergence legacy goldens (see
+`production/README.md`), so a green run is a regression pass, not a
+campaign-release certification. It uses the full checked-in saturation specs and
+can be long; it deliberately does not apply the bounded smoke defaults used by
+`validate-all`.
 
 ## Validation script parity modes
 
@@ -230,8 +236,9 @@ checked-in spec's `start` resolution for local smoke coverage and records
 `validation_scope=bounded_saturation_smoke`. Full KMM production uses the spec
 final time and production resolution and remains a long GPU run.
 
-The full `pcf_fluct_re400` run has a promoted generated saturated golden in
-`production/goldens/pcf_fluct_re400` from:
+The full `pcf_fluct_re400` run has a qualified-candidate legacy generated
+saturation golden in `production/goldens/pcf_fluct_re400` (regenerate under the
+current contract before release) from:
 
 ```bash
 production/validate_gpu.sh pcf_fluct_re400 --full
@@ -294,16 +301,22 @@ and `magnetic_energy_growth_factor > 2.0`; the retained candidates record
 intentionally not committed; the comparator validates `golden/golden.json`
 against `spec.json`.
 
-The full `exp_pcf_mri_shearbox_growth` run has a promoted generated saturated
-golden in `production/goldens/exp_pcf_mri_shearbox_growth` from:
+The full `exp_pcf_mri_shearbox_growth` run produced the now-**quarantined**
+primitive-`b` golden in `production/goldens/exp_pcf_mri_shearbox_growth` from:
 
 ```bash
 production/validate_gpu.sh exp_pcf_mri_shearbox_growth --full
 ```
 
 That run records `validation_scope=generated_saturated_golden` and passed the
-MRI saturation check. The generated 385 MB HDF5 checkpoint is intentionally not
-committed; the comparator validates `golden/golden.json` against `spec.json`.
+growth gate, but the primitive-`b` field is not solenoidal at finite MRI
+amplitude (`div B` grew to `2.67e-2`, past the `1e-2` guard), so the golden is
+quarantined and forbidden from production seeding -- it is excluded from
+`parity-saturation` and covered only by the quarantine regression in
+`tests/production/test_compare_goldens.py`. Use the vector-potential workhorse
+(`exp_pcf_mri_vector_potential`) for rotating PCF MRI production work. The
+generated 385 MB HDF5 checkpoint is intentionally not committed; the comparator
+validates `golden/golden.json` against `spec.json`.
 
 ## Taylor-Couette saturation smoke
 
@@ -330,8 +343,9 @@ Full non-bounded saturation runs fail if their emitted `saturation_check_passed`
 diagnostic is missing or false. Bounded smoke rows are reported as smoke/skipped
 validation evidence rather than full production passes.
 
-The full `tc_supercritical_saturation` run has a promoted generated saturated
-golden in `production/goldens/tc_supercritical_saturation` from:
+The full `tc_supercritical_saturation` run has a qualified-candidate legacy
+generated saturation golden in `production/goldens/tc_supercritical_saturation`
+(current TC diagnostic-contract and release gates remain open) from:
 
 ```bash
 production/validate_gpu.sh tc_supercritical_saturation --full
@@ -341,16 +355,20 @@ That run records `validation_scope=generated_saturated_golden` and passed the
 hydro saturation check. The generated 25 MB HDF5 checkpoint is intentionally not
 committed; the comparator validates `golden/golden.json` against `spec.json`.
 
-The full `tc_mri_nonlinear_saturation` run has a promoted generated saturated
-golden in `production/goldens/tc_mri_nonlinear_saturation` from:
+The full `tc_mri_nonlinear_saturation` run has a finite-divergence-only legacy
+generated saturation golden in `production/goldens/tc_mri_nonlinear_saturation`
+from:
 
 ```bash
 production/validate_gpu.sh tc_mri_nonlinear_saturation --full
 ```
 
 That run records `validation_scope=generated_saturated_golden` and passed the
-MRI saturation check. The generated 52 MB HDF5 checkpoint is intentionally not
-committed; the comparator validates `golden/golden.json` against `spec.json`.
+growth gate (`magnetic_energy_growth_factor=8.2e6`), but the primitive/direct-`b`
+field ended at `div B=7.96e-4` -- below the coarse `1e-2` health ceiling yet not
+roundoff-solenoidal, so it is a regression reference, not a campaign-release
+golden. The generated 52 MB HDF5 checkpoint is intentionally not committed; the
+comparator validates `golden/golden.json` against `spec.json`.
 
 ## Runner metadata validation
 
