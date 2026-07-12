@@ -17,6 +17,7 @@ from production.adaptive import (
     AdaptiveCFLConfig,
     _proposed_dt,
     adaptive_cfl_from_spec,
+    run_adaptive_cfl,
 )
 from production.oracles import run_supported_spec
 
@@ -60,7 +61,13 @@ def test_config_validation_rejects_nonsense():
     with pytest.raises(ValueError, match="growth_cap"):
         AdaptiveCFLConfig(growth_cap=0.9)
     assert adaptive_cfl_from_spec({"time": {}}) is None
+    assert adaptive_cfl_from_spec({"time": {"adaptive_cfl": False}}) is None
     assert adaptive_cfl_from_spec({"time": {"adaptive_cfl": True}}) is not None
+    assert adaptive_cfl_from_spec({"time": {"adaptive_cfl": {}}}) == (
+        AdaptiveCFLConfig()
+    )
+    with pytest.raises(ValueError, match="boolean or an object"):
+        adaptive_cfl_from_spec({"time": {"adaptive_cfl": None}})
 
 
 def test_proposed_dt_shrinks_grows_and_holds():
@@ -80,6 +87,65 @@ def test_proposed_dt_shrinks_grows_and_holds():
     assert _proposed_dt(1.0e-2, 0.05, config2) == pytest.approx(1.2e-2)
     # Nonfinite CFL: hold rather than act on garbage.
     assert _proposed_dt(1.0e-2, float("nan"), config) is None
+
+
+def test_adaptive_driver_shrinks_after_a_newly_unsafe_state():
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+            self.solve_dts = []
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, state, steps):
+            self.solve_dts.append(self.dt)
+            return 1.2
+
+    solver = Solver()
+    config = AdaptiveCFLConfig(
+        target=0.5,
+        safety=0.9,
+        dt_min=0.1,
+        dt_max=2.0,
+        check_every=1,
+    )
+    _, record = run_adaptive_cfl(
+        solver,
+        0.4,
+        elapsed_target=1.5,
+        config=config,
+        health_scalars_fn=lambda current_solver, state: {
+            "cfl_total": float(state) * current_solver.dt
+        },
+    )
+    assert solver.solve_dts[0] == pytest.approx(1.0)
+    assert solver.solve_dts[1] == pytest.approx(0.375)
+    cfl_change = next(
+        change for change in record["dt_changes"] if change["reason"] == "cfl"
+    )
+    assert cfl_change["cfl_total"] == pytest.approx(1.2)
+    assert cfl_change["cfl_total_projected"] == pytest.approx(0.45)
+
+
+def test_adaptive_driver_refuses_an_unsafe_dt_min_before_solving():
+    class Solver:
+        dt = 0.1
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, state, steps):  # pragma: no cover - must not be reached
+            raise AssertionError("unsafe dt_min advanced a solver step")
+
+    with pytest.raises(RuntimeError, match="dt_min"):
+        run_adaptive_cfl(
+            Solver(),
+            None,
+            elapsed_target=0.1,
+            config=AdaptiveCFLConfig(target=0.5, dt_min=0.1, dt_max=1.0, check_every=1),
+            health_scalars_fn=lambda _solver, _state: {"cfl_total": 2.0},
+        )
 
 
 @pytest.mark.integration
@@ -151,13 +217,16 @@ def test_adaptive_run_grows_an_undersized_dt_and_keeps_the_final_time():
     out = run_supported_spec(spec, steps=25, diagnostics_every=5)
     sc = out["scalars"]
     assert sc["n_dt_changes"] >= 1
-    assert sc["dt_final"] == pytest.approx(4.0e-3)  # capped by dt_max
+    assert sc["dt_max_used"] == pytest.approx(4.0e-3)  # capped by dt_max
     assert sc["cfl_total_max_observed"] < 0.3
     assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
     # A grown dt takes fewer steps but must NOT overshoot the requested
     # elapsed time (25 steps * dt=1e-3): the final block/step is clipped.
     assert sc["adaptive_steps_taken"] < 25
     assert out["time_series"][-1]["t"] == pytest.approx(0.025, rel=1e-12)
+    assert sc["adaptive_final_step_clipped"] is True
+    assert sc["dt_final"] == pytest.approx(out["time_series"][-1]["dt"])
+    assert sc["dt_min_used"] <= sc["dt_final"] < sc["dt_max_used"]
 
 
 @pytest.mark.integration

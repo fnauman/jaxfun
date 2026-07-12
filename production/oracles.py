@@ -1619,7 +1619,7 @@ def _run_pcf_vector_potential_mhd_saturation(
     # FJ-05: baseline scalars come from the state actually evolved (the loaded
     # parent checkpoint on a resume/quench), not the fresh configured seed.
     first_scalars = _pcf_curl_scalars(solver, state)
-    target_steps, n_steps = _remaining_steps_from_resume(
+    _target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
     )
 
@@ -1713,7 +1713,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             first_scalars["total_energy"], final_scalars["total_energy"], elapsed
         )
     else:
-        elapsed = target_steps * float(spec["time"]["dt"])
+        elapsed = n_steps * float(spec["time"]["dt"])
         # Growth is measured from the evolved baseline over the steps actually
         # taken (n_steps == target_steps on a fresh run; smaller on a resume).
         growth_rate = _growth_rate_from_energy(
@@ -1763,7 +1763,8 @@ def _run_pcf_vector_potential_mhd_saturation(
         **{k: v for k, v in first_scalars.items() if _is_number_scalar(v)},
     }
     last = {
-        "t": elapsed,
+        "t": float(t0) + elapsed,
+        "dt": float(solver.dt),
         **{k: v for k, v in final_scalars.items() if _is_number_scalar(v)},
         "growth_rate": float(growth_rate),
         "magnetic_energy_growth_factor": float(magnetic_growth),
@@ -2252,7 +2253,7 @@ def _run_taylor_couette_vp_mhd_saturation(
         state_kind="tc_vector_potential_mhd_saturation",
     )
     first_scalars = _tc_vp_scalars(solver, state)
-    target_steps, n_steps = _remaining_steps_from_resume(
+    _target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
     )
 
@@ -2331,7 +2332,7 @@ def _run_taylor_couette_vp_mhd_saturation(
             first_scalars["total_energy"], final_scalars["total_energy"], elapsed
         )
     else:
-        elapsed = target_steps * float(spec["time"]["dt"])
+        elapsed = n_steps * float(spec["time"]["dt"])
         growth_rate = _growth_rate_from_energy(
             first_scalars["total_energy"],
             final_scalars["total_energy"],
@@ -2375,6 +2376,7 @@ def _run_taylor_couette_vp_mhd_saturation(
     }
     last = {
         "t": float(t0) + elapsed,
+        "dt": float(solver.dt),
         **{k: v for k, v in final_scalars.items() if _is_number_scalar(v)},
         "growth_rate": float(growth_rate),
         "magnetic_energy_growth_factor": float(magnetic_growth),
@@ -2803,6 +2805,7 @@ def _raise_on_resolution_health(
     t: float,
     tstep: int,
     enforce_spectral: bool = True,
+    enforce_cfl: bool = True,
 ) -> None:
     """Abort as soon as CFL, spectral tails, or occupancy violate policy."""
 
@@ -2816,7 +2819,7 @@ def _raise_on_resolution_health(
             f"spectral_tail_max={scalars['spectral_tail_max']:.6g} > "
             f"{health.EARLY_ABORT_SPECTRAL_TAIL_LIMIT:g}"
         )
-    if scalars.get("cfl_total", 0.0) > health.CFL_LIMIT:
+    if enforce_cfl and scalars.get("cfl_total", 0.0) > health.CFL_LIMIT:
         offenders.append(f"cfl_total={scalars['cfl_total']:.6g} > {health.CFL_LIMIT:g}")
     if (
         enforce_spectral
@@ -3261,6 +3264,10 @@ def _run_vp_adaptive_blocks(
             t=t,
             tstep=tstep,
             enforce_spectral=int(done) >= health.EARLY_ABORT_STARTUP_STEPS,
+            # The adaptive driver owns CFL recovery: this post-block value is
+            # the pre-block measurement used to shrink before the next solve.
+            # Spectral-tail and occupancy failures remain immediate here.
+            enforce_cfl=False,
         )
         health_observations.append(dict(health_values))
         diagnostics_row_fn(float(t), tstep, diag)

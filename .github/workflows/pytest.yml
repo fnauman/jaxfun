@@ -5,6 +5,8 @@ on:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,9 +17,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  integration_scope:
+    name: integration test scope
+    runs-on: ubuntu-latest
+    outputs:
+      run_integration: ${{ steps.changed.outputs.run_integration }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect integration-relevant changes
+        id: changed
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run_integration=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            src examples couette production tests pyproject.toml uv.lock \
+            .github/workflows/pytest.yml; then
+            echo "run_integration=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_integration=true" >> "$GITHUB_OUTPUT"
+          fi
+
   quick:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -50,9 +81,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: integration tests
-            command: uv run --no-sync pytest -rs -m "integration and not slow and not spmd and not pinn and not examples and not gpu"
-
           - name: slow tests
             command: uv run pytest -m "slow and not examples and not spmd and not pinn and not gpu"
 
@@ -80,14 +108,31 @@ jobs:
       - name: Sync deps
         run: uv sync --frozen --all-groups --extra io
 
+      - name: Run tests
+        run: ${{ matrix.command }}
+
+  integration:
+    name: integration tests
+    needs: integration_scope
+    if: needs.integration_scope.outputs.run_integration == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv with caching
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Sync deps
+        run: uv sync --frozen --all-groups --extra io
+
       - name: Install shenfun system dependencies
-        if: matrix.name == 'integration tests'
         run: |
           sudo apt-get update
           sudo apt-get install -y libfftw3-dev libfftw3-mpi-dev libhdf5-openmpi-dev libopenmpi-dev
 
       - name: Checkout shenfun reference
-        if: matrix.name == 'integration tests'
         uses: actions/checkout@v6
         with:
           repository: spectralDNS/shenfun
@@ -95,7 +140,6 @@ jobs:
           path: .reference/shenfun
 
       - name: Install shenfun reference
-        if: matrix.name == 'integration tests'
         env:
           CC: mpicc
           HDF5_DIR: /usr/lib/x86_64-linux-gnu/hdf5/openmpi
@@ -108,4 +152,4 @@ jobs:
         env:
           SHENFUN_PYTHON: ${{ github.workspace }}/.venv/bin/python
           SHENFUN_SOURCE_ROOT: ${{ github.workspace }}/.reference/shenfun
-        run: ${{ matrix.command }}
+        run: uv run --no-sync pytest -rs -m "integration and not slow and not spmd and not pinn and not examples and not gpu"

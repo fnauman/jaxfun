@@ -211,6 +211,13 @@ def test_tc_vp_checkpoint_resume_matches_straight_run(tmp_path):
     assert str(record.attrs["state_kind"]) == "tc_vector_potential_mhd_saturation"
     resumed = run_supported_spec(spec, steps=4, resume_checkpoint=record)
 
+    expected_final_time = 4 * float(spec["time"]["dt"])
+    assert straight["time_series"][-1]["t"] == pytest.approx(expected_final_time)
+    assert resumed["time_series"][-1]["t"] == pytest.approx(expected_final_time)
+    assert [row["t"] for row in resumed["time_series"]] == sorted(
+        row["t"] for row in resumed["time_series"]
+    )
+
     for key in _CONTINUATION_KEYS:
         assert np.isclose(
             resumed["scalars"][key],

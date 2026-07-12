@@ -70,8 +70,11 @@ def adaptive_cfl_from_spec(spec: dict[str, Any]) -> AdaptiveCFLConfig | None:
     selects all defaults; a dict overrides individual fields.
     """
 
-    block = spec.get("time", {}).get("adaptive_cfl")
-    if not block:
+    time_spec = spec.get("time", {})
+    if "adaptive_cfl" not in time_spec:
+        return None
+    block = time_spec["adaptive_cfl"]
+    if block is False:
         return None
     if block is True:
         return AdaptiveCFLConfig()
@@ -150,18 +153,64 @@ def run_adaptive_cfl(
         }
         return values, float(values.get("cfl_total", math.nan))
 
-    def maybe_adapt(current_state: Any, cfl_total: float, done: int, t: float) -> Any:
-        new_dt = _proposed_dt(float(solver.dt), cfl_total, config)
-        if new_dt is None:
-            return current_state
+    def require_finite_cfl(cfl_total: float, *, done: int, t: float) -> None:
+        if not math.isfinite(cfl_total) or cfl_total < 0.0:
+            raise FloatingPointError(
+                f"adaptive CFL measurement is invalid at tstep={done} "
+                f"t={t:g}: cfl_total={cfl_total!r}"
+            )
+
+    def record_dt_change(
+        *,
+        done: int,
+        t: float,
+        dt_old: float,
+        dt_new: float,
+        cfl_total: float,
+        cfl_total_projected: float,
+        reason: str,
+    ) -> None:
         changes.append(
             {
                 "tstep": float(done),
                 "t": float(t),
-                "dt_old": float(solver.dt),
-                "dt_new": float(new_dt),
+                "dt_old": float(dt_old),
+                "dt_new": float(dt_new),
                 "cfl_total": float(cfl_total),
+                "cfl_total_projected": float(cfl_total_projected),
+                "reason": reason,
             }
+        )
+
+    def maybe_adapt(current_state: Any, cfl_total: float, done: int, t: float) -> Any:
+        old_dt = float(solver.dt)
+        new_dt = _proposed_dt(old_dt, cfl_total, config)
+        if new_dt is None:
+            return current_state
+        # At dt_min a requested shrink can collapse to the current timestep.
+        # Do not report a no-op as a change, and never advance when the CFL
+        # safety ceiling cannot be met at the configured floor.
+        if math.isclose(new_dt, old_dt, rel_tol=1.0e-12, abs_tol=0.0):
+            if cfl_total > 1.0:
+                raise RuntimeError(
+                    "adaptive CFL cannot satisfy the safety ceiling at "
+                    f"dt_min={config.dt_min:g}: cfl_total={cfl_total:g}"
+                )
+            return current_state
+        projected_cfl = cfl_total * float(new_dt) / old_dt
+        if projected_cfl > 1.0:
+            raise RuntimeError(
+                "adaptive CFL cannot satisfy the safety ceiling at "
+                f"dt={new_dt:g}: projected cfl_total={projected_cfl:g}"
+            )
+        record_dt_change(
+            done=done,
+            t=t,
+            dt_old=old_dt,
+            dt_new=float(new_dt),
+            cfl_total=cfl_total,
+            cfl_total_projected=projected_cfl,
+            reason="cfl",
         )
         solver.set_dt(new_dt)
         nonlocal dt_used_min, dt_used_max
@@ -171,7 +220,7 @@ def run_adaptive_cfl(
 
     t = float(t0)
     done = 0
-    changes: list[dict[str, float]] = []
+    changes: list[dict[str, Any]] = []
     dt_used_min = float(solver.dt)
     dt_used_max = float(solver.dt)
     cfl_max = 0.0
@@ -183,6 +232,7 @@ def run_adaptive_cfl(
     # Pre-flight: adapt to the *initial* state before any stepping, so an
     # unsafe starting dt never evolves a block.
     health, cfl_total = measure(state)
+    require_finite_cfl(cfl_total, done=done, t=t)
     cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
     state = maybe_adapt(state, cfl_total, done, t)
 
@@ -191,8 +241,22 @@ def run_adaptive_cfl(
         working_dt = float(solver.dt)
         if time_left < working_dt * (1.0 - 1.0e-12):
             # Clip the final step so the run lands exactly on the target time
-            # (the working dt is kept for the record; the run ends here).
-            solver.set_dt(time_left)
+            # and record the actual endpoint timestep just like a CFL change.
+            clipped_dt = float(time_left)
+            clipped_cfl = cfl_total * clipped_dt / working_dt
+            record_dt_change(
+                done=done,
+                t=t,
+                dt_old=working_dt,
+                dt_new=clipped_dt,
+                cfl_total=cfl_total,
+                cfl_total_projected=clipped_cfl,
+                reason="final_time_clip",
+            )
+            solver.set_dt(clipped_dt)
+            dt_used_min = min(dt_used_min, clipped_dt)
+            dt_used_max = max(dt_used_max, clipped_dt)
+            working_dt = clipped_dt
             state = _reset_multistep_history(state)
             final_step_clipped = True
             n = 1
@@ -205,16 +269,22 @@ def run_adaptive_cfl(
         t += advanced
         time_left -= advanced
         health, cfl_total = measure(state)
+        require_finite_cfl(cfl_total, done=done, t=t)
         cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
         if on_block is not None:
             on_block(t, done, state, health)
         if time_left > tiny:
             # The post-block measurement doubles as the next pre-block check.
             state = maybe_adapt(state, cfl_total, done, t)
+        elif cfl_total > 1.0:
+            raise RuntimeError(
+                "adaptive CFL safety ceiling exceeded at the final state: "
+                f"cfl_total={cfl_total:g}"
+            )
 
     record = {
         "adaptive_cfl_target": float(config.target),
-        "dt_final": float(working_dt),
+        "dt_final": float(solver.dt),
         "dt_min_used": float(dt_used_min),
         "dt_max_used": float(dt_used_max),
         "dt_changes": changes,

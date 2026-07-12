@@ -171,3 +171,10 @@ def test_runtime_health_guard_aborts_obvious_underresolution():
             t=1.0,
             tstep=50,
         )
+
+    with pytest.raises(RuntimeError, match="cfl_total"):
+        _raise_on_resolution_health({"cfl_total": 1.1}, t=1.0, tstep=50)
+
+    # Adaptive stepping owns CFL recovery between blocks, while this callback
+    # continues to enforce spectral tails and mode occupancy immediately.
+    _raise_on_resolution_health({"cfl_total": 1.1}, t=1.0, tstep=50, enforce_cfl=False)

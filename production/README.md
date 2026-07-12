@@ -138,7 +138,7 @@ resolution.
 ### Adaptive CFL stepping
 
 Both vector-potential runners accept an optional `time.adaptive_cfl` block
-(`true` for defaults, or `{"target", "safety", "dt_min", "dt_max",
+(`true` or `{}` for defaults, or `{"target", "safety", "dt_min", "dt_max",
 "check_every", "growth_cap", "grow_when_below"}`). The horizon is a **time**
 target (the elapsed time the fixed-`dt` run would cover, i.e. the spec
 `final_time` when no step override is given): `dt` changes alter the step
@@ -154,8 +154,10 @@ family restarting its IMEX-Euler bootstrap so no stale multistep history is
 extrapolated. Elapsed time is accumulated exactly, every `dt` change is
 recorded (scalars `n_dt_changes`, `dt_final`, `dt_min_used`, `dt_max_used`,
 `adaptive_steps_taken`, `adaptive_final_step_clipped`,
-`cfl_total_max_observed`; per-row `dt` and `cfl_total` in the time series),
-and the solenoidal gates run every block. Adaptive runs are currently wired
+`cfl_total_max_observed`; per-row `dt` and `cfl_total` in the time series).
+The exact-time endpoint clip is included in that record and may be smaller
+than the CFL proposal floor `dt_min`; `dt_min_used` reports the actual value.
+The solenoidal gates run every block. Adaptive runs are currently wired
 for fresh starts (no resume/quench/checkpoint-bank) and write a final
 checkpoint only; tests: `tests/production/test_adaptive_cfl.py`. Fixed-`dt`
 remains the default and the committed goldens' semantics.
