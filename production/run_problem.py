@@ -1266,10 +1266,10 @@ def _resolved_physics_metadata(
     canonical physics block agrees with ``metadata.device.production_run_dtype``.
     """
 
-    if spec.get("geometry") not in {"pcf", "channel"}:
+    if spec.get("geometry") not in {"pcf", "channel", "taylor_couette"}:
         return None
     groups = spec.get("nondimensional_groups", {})
-    if groups.get("nu") is None and groups.get("Re") is None:
+    if not any(groups.get(key) is not None for key in ("nu", "Re", "Re_h", "Re_TC")):
         return None
     try:
         from .physics import resolve_physics

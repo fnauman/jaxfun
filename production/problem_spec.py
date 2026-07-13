@@ -174,6 +174,7 @@ def validate_spec(
     _validate_time(data)
     _validate_domain(data)
     _validate_nondimensional_groups(data)
+    _validate_b0_amplitudes(data)
     _validate_numerics_contract(data)
     _validate_resolved_physics(data)
     _validate_boundary_conditions(data)
@@ -277,6 +278,16 @@ def _validate_domain(data: dict[str, Any]) -> None:
         _validate_interval(domain["r"], "domain.r")
         _validate_positive_period(domain["theta_period"], "domain.theta_period")
         _validate_positive_period(domain["z_period"], "domain.z_period")
+        if geometry == "taylor_couette" and not math.isclose(
+            float(domain["theta_period"]),
+            2.0 * math.pi,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ProblemSpecError(
+                "Taylor-Couette production solvers use a full 2*pi annulus; "
+                "azimuthal wedges/theta_period overrides are not implemented"
+            )
 
 
 def _validate_interval(value: Any, label: str) -> None:
@@ -309,7 +320,19 @@ def _validate_nondimensional_groups(data: dict[str, Any]) -> None:
     if not isinstance(groups, dict):
         raise ProblemSpecError("nondimensional_groups must be an object")
 
-    for key in ("Re", "Rm", "Pm", "Ha", "Omega", "S", "radius_ratio"):
+    for key in (
+        "Re",
+        "Rm",
+        "Re_h",
+        "Rm_h",
+        "Re_TC",
+        "Rm_TC",
+        "Pm",
+        "Ha",
+        "Omega",
+        "S",
+        "radius_ratio",
+    ):
         if key in groups and groups[key] is not None:
             _require_finite_number(groups[key], f"nondimensional_groups.{key}")
 
@@ -342,6 +365,25 @@ def _validate_nondimensional_groups(data: dict[str, Any]) -> None:
         if not 0.0 < rr < 1.0:
             raise ProblemSpecError(
                 "Taylor-Couette radius_ratio must satisfy 0 < eta < 1"
+            )
+
+
+def _validate_b0_amplitudes(data: dict[str, Any]) -> None:
+    """Scalar ``B0`` is an amplitude; signed direction requires components."""
+
+    groups = data.get("nondimensional_groups", {})
+    forcing = data.get("forcing", {})
+    for label, value in (
+        ("nondimensional_groups.B0", groups.get("B0")),
+        ("forcing.B0", forcing.get("B0") if isinstance(forcing, dict) else None),
+    ):
+        if value is None or isinstance(value, (list, tuple)):
+            continue
+        amplitude = _finite_number(value, label)
+        if amplitude < 0.0:
+            raise ProblemSpecError(
+                f"{label} is a field amplitude and must be nonnegative; "
+                "use an explicit component vector for signed direction"
             )
 
 
@@ -398,14 +440,19 @@ def _iter_resolution_blocks(resolution: dict[str, Any]):
 def _validate_resolved_physics(data: dict[str, Any]) -> None:
     """FJ-00: reject over-specified inconsistent {Re,nu}/{Rm,eta} before compile.
 
-    Only enforced for coefficient-driven plane-Couette/channel specs; Taylor-Couette
-    keeps its own group checks in :func:`_validate_nondimensional_groups`.
+    TC additionally cross-checks its traditional inner-cylinder Reynolds numbers
+    against the midpoint-local ``Re_h``/``Rm_h`` controls used by comparison sweeps.
     """
 
-    if data["geometry"] not in {"pcf", "channel"}:
+    if data["geometry"] not in {"pcf", "channel", "taylor_couette"}:
         return
     groups = data["nondimensional_groups"]
-    if groups.get("nu") is None and groups.get("Re") is None:
+    if (
+        groups.get("nu") is None
+        and groups.get("Re") is None
+        and groups.get("Re_h") is None
+        and groups.get("Re_TC") is None
+    ):
         return
     from .physics import resolve_physics  # local import avoids a cycle
 

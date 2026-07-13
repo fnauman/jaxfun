@@ -10,6 +10,7 @@ provenance for each banked plateau state.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -25,6 +26,10 @@ MUTABLE_QUENCH_FIELDS: frozenset[str] = frozenset(
         "nondimensional_groups.eta",
         "nondimensional_groups.Re",
         "nondimensional_groups.Rm",
+        "nondimensional_groups.Re_h",
+        "nondimensional_groups.Rm_h",
+        "nondimensional_groups.Re_TC",
+        "nondimensional_groups.Rm_TC",
         "nondimensional_groups.Pm",
     }
 )
@@ -41,7 +46,14 @@ _IMMUTABLE_REQUIRED: tuple[str, ...] = (
 )
 
 _QUENCH_DECREASING_GROUPS: frozenset[str] = frozenset(
-    {"nondimensional_groups.Re", "nondimensional_groups.Rm"}
+    {
+        "nondimensional_groups.Re",
+        "nondimensional_groups.Rm",
+        "nondimensional_groups.Re_h",
+        "nondimensional_groups.Rm_h",
+        "nondimensional_groups.Re_TC",
+        "nondimensional_groups.Rm_TC",
+    }
 )
 _QUENCH_INCREASING_DIFFUSIVITIES: frozenset[str] = frozenset(
     {
@@ -54,6 +66,83 @@ _QUENCH_INCREASING_DIFFUSIVITIES: frozenset[str] = frozenset(
 
 class QuenchError(ValueError):
     """Raised when a quench continuation violates the immutability contract."""
+
+
+def _canonicalize_tc_quench_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """Return a TC spec with every coupled local/native alias materialized.
+
+    Direct run specs historically carried only ``Re``/``Rm`` while swept specs
+    now also carry ``Re_h``/``Rm_h`` and explicit ``Re_TC``/``Rm_TC``. Quench
+    comparison must canonicalize both sides before diffing, otherwise adding a
+    truthful derived alias looks like a state-incompatible physics change.
+    """
+
+    if spec.get("geometry") != "taylor_couette":
+        return spec
+    try:
+        from .physics import resolve_physics
+
+        resolved = resolve_physics(spec)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise QuenchError(f"invalid Taylor-Couette quench physics: {exc}") from exc
+
+    data = copy.deepcopy(spec)
+    groups = data["nondimensional_groups"]
+    groups.update(
+        {
+            "nu": resolved.nu,
+            "Re_h": resolved.Re_h,
+            "Re_TC": resolved.Re_TC,
+            "Re": resolved.Re_TC,
+        }
+    )
+    if resolved.eta is not None:
+        groups.update(
+            {
+                "eta_mag": resolved.eta,
+                "Rm_h": resolved.Rm_h,
+                "Rm_TC": resolved.Rm_TC,
+                "Rm": resolved.Rm_TC,
+                "Pm": resolved.Pm,
+            }
+        )
+        groups.pop("eta", None)
+    return data
+
+
+def _validate_tc_coupled_changes(
+    parent_spec: dict[str, Any], changed: dict[str, tuple[Any, Any]]
+) -> None:
+    """Require each TC coefficient and all of its aliases to move together."""
+
+    if parent_spec.get("geometry") != "taylor_couette":
+        return
+    coupled_sets = (
+        frozenset(
+            {
+                "nondimensional_groups.nu",
+                "nondimensional_groups.Re",
+                "nondimensional_groups.Re_h",
+                "nondimensional_groups.Re_TC",
+            }
+        ),
+        frozenset(
+            {
+                "nondimensional_groups.eta_mag",
+                "nondimensional_groups.Rm",
+                "nondimensional_groups.Rm_h",
+                "nondimensional_groups.Rm_TC",
+            }
+        ),
+    )
+    changed_keys = changed.keys()
+    for coupled in coupled_sets:
+        touched = coupled & changed_keys
+        if touched and touched != coupled:
+            raise QuenchError(
+                "Taylor-Couette quench controls are coupled; changing "
+                f"{sorted(touched)} also requires {sorted(coupled - touched)}"
+            )
 
 
 def _flatten(data: Any, prefix: str = "") -> dict[str, Any]:
@@ -80,6 +169,8 @@ def validate_quench(
     versions differ.
     """
 
+    parent_spec = _canonicalize_tc_quench_spec(parent_spec)
+    child_spec = _canonicalize_tc_quench_spec(child_spec)
     parent = _flatten(parent_spec)
     child = _flatten(child_spec)
 
@@ -112,11 +203,14 @@ def validate_quench(
         raise QuenchError(
             "quench child is identical to parent; use resume-exact instead"
         )
+    _validate_tc_coupled_changes(parent_spec, changed)
     _validate_quench_direction(changed)
     return {
         "changed": changed,
         "mutable_allowlist": sorted(allow),
-        "direction_policy": "Re/Rm nonincreasing; nu/eta nondecreasing",
+        "direction_policy": (
+            "Re/Rm and local/native TC aliases nonincreasing; nu/eta nondecreasing"
+        ),
     }
 
 

@@ -481,6 +481,18 @@ id), executes serially, and records per-point status in `sweep_index.json`
 after each point; re-invocation (including with a widened grid) skips completed
 points. Adaptive refinement is tracked in `production/KNOWN_ISSUES.md` (KI-6).
 
+For Taylor-Couette, `Re_h` and `Rm_h` are midpoint-local controls,
+`|S_mid| h^2/nu` and `|S_mid| h^2/eta`. Materialized specs and run metadata
+also record the native inner-cylinder values `Re_TC` and `Rm_TC`; legacy `Re`
+and `Rm` remain aliases for those native values. TC production solvers use the
+full `2*pi` annulus, so Cartesian `Ly`/azimuthal-wedge overrides are rejected;
+`Lz` remains available for nonlinear TC runs.
+
+Override availability follows the selected oracle. Static validation oracles
+reject inert box, time, coefficient, and resolution axes. Magnetic wall-family
+changes are not sweep axes: use the separate conducting/insulating base spec so
+the `problem_id`, expected oracle, and golden artifact remain consistent.
+
 ### Health contract
 
 Saturation runs through the PCF families emit the CFL decomposition
