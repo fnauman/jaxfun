@@ -12,8 +12,11 @@
 .venv/bin/python -m production.device --write production/run_env.json
 ```
 
-Local production runner processes use `JAXFUN_PRODUCTION_DTYPE=float32` by
-default and set `JAXFUN_ENABLE_X64=0`/`JAX_ENABLE_X64=0` before importing JAX.
+Local production runner processes use `JAXFUN_PRODUCTION_DTYPE=float32` when a
+spec does not declare `precision`, and set `JAXFUN_ENABLE_X64=0`/
+`JAX_ENABLE_X64=0` before importing JAX. A declared precision takes precedence
+when the environment does not explicitly override it; both PCF vector-potential
+campaign specs declare `float64` for their strict `1e-12` divergence guard.
 Normal `import jaxfun` still defaults to x64 unless those env vars override it,
 so parity checks that need x64 keep their default behavior.
 

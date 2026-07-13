@@ -45,6 +45,16 @@ def test_run_specs_carry_smoke_start_and_production_resolution():
         assert raw["time"]["final_time"] > 0.0
 
 
+def test_pcf_vector_potential_specs_pin_float64_divergence_guard():
+    for problem_id in (
+        "exp_pcf_mri_vector_potential",
+        "exp_pcf_mri_vp_insulating",
+    ):
+        raw = json.loads((RUNS / f"{problem_id}.json").read_text())
+        assert raw["precision"] == "float64"
+        assert raw["expected_oracle"]["divergence_b_guard_l2"] == 1.0e-12
+
+
 def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
     raw = json.loads((RUNS / "pcf_mhd_divfree.json").read_text())
 

@@ -53,10 +53,14 @@ def _vp_spec(**groups):
         "problem_id": "pcf_mri_vector_potential_smoke",
         "spec_hash": "vp-smoke-spec-hash",
         "numerics_contract_version": 2,
+        "precision": "float64",
         "geometry": "pcf",
         "physics": "mri",
         "representation": "vector_potential",
-        "expected_oracle": {"type": "gpu_generated_saturated_dns"},
+        "expected_oracle": {
+            "type": "gpu_generated_saturated_dns",
+            "divergence_b_guard_l2": SOLENOIDAL_CEIL,
+        },
         "boundary_conditions": {
             "velocity": {"type": "no_slip_shearbox_walls"},
             "magnetic": {"type": "conducting"},
@@ -88,11 +92,26 @@ def _vp_spec(**groups):
     return spec
 
 
+class _GuardProbeSolver:
+    dt = 1.0e-3
+
+    def __init__(self):
+        self.initial = object()
+
+    def initial_state(self):
+        return self.initial
+
+
+def _guard_probe_scalars(divergence_b_l2):
+    return {"divergence_b_l2": divergence_b_l2, "total_energy": 1.0}
+
+
 def test_vector_potential_oracle_is_solenoidal_by_construction():
     jax.config.update("jax_enable_x64", True)
     out = run_supported_spec(_vp_spec(), steps=4, diagnostics_every=2)
     sc = out["scalars"]
     assert sc["representation"] == "vector_potential"
+    assert sc["divergence_b_guard_l2"] == SOLENOIDAL_CEIL
     # B = curl A -> div B = 0 to roundoff (the invariant the primitive path lacks).
     # It must hold at the solenoidal ceiling at the final step and, more
     # importantly, must not grow past it anywhere on the horizon.
@@ -107,6 +126,181 @@ def test_vector_potential_oracle_is_solenoidal_by_construction():
     ):
         assert key in sc
     assert len(out["time_series"]) >= 2
+
+
+@pytest.mark.parametrize("magnetic_bc", ["conducting", "insulating"])
+def test_vector_potential_guard_rejects_unsafe_initial_state_before_stepping(
+    monkeypatch, magnetic_bc
+):
+    import production.oracles as oracles
+
+    spec = _vp_spec()
+    spec["boundary_conditions"]["magnetic"]["type"] = magnetic_bc
+    solver = _GuardProbeSolver()
+    monkeypatch.setattr(oracles, "_curl_solver_from_spec", lambda _spec: solver)
+    monkeypatch.setattr(
+        oracles,
+        "_pcf_curl_scalars",
+        lambda _solver, _state: _guard_probe_scalars(2.0 * SOLENOIDAL_CEIL),
+    )
+
+    def must_not_step(*_args, **_kwargs):  # pragma: no cover - guard must win
+        raise AssertionError("unsafe initial state reached the fixed-step driver")
+
+    monkeypatch.setattr(oracles, "_solve_with_optional_checkpoints", must_not_step)
+    with pytest.raises(FloatingPointError, match="tstep=0"):
+        oracles._run_pcf_vector_potential_mhd_saturation(spec, steps=1)
+
+
+def test_vector_potential_guard_reaches_fixed_step_block_endpoints(monkeypatch):
+    import production.oracles as oracles
+
+    spec = _vp_spec()
+    solver = _GuardProbeSolver()
+    monkeypatch.setattr(oracles, "_curl_solver_from_spec", lambda _spec: solver)
+    monkeypatch.setattr(
+        oracles,
+        "_pcf_curl_scalars",
+        lambda _solver, _state: _guard_probe_scalars(0.0),
+    )
+
+    def unsafe_fixed_block(*_args, **kwargs):
+        limit = kwargs["magnetic_divergence_limit"]
+        assert limit == SOLENOIDAL_CEIL
+        oracles._raise_on_divergence_drift(
+            None,
+            None,
+            t=solver.dt,
+            tstep=1,
+            diagnostics={"divB_L2": 2.0 * limit},
+            magnetic_limit=limit,
+        )
+
+    monkeypatch.setattr(oracles, "_solve_with_optional_checkpoints", unsafe_fixed_block)
+    with pytest.raises(FloatingPointError, match="tstep=1"):
+        oracles._run_pcf_vector_potential_mhd_saturation(spec, steps=1)
+
+
+def test_vector_potential_guard_rejects_checkpoint_before_write(tmp_path):
+    import production.oracles as oracles
+    from jaxfun.io import run_with_cadence
+
+    class UnsafeCheckpointSolver:
+        dt = 1.0
+
+        @staticmethod
+        def solve(state, steps):
+            return int(state) + int(steps)
+
+        def solve_with_cadence(
+            self,
+            state,
+            steps,
+            cadence,
+            *,
+            block_size=1,
+            on_diagnostics=None,
+            on_snapshot=None,
+            on_checkpoint=None,
+            should_stop=None,
+            t0=0.0,
+            tstep0=0,
+        ):
+            return run_with_cadence(
+                self.solve,
+                state,
+                steps=steps,
+                dt=self.dt,
+                cadence=cadence,
+                block_size=block_size,
+                diagnostics=self.diagnostics,
+                on_diagnostics=on_diagnostics,
+                on_snapshot=on_snapshot,
+                on_checkpoint=on_checkpoint,
+                should_stop=should_stop,
+                t0=t0,
+                tstep0=tstep0,
+            )
+
+        @staticmethod
+        def diagnostics(_state):
+            return {"divB_L2": 2.0 * SOLENOIDAL_CEIL}
+
+    with pytest.raises(FloatingPointError, match="tstep=1"):
+        oracles._solve_with_optional_checkpoints(
+            UnsafeCheckpointSolver(),
+            0,
+            1,
+            spec={
+                "problem_id": "unit",
+                "spec_hash": "hash",
+                "golden": {"artifact_id": "unit"},
+            },
+            out_dir=tmp_path,
+            checkpoint_every=1,
+            snapshot_every=None,
+            diagnostics_every=None,
+            state_kind="unit",
+            checkpoint_bank=True,
+            magnetic_divergence_limit=SOLENOIDAL_CEIL,
+        )
+
+    assert not (tmp_path / "checkpoints" / "checkpoints.h5").exists()
+    assert not (tmp_path / "checkpoints" / "bank").exists()
+
+
+def test_vector_potential_guard_reaches_adaptive_block_endpoints(monkeypatch):
+    import production.oracles as oracles
+
+    spec = _vp_spec()
+    spec["time"]["adaptive_cfl"] = {"check_every": 1}
+    solver = _GuardProbeSolver()
+    monkeypatch.setattr(oracles, "_curl_solver_from_spec", lambda _spec: solver)
+    monkeypatch.setattr(
+        oracles,
+        "_pcf_curl_scalars",
+        lambda _solver, _state: _guard_probe_scalars(0.0),
+    )
+
+    def unsafe_adaptive_block(*_args, **kwargs):
+        limit = kwargs["magnetic_divergence_limit"]
+        assert limit == SOLENOIDAL_CEIL
+        oracles._raise_on_divergence_drift(
+            None,
+            None,
+            t=solver.dt,
+            tstep=1,
+            diagnostics={"divB_L2": 2.0 * limit},
+            magnetic_limit=limit,
+        )
+
+    monkeypatch.setattr(oracles, "_run_vp_adaptive_blocks", unsafe_adaptive_block)
+    with pytest.raises(FloatingPointError, match="tstep=1"):
+        oracles._run_pcf_vector_potential_mhd_saturation(spec, steps=1)
+
+
+def test_vector_potential_guard_certifies_returned_final_state(monkeypatch):
+    import production.oracles as oracles
+
+    spec = _vp_spec()
+    solver = _GuardProbeSolver()
+    final_state = object()
+    monkeypatch.setattr(oracles, "_curl_solver_from_spec", lambda _spec: solver)
+
+    def state_scalars(_solver, state):
+        divergence = 2.0 * SOLENOIDAL_CEIL if state is final_state else 0.0
+        return _guard_probe_scalars(divergence)
+
+    def unchecked_fixed_driver(*_args, **kwargs):
+        assert kwargs["magnetic_divergence_limit"] == SOLENOIDAL_CEIL
+        return final_state
+
+    monkeypatch.setattr(oracles, "_pcf_curl_scalars", state_scalars)
+    monkeypatch.setattr(
+        oracles, "_solve_with_optional_checkpoints", unchecked_fixed_driver
+    )
+    with pytest.raises(FloatingPointError, match="tstep=1"):
+        oracles._run_pcf_vector_potential_mhd_saturation(spec, steps=1)
 
 
 def test_vector_potential_oracle_is_znf_safe():

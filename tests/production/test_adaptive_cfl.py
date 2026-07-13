@@ -29,10 +29,14 @@ def _vp_spec(time_block):
         "problem_id": "vp_adaptive_smoke",
         "spec_hash": "vp-adaptive-smoke-hash",
         "numerics_contract_version": 2,
+        "precision": "float64",
         "geometry": "pcf",
         "physics": "mri",
         "representation": "vector_potential",
-        "expected_oracle": {"type": "gpu_generated_saturated_dns"},
+        "expected_oracle": {
+            "type": "gpu_generated_saturated_dns",
+            "divergence_b_guard_l2": SOLENOIDAL_CEIL,
+        },
         "boundary_conditions": {
             "velocity": {"type": "no_slip_shearbox_walls"},
             "magnetic": {"type": "conducting"},
@@ -340,6 +344,7 @@ def test_adaptive_run_shrinks_an_unsafe_dt_before_the_first_block():
     out = run_supported_spec(spec, steps=8, diagnostics_every=5)
     sc = out["scalars"]
     assert sc["n_dt_changes"] >= 1
+    assert sc["divergence_b_guard_l2"] == SOLENOIDAL_CEIL
     assert sc["dt_final"] < 1.2
     assert sc["dt_min_used"] < 1.2
     assert sc["dt_max_used"] < 1.2  # pre-flight dt was never advanced
@@ -395,6 +400,38 @@ def test_adaptive_run_grows_an_undersized_dt_and_keeps_the_final_time():
     assert sc["dt_final"] == pytest.approx(sc["dt_max_used"])
     assert sc["dt_last_used"] == pytest.approx(out["time_series"][-1]["dt"])
     assert sc["dt_min_used"] <= sc["dt_last_used"] < sc["dt_final"]
+
+
+@pytest.mark.integration
+def test_insulating_adaptive_run_holds_strict_divergence_guard():
+    jax.config.update("jax_enable_x64", True)
+    spec = _vp_spec(
+        {
+            "integrator": "IMEXRK222",
+            "dt": 1.0e-3,
+            "final_time": 2.0e-3,
+            "adaptive_cfl": {
+                "target": 0.4,
+                "check_every": 1,
+                "dt_min": 1.0e-5,
+                "dt_max": 1.0e-3,
+            },
+        }
+    )
+    spec["boundary_conditions"]["magnetic"] = {"type": "insulating"}
+    out = run_supported_spec(spec, steps=2, diagnostics_every=1)
+    sc = out["scalars"]
+    assert sc["magnetic_bc"] == "insulating"
+    assert sc["divergence_b_guard_l2"] == SOLENOIDAL_CEIL
+    assert (
+        max(
+            row["divergence_b_l2"]
+            for row in out["time_series"]
+            if "divergence_b_l2" in row
+        )
+        < SOLENOIDAL_CEIL
+    )
+    assert sc["insulating_bc_residual"] < SOLENOIDAL_CEIL
 
 
 @pytest.mark.integration

@@ -107,8 +107,8 @@ Wall-condition conventions of the vector-potential family:
 | PCF plain MHD, decaying GPU smoke (`pcf_mhd_divfree`) | primitive/direct `b` | no (small while decaying) | `1.05e-8` | `7.15e-6` | failed candidate; decayed, not a saturation reference |
 | PCF growing MRI, GPU smoke at `t=30` (`exp_pcf_mri_shearbox_growth`) | primitive/direct `b` | no — grows past the `1e-2` guard | not recorded at guard exit | `1.34e-2` | guard failure; primitive MRI is not production-ready |
 | PCF growing MRI, older full artifact (`exp_pcf_mri_shearbox_growth`) | primitive/direct `b` | no — grew to `2.67e-2` | `2.30e-2` | `2.67e-2` | quarantined and forbidden from production seeding |
-| PCF MRI, 300-step CPU qualification + GPU smoke (`exp_pcf_mri_vector_potential`) | vector potential, `B=B0+curl(A)`, conducting | yes — by construction, non-growing | `~1e-16` (CPU) | GPU `~1e-18`; CPU `~2.5e-16` (max over 300 steps) | selected conducting-wall workhorse; gated `< 1e-12` over the whole horizon; full-resolution GPU golden pending |
-| PCF MRI insulating, 300-step finite-amplitude CPU run + eigenmode anchor (`exp_pcf_mri_vp_insulating`) | vector potential, `B=B0+curl(A)`, vacuum-matched | yes — by construction, non-growing | `~1e-16` | max `9.9e-17` over 300 steps; matching-row residual `<=1.7e-16`; DNS growth matches the insulating eigensolver to `3.3e-8` | CPU-anchored candidate; gated `< 1e-12` whole-horizon; no GPU artifact yet |
+| PCF MRI, 300-step CPU qualification + GPU smoke (`exp_pcf_mri_vector_potential`) | vector potential, `B=B0+curl(A)`, conducting | yes — by construction, non-growing | `~1e-16` (CPU) | GPU `~1e-18`; CPU `~2.5e-16` (max over 300 steps) | selected conducting-wall workhorse; float64 runtime guard `< 1e-12` at the initial state, every monitored block endpoint, and the final state; full-resolution GPU golden pending |
+| PCF MRI insulating, 300-step finite-amplitude CPU run + eigenmode anchor (`exp_pcf_mri_vp_insulating`) | vector potential, `B=B0+curl(A)`, vacuum-matched | yes — by construction, non-growing | `~1e-16` | max `9.9e-17` over 300 steps; matching-row residual `<=1.7e-16`; DNS growth matches the insulating eigensolver to `3.3e-8` | CPU-anchored candidate; float64 runtime guard `< 1e-12` at the initial state, every monitored block endpoint, and the final state; no GPU artifact yet |
 | TC MRI conducting, CPU anchors + finite-amplitude horizon (`exp_tc_mri_vector_potential`) | vector potential, `B=B0 e_z+curl(A)`, `E_tang=0` exact | yes — by construction, non-growing | projected witness: smoke `<1e-9`; start/production `<1e-12`, enforced every block | `m=0`: max `~1e-19`; `m=1` (3D): `~4e-15` at `Nr=40` (spectrally convergent projection floor); finite amplitude (`3e-2`): `~1.5e-15` while the primitive solver is already at `~7e-8`; the start-tier `m=1` eigenmode scaled to `1e-1` measures `7.35e-13` | CPU-anchored candidate; growth matches the linear eigensolver at `m=0` (`1.5e-9`) and `m=1` (`9.7e-8`); nonlinear parity vs primitive `~1e-10`; no GPU artifact yet |
 | TC MRI insulating, CPU anchors (`exp_tc_mri_vp_insulating`) | vector potential, Bessel vacuum matching | yes — by construction, non-growing | projected witness: smoke `<1e-9`; start/production `<1e-12`, enforced every block | max `1.2e-19` (`m=0`, 400 steps); matching-row residual `<=4.5e-22`; growth matches the flux eigensolver to `1.5e-7` | CPU-anchored candidate; no GPU artifact yet |
 | Taylor-Couette conducting MHD/MRI, legacy full artifact (`tc_mri_nonlinear_saturation`) | primitive/direct `b` | no — grew to `7.96e-4` | `2.26e-5` | `7.96e-4` | finite-divergence only; saturated but not roundoff-solenoidal |
@@ -139,6 +139,10 @@ emits it as `divergence_b_guard_l2`. A start-tier `m=1` eigenmode amplified to
 a saturation-scale `0.1` is an explicit regression case. The underlying
 pointwise `curl A` field is solenoidal to roundoff identically. The slab (PCF)
 witness has no `1/r` factors and sits at `~1e-16` independent of resolution.
+Both shipped PCF vector-potential specs therefore pin `precision=float64` and
+an explicit `divergence_b_guard_l2=1e-12`; float32 smoke measurements have an
+`O(1e-9)` witness floor and are not eligible for this qualification contract.
+The PCF runner emits the selected ceiling as `divergence_b_guard_l2`.
 
 ### Adaptive CFL stepping
 

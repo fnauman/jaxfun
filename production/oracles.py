@@ -1720,6 +1720,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             "the primitive-b family (FJ-09)"
         )
     _assert_pcf_half_gap_domain(spec)
+    divergence_b_guard = _vector_potential_divergence_guard(spec)
     solver = _curl_solver_from_spec(spec)
     state, tstep0, t0 = _resume_or_initial_state(
         resume_checkpoint,
@@ -1731,6 +1732,14 @@ def _run_pcf_vector_potential_mhd_saturation(
     # FJ-05: baseline scalars come from the state actually evolved (the loaded
     # parent checkpoint on a resume/quench), not the fresh configured seed.
     first_scalars = _pcf_curl_scalars(solver, state)
+    _raise_on_divergence_drift(
+        solver,
+        state,
+        t=t0,
+        tstep=tstep0,
+        diagnostics={"divergence_b_l2": first_scalars["divergence_b_l2"]},
+        magnetic_limit=divergence_b_guard,
+    )
     adaptive = adaptive_cfl_from_spec(spec)
     if adaptive is None:
         _target_steps, n_steps = _remaining_steps_from_resume(
@@ -1801,6 +1810,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             out_dir=out_dir,
             state_kind="pcf_vector_potential_mhd_saturation",
             device_record=device_record,
+            magnetic_divergence_limit=divergence_b_guard,
         )
     else:
         out = _solve_with_optional_checkpoints(
@@ -1822,6 +1832,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             health_observations=health_observations,
             checkpoint_bank=checkpoint_bank,
             plateau_rows=rows,
+            magnetic_divergence_limit=divergence_b_guard,
         )
     final_scalars = _pcf_curl_scalars(solver, out)
     if adaptive_record is not None:
@@ -1839,6 +1850,19 @@ def _run_pcf_vector_potential_mhd_saturation(
             n_steps,
             solver.dt,
         )
+    final_steps_taken = (
+        int(adaptive_record["steps_taken"])
+        if adaptive_record is not None
+        else int(n_steps)
+    )
+    _raise_on_divergence_drift(
+        solver,
+        out,
+        t=float(t0) + elapsed,
+        tstep=int(tstep0) + final_steps_taken,
+        diagnostics={"divergence_b_l2": final_scalars["divergence_b_l2"]},
+        magnetic_limit=divergence_b_guard,
+    )
     magnetic_growth = (
         final_scalars["magnetic_energy"] / first_scalars["magnetic_energy"]
         if first_scalars["magnetic_energy"] > 0.0
@@ -1868,6 +1892,7 @@ def _run_pcf_vector_potential_mhd_saturation(
         "saturation_check_passed": bool(saturation_passed),
         "magnetic_bc": magnetic_bc,
         "representation": "vector_potential",
+        "divergence_b_guard_l2": float(divergence_b_guard),
         # E* scalars here are plain volume integrals of |field|^2 (the curl-family
         # reference convention, couette/pcf_mhd_mri_shearpy.py); the primitive
         # family reports the physical 0.5x per its own reference.
@@ -1922,11 +1947,6 @@ def _run_pcf_vector_potential_mhd_saturation(
     )
     if budget is not None:
         scalars["energy_budget_residual"] = float(budget)
-    final_steps_taken = (
-        int(adaptive_record["steps_taken"])
-        if adaptive_record is not None
-        else int(n_steps)
-    )
     return _with_quench_horizon(
         {"scalars": scalars, "time_series": series},
         quench=quench,
@@ -2013,13 +2033,13 @@ def _magnetic_bc(spec: dict[str, Any]) -> str:
     return magnetic.get("type", magnetic) if isinstance(magnetic, dict) else magnetic
 
 
-def _tc_projected_divergence_guard(spec: dict[str, Any]) -> float:
-    """Return the explicit TC projected-divergence qualification ceiling.
+def _vector_potential_divergence_guard(spec: dict[str, Any]) -> float:
+    """Return the explicit vector-potential divergence qualification ceiling.
 
-    The witness is amplitude- and resolution-dependent even though ``div(curl
-    A)`` is analytically zero.  Campaign specs may therefore declare a scalar
-    ceiling or tier-specific ceilings.  Direct unit specs retain the strict
-    x64 qualification default.
+    The PCF witness has a strict scalar x64 ceiling.  The TC witness is
+    amplitude- and resolution-dependent because of its cylindrical projection,
+    so campaigns may instead declare tier-specific ceilings.  Direct unit specs
+    retain the strict x64 qualification default.
     """
 
     configured = spec.get("expected_oracle", {}).get("divergence_b_guard_l2", 1.0e-12)
@@ -2382,7 +2402,7 @@ def _run_taylor_couette_vp_mhd_saturation(
             "the vector-potential TC family is wired for conducting or "
             f"insulating cylinders, got {magnetic_bc!r}"
         )
-    divergence_b_guard = _tc_projected_divergence_guard(spec)
+    divergence_b_guard = _vector_potential_divergence_guard(spec)
     solver = _tc_vp_solver_from_spec(spec)
     initial = spec["initial_condition"]
     m_seed = int(initial.get("azimuthal_mode", 0))
@@ -2779,6 +2799,7 @@ def _solve_with_optional_checkpoints(
         snapshot_path = out_path / "snapshots" / "snapshots.h5"
 
     health_cache: dict[int, dict[str, float]] = {}
+    diagnostics_cache: dict[int, Any] = {}
 
     def evaluate_health(t: float, tstep: int, candidate_state: Any) -> dict[str, float]:
         cached = health_cache.get(int(tstep))
@@ -2805,8 +2826,16 @@ def _solve_with_optional_checkpoints(
     def on_checkpoint(t: float, tstep: int, checkpoint_state: Any) -> None:
         assert checkpoint_path is not None
         # Callback ordering writes checkpoints before should_stop.  Enforce the
-        # resolution guard here as well so a rejected state is never promoted
-        # into a selectable parent bank.
+        # divergence and resolution guards here as well so a rejected state is
+        # never persisted or promoted into a selectable parent bank.
+        _raise_on_divergence_drift(
+            solver,
+            checkpoint_state,
+            t=t,
+            tstep=tstep,
+            diagnostics=diagnostics_cache.get(int(tstep)),
+            magnetic_limit=magnetic_divergence_limit,
+        )
         checkpoint_health = evaluate_health(t, tstep, checkpoint_state)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"state": _checkpoint_payload(checkpoint_state)}
@@ -2853,8 +2882,6 @@ def _solve_with_optional_checkpoints(
                 "state_kind": state_kind,
             },
         )
-
-    diagnostics_cache: dict[int, Any] = {}
 
     def on_diagnostics(t: float, tstep: int, diag: Any) -> None:
         diagnostics_cache[int(tstep)] = diag
