@@ -14,6 +14,8 @@ import copy
 import hashlib
 import json
 import math
+from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Any
 
 # Only the resistive/viscous coefficients (and their nondimensional labels) may change
@@ -66,6 +68,378 @@ _QUENCH_INCREASING_DIFFUSIVITIES: frozenset[str] = frozenset(
 
 class QuenchError(ValueError):
     """Raised when a quench continuation violates the immutability contract."""
+
+
+QUENCH_DURATION_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class FixedQuenchDuration:
+    """Resolved fixed-step horizon for one explicit quench continuation."""
+
+    request_kind: str
+    requested_additional_time: float | None
+    requested_additional_steps: int | None
+    additional_time: float
+    additional_steps: int
+    parent_time: float
+    parent_step: int
+    target_time: float
+    target_step: int
+    child_dt: float
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "schema_version": QUENCH_DURATION_SCHEMA_VERSION,
+            "stepping": "fixed",
+            "request_kind": self.request_kind,
+            "child_dt": self.child_dt,
+            "parent_checkpoint": {
+                "time": self.parent_time,
+                "step": self.parent_step,
+            },
+            "requested": {
+                "additional_time": self.requested_additional_time,
+                "additional_steps": self.requested_additional_steps,
+            },
+            "absolute_target": {
+                "time": self.target_time,
+                "step": self.target_step,
+            },
+            "attained": {
+                "final_time": None,
+                "final_step": None,
+                "additional_time": None,
+                "additional_steps": None,
+                "target_reached": None,
+            },
+        }
+
+
+def validate_quench_duration_request(
+    *,
+    quench: bool,
+    steps: int | None,
+    additional_time: float | None,
+    additional_steps: int | None,
+) -> None:
+    """Validate the API/CLI shape before any output or solver work begins."""
+
+    supplied = int(additional_time is not None) + int(additional_steps is not None)
+    if not quench:
+        if supplied:
+            raise QuenchError(
+                "additional_time/additional_steps require an explicit quench"
+            )
+        return
+    if steps is not None:
+        raise QuenchError(
+            "steps is an absolute fresh/resume target and cannot be used for a "
+            "quench; use exactly one of additional_time or additional_steps"
+        )
+    if supplied != 1:
+        raise QuenchError(
+            "quench requires exactly one of additional_time or additional_steps; "
+            "the child spec final_time alone is not a quench horizon"
+        )
+    if additional_time is not None and (
+        isinstance(additional_time, bool)
+        or not isinstance(additional_time, Real)
+        or not math.isfinite(float(additional_time))
+        or float(additional_time) <= 0.0
+    ):
+        raise QuenchError("additional_time must be finite and strictly positive")
+    if additional_steps is not None and (
+        isinstance(additional_steps, bool)
+        or not isinstance(additional_steps, Integral)
+        or int(additional_steps) <= 0
+    ):
+        raise QuenchError("additional_steps must be a strictly positive integer")
+
+
+def validate_quench_output_options(
+    *, quench: bool, compare_golden: bool, write_golden: bool
+) -> None:
+    """Reject golden workflows whose semantics do not apply to a quench."""
+
+    if not quench:
+        return
+    requested = [
+        name
+        for name, enabled in (
+            ("compare_golden", compare_golden),
+            ("write_golden", write_golden),
+        )
+        if enabled
+    ]
+    if requested:
+        raise QuenchError(
+            f"{', '.join(requested)} cannot be used with a quench; transition "
+            "growth, decay, or saturation is a scientific outcome"
+        )
+
+
+def validate_burn_in_request(
+    *,
+    quench: bool,
+    burn_in_steps: int,
+    resolved_additional_steps: int | None = None,
+) -> None:
+    """Validate burn-in shape and, once known, its quench-horizon bound."""
+
+    if isinstance(burn_in_steps, bool) or not isinstance(burn_in_steps, Integral):
+        raise QuenchError("burn_in_steps must be an integer, not a boolean")
+    burn_in = int(burn_in_steps)
+    if not quench:
+        if burn_in != 0:
+            raise QuenchError("burn_in_steps must be 0 outside an explicit quench")
+        return
+    if burn_in < 0:
+        raise QuenchError("burn_in_steps must be non-negative for a quench")
+    if resolved_additional_steps is None:
+        return
+    if (
+        isinstance(resolved_additional_steps, bool)
+        or not isinstance(resolved_additional_steps, Integral)
+        or int(resolved_additional_steps) <= 0
+    ):
+        raise QuenchError("resolved quench additional_steps must be a positive integer")
+    additional_steps = int(resolved_additional_steps)
+    if burn_in >= additional_steps:
+        raise QuenchError(
+            "burn_in_steps must be strictly less than the resolved quench "
+            f"additional_steps ({burn_in} >= {additional_steps})"
+        )
+
+
+def validate_quench_runner_preflight(spec: dict[str, Any], *, quench: bool) -> None:
+    """Allow quenching only through runners with an explicit continuation path."""
+
+    if not quench:
+        return
+    geometry = spec.get("geometry")
+    physics = spec.get("physics")
+    representation = spec.get("representation")
+    oracle = (spec.get("expected_oracle") or {}).get("type")
+    pcf_primitive = (
+        geometry == "pcf"
+        and representation == "primitive"
+        and (
+            (physics == "mhd" and oracle == "gpu_generated_saturated_dns")
+            or (physics == "mri" and oracle == "mri_saturation_ladder")
+        )
+    )
+    pcf_vector_potential = (
+        geometry == "pcf"
+        and physics in {"mhd", "mri"}
+        and representation == "vector_potential"
+        and oracle in {"gpu_generated_saturated_dns", "mri_saturation_ladder"}
+    )
+    tc_vector_potential = (
+        geometry == "taylor_couette"
+        and physics in {"mhd", "mri"}
+        and representation == "vector_potential"
+        and oracle == "tc_mri_saturation_ladder"
+    )
+    if pcf_primitive or pcf_vector_potential or tc_vector_potential:
+        return
+    raise QuenchError(
+        "quench runner is not implemented for "
+        f"geometry={geometry!r}, physics={physics!r}, "
+        f"representation={representation!r}, expected_oracle.type={oracle!r}; "
+        "supported quench runners are PCF primitive MHD/MRI saturation, PCF "
+        "vector-potential MHD/MRI saturation, and Taylor-Couette "
+        "vector-potential MHD/MRI saturation"
+    )
+
+
+def resolve_fixed_quench_duration(
+    *,
+    additional_time: float | None,
+    additional_steps: int | None,
+    child_dt: float,
+    parent_time: float,
+    parent_step: int,
+) -> FixedQuenchDuration:
+    """Resolve an explicit additional request against a selected parent state."""
+
+    validate_quench_duration_request(
+        quench=True,
+        steps=None,
+        additional_time=additional_time,
+        additional_steps=additional_steps,
+    )
+    dt = float(child_dt)
+    if not math.isfinite(dt) or dt <= 0.0:
+        raise QuenchError("fixed-step quench requires a finite positive child dt")
+    t0 = float(parent_time)
+    if not math.isfinite(t0):
+        raise QuenchError("parent checkpoint time must be finite")
+    if isinstance(parent_step, bool) or not isinstance(parent_step, Integral):
+        raise QuenchError("parent checkpoint step must be an integer")
+    step0 = int(parent_step)
+    if step0 < 0:
+        raise QuenchError("parent checkpoint step must be non-negative")
+
+    if additional_time is not None:
+        requested_time = float(additional_time)
+        step_ratio = requested_time / dt
+        resolved_steps = int(round(step_ratio))
+        if resolved_steps <= 0 or not math.isclose(
+            step_ratio,
+            float(resolved_steps),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        ):
+            raise QuenchError(
+                f"additional_time={requested_time:g} must be an integer multiple "
+                f"of child dt={dt:g} for fixed-step quenching"
+            )
+        request_kind = "additional_time"
+        requested_steps = None
+    else:
+        requested_time = None
+        resolved_steps = int(additional_steps)
+        requested_steps = resolved_steps
+        request_kind = "additional_steps"
+
+    elapsed = float(resolved_steps) * dt
+    return FixedQuenchDuration(
+        request_kind=request_kind,
+        requested_additional_time=requested_time,
+        requested_additional_steps=requested_steps,
+        additional_time=elapsed,
+        additional_steps=resolved_steps,
+        parent_time=t0,
+        parent_step=step0,
+        target_time=t0 + elapsed,
+        target_step=step0 + resolved_steps,
+        child_dt=dt,
+    )
+
+
+def validate_bank_checkpoint_record(
+    entry: dict[str, Any],
+    record: Any,
+    *,
+    parent_spec_hash: str | None = None,
+) -> None:
+    """Require the selected manifest entry and loaded checkpoint to agree."""
+
+    try:
+        entry_time = float(entry["state_time"])
+        record_time = float(record.t)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise QuenchError(
+            "selected checkpoint-bank entry has invalid time/step metadata"
+        ) from exc
+    entry_step_raw = entry.get("tstep")
+    record_step_raw = getattr(record, "tstep", None)
+    if (
+        isinstance(entry_step_raw, bool)
+        or not isinstance(entry_step_raw, Integral)
+        or isinstance(record_step_raw, bool)
+        or not isinstance(record_step_raw, Integral)
+    ):
+        raise QuenchError(
+            "selected checkpoint-bank entry and checkpoint tstep must be integers"
+        )
+    entry_step = int(entry_step_raw)
+    record_step = int(record_step_raw)
+    if entry_step != record_step:
+        raise QuenchError(
+            "selected checkpoint-bank entry does not match the loaded checkpoint: "
+            f"tstep {entry_step} != {record_step}"
+        )
+    tolerance = 1.0e-12 * max(1.0, abs(entry_time), abs(record_time))
+    if not (
+        math.isfinite(entry_time)
+        and math.isfinite(record_time)
+        and math.isclose(entry_time, record_time, rel_tol=0.0, abs_tol=tolerance)
+    ):
+        raise QuenchError(
+            "selected checkpoint-bank entry does not match the loaded checkpoint: "
+            f"time {entry_time!r} != {record_time!r}"
+        )
+
+    attrs = getattr(record, "attrs", {})
+    entry_hash = str(entry.get("spec_hash"))
+    record_hash = str(attrs.get("spec_hash"))
+    if entry_hash != record_hash:
+        raise QuenchError(
+            "selected checkpoint-bank entry spec_hash does not match the loaded "
+            "checkpoint"
+        )
+    if parent_spec_hash is not None and entry_hash != str(parent_spec_hash):
+        raise QuenchError(
+            "selected checkpoint-bank entry spec_hash does not match parent spec.json"
+        )
+    try:
+        entry_version = int(entry["numerics_contract_version"])
+        record_version = int(attrs.get("numerics_contract_version"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise QuenchError(
+            "selected checkpoint-bank entry has invalid numerics-contract metadata"
+        ) from exc
+    if entry_version != record_version:
+        raise QuenchError(
+            "selected checkpoint-bank entry numerics_contract_version does not "
+            "match the loaded checkpoint"
+        )
+
+
+def finalize_fixed_quench_duration(
+    duration: dict[str, Any], *, final_time: float, final_step: int
+) -> dict[str, Any]:
+    """Fill the attained fixed-step horizon from the solver's emitted endpoint."""
+
+    data = copy.deepcopy(duration)
+    parent = data["parent_checkpoint"]
+    target = data["absolute_target"]
+    dt = float(data["child_dt"])
+    t0 = float(parent["time"])
+    step0 = int(parent["step"])
+    tf = float(final_time)
+    if not math.isfinite(tf):
+        raise QuenchError("quench solver endpoint time must be finite")
+    if isinstance(final_step, bool) or not isinstance(final_step, Integral):
+        raise QuenchError("quench solver endpoint step must be an integer")
+    stepf = int(final_step)
+    elapsed = tf - t0
+    taken = stepf - step0
+    target_time = float(target["time"])
+    step_consistent_time = t0 + float(taken) * dt
+    time_scale = max(1.0, abs(tf), abs(target_time), abs(step_consistent_time))
+    # The integer endpoint is authoritative for fixed stepping. Repeated time
+    # additions can accumulate O(n * ulp) drift on a long run, so retain a
+    # fail-closed time guard without rejecting an exact requested step count.
+    time_tolerance = max(
+        1.0e-10 * time_scale,
+        8.0 * max(1, abs(taken)) * math.ulp(time_scale),
+    )
+    reached = (
+        stepf == int(target["step"])
+        and math.isclose(
+            tf,
+            step_consistent_time,
+            rel_tol=0.0,
+            abs_tol=time_tolerance,
+        )
+        and math.isclose(
+            step_consistent_time,
+            target_time,
+            rel_tol=0.0,
+            abs_tol=8.0 * math.ulp(time_scale),
+        )
+    )
+    data["attained"] = {
+        "final_time": tf,
+        "final_step": stepf,
+        "additional_time": elapsed,
+        "additional_steps": taken,
+        "target_reached": bool(reached),
+    }
+    return data
 
 
 def _canonicalize_tc_quench_spec(spec: dict[str, Any]) -> dict[str, Any]:

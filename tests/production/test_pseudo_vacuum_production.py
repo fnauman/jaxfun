@@ -9,7 +9,7 @@ from pathlib import Path
 import jax
 import pytest
 
-from production.oracles import run_supported_spec
+from production.oracles import load_resume_checkpoint, run_supported_spec
 from production.problem_spec import UnsupportedSpecError, load_spec
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +53,52 @@ def test_pseudo_vacuum_saturation_smoke_propagates_bc(tmp_path):
     for key in ("kinetic_energy", "magnetic_energy", "divergence_b_l2"):
         assert math.isfinite(sc[key])
     assert sc["divergence_b_l2"] < 1e-2
+
+
+def test_primitive_pcf_quench_runs_exact_additional_steps(tmp_path):
+    jax.config.update("jax_enable_x64", True)
+    data = json.loads(PV_SPEC.read_text(encoding="utf-8"))
+    data["resolution"] = {
+        **data["resolution"]["smoke"],
+        "family": data["resolution"]["family"],
+    }
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    parent_spec = load_spec(path)
+    parent_dir = tmp_path / "parent"
+    run_supported_spec(
+        parent_spec,
+        steps=1,
+        out_dir=parent_dir,
+        checkpoint_every=1,
+    )
+    record = load_resume_checkpoint(parent_dir)
+
+    child = json.loads(json.dumps(parent_spec))
+    child["nondimensional_groups"].update(
+        {"Rm": 800.0, "eta_mag": 1.0 / 800.0, "Pm": 0.8}
+    )
+    child["spec_hash"] = "primitive-pcf-quench-child"
+    streamed = []
+    out = run_supported_spec(
+        child,
+        additional_steps=2,
+        resume_checkpoint=record,
+        quench=True,
+        diagnostics_every=1,
+        on_row=streamed.append,
+    )
+
+    assert out["time_series"][0]["t"] == pytest.approx(record.t)
+    assert out["time_series"][-1]["t"] == pytest.approx(
+        record.t + 2 * child["time"]["dt"]
+    )
+    assert out["run_horizon"] == {
+        "final_time": pytest.approx(record.t + 2 * child["time"]["dt"]),
+        "final_step": record.tstep + 2,
+    }
+    assert streamed
+    assert all(isinstance(row["tstep"], int) for row in streamed)
 
 
 def test_conducting_and_pseudo_vacuum_linear_operators_differ():

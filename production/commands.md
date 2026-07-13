@@ -439,18 +439,26 @@ block + A coefficients, `state_kind=pcf_vector_potential_mhd_saturation`):
 .venv/bin/python production/run_problem.py \
   --config production/runs/exp_pcf_mri_vector_potential.json \
   --out runs/exp_pcf_mri_vector_potential/parent \
-  --resolution-tier smoke --steps 4 --checkpoint-every 2 --diagnostics-every 2
+  --resolution-tier smoke --steps 4 --checkpoint-every 2 --checkpoint-bank \
+  --diagnostics-every 2
 
 # resume-exact continuation (same spec_hash enforced)
 .venv/bin/python production/run_problem.py \
   --resume runs/exp_pcf_mri_vector_potential/parent
 
 # FJ-05 quench: child spec may change only nu/eta (Re/Rm); baselines are taken
-# from the loaded parent state
+# from the loaded parent state. The child runs 20 physical-time units beyond it.
 .venv/bin/python production/run_problem.py \
   --config <child-spec>.json --out runs/.../quench \
-  --quench runs/exp_pcf_mri_vector_potential/parent
+  --quench runs/exp_pcf_mri_vector_potential/parent --additional-time 20
 ```
+
+A quench must provide exactly one explicit fixed-step horizon:
+`--additional-time T` (where `T` is an integer multiple of the child `dt`) or
+`--additional-steps N`. `--steps` remains an absolute target for fresh runs and
+resume-exact only; it cannot be combined with `--quench`. The immutable child
+spec's `time.final_time` does not define the quench horizon. Adaptive-CFL quench
+continuation is intentionally still unsupported.
 
 ### Parent bank: multiple plateau times
 
@@ -463,8 +471,20 @@ correlation time, budget), not only from metadata.
 
 ```bash
 .venv/bin/python production/run_problem.py --config <child>.json --out runs/.../q415 \
-  --quench runs/.../parent --quench-step 24000 --burn-in-steps 2000
+  --quench runs/.../parent --quench-step 24000 --additional-steps 12000 \
+  --burn-in-steps 2000
 ```
+
+`metadata.json` records the selected parent time/step, requested additional
+duration, resolved absolute target, and attained final time/step under the
+versioned `quench.duration` block. Quench children use
+`validation_scope=quench_continuation`: finite/divergence health remains a hard
+gate, while growth, decay, and saturation are recorded as scientific outcomes
+rather than launch-success requirements. Burn-in must satisfy
+`0 <= --burn-in-steps < additional steps`; golden comparison and promotion are
+not quench workflows and are rejected. A failed or interrupted solve leaves the
+certified `attained` fields unset and records only a conservative
+`last_observed` cadence lower bound when one is available.
 
 ### Cartesian sweeps
 

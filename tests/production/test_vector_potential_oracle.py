@@ -221,7 +221,15 @@ def test_vector_potential_quench_continues_with_new_physics(tmp_path):
 
     child = _vp_spec(Rm=40.0, eta_mag=2.5e-2, Pm=0.8)
     child["spec_hash"] = "vp-smoke-quench-child-hash"
-    out = run_supported_spec(child, steps=4, resume_checkpoint=record, quench=True)
+    streamed = []
+    out = run_supported_spec(
+        child,
+        additional_time=2 * child["time"]["dt"],
+        resume_checkpoint=record,
+        quench=True,
+        diagnostics_every=1,
+        on_row=streamed.append,
+    )
     sc = out["scalars"]
     assert sc["representation"] == "vector_potential"
     assert math.isfinite(sc["magnetic_energy"]) and sc["magnetic_energy"] > 0.0
@@ -232,6 +240,13 @@ def test_vector_potential_quench_continues_with_new_physics(tmp_path):
     # checkpoint time, not a fresh seed at t=0.
     first = out["time_series"][0]
     assert first["t"] == pytest.approx(2 * child["time"]["dt"])
+    assert out["time_series"][-1]["t"] == pytest.approx(4 * child["time"]["dt"])
+    assert out["run_horizon"] == {
+        "final_time": pytest.approx(4 * child["time"]["dt"]),
+        "final_step": 4,
+    }
+    assert streamed
+    assert all(isinstance(row["tstep"], int) for row in streamed)
     assert first["magnetic_energy"] == pytest.approx(
         parent["scalars"]["magnetic_energy"], rel=1e-10
     )

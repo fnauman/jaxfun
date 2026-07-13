@@ -15,6 +15,13 @@ import numpy as np
 from . import health, observables
 from .adaptive import adaptive_cfl_from_spec, run_adaptive_cfl
 from .checkpoint import write_production_checkpoint
+from .quench import (
+    QuenchError,
+    resolve_fixed_quench_duration,
+    validate_burn_in_request,
+    validate_quench_duration_request,
+    validate_quench_runner_preflight,
+)
 
 
 class ProductionOracleNotImplementedError(NotImplementedError):
@@ -306,6 +313,23 @@ def _remaining_steps_from_resume(
     return target, target - int(tstep0)
 
 
+def _with_quench_horizon(
+    diagnostics: dict[str, Any],
+    *,
+    quench: bool,
+    final_time: float,
+    final_step: int,
+) -> dict[str, Any]:
+    """Attach the solver-observed fixed-step endpoint for quench metadata."""
+
+    if quench:
+        diagnostics["run_horizon"] = {
+            "final_time": float(final_time),
+            "final_step": int(final_step),
+        }
+    return diagnostics
+
+
 def _adaptive_elapsed_target(
     spec: dict[str, Any], *, steps: int | None, t0: float
 ) -> float:
@@ -354,6 +378,8 @@ def run_supported_spec(
     spec: dict[str, Any],
     *,
     steps: int | None = None,
+    additional_time: float | None = None,
+    additional_steps: int | None = None,
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
     snapshot_every: int | None = None,
@@ -374,6 +400,37 @@ def run_supported_spec(
     ``burn_in_steps`` excludes the first steps after a resume/quench from the
     stationarity/classification analysis window.
     """
+
+    validate_quench_duration_request(
+        quench=quench,
+        steps=steps,
+        additional_time=additional_time,
+        additional_steps=additional_steps,
+    )
+    validate_burn_in_request(quench=quench, burn_in_steps=burn_in_steps)
+    validate_quench_runner_preflight(spec, quench=quench)
+    quench_target_step: int | None = None
+    if quench:
+        if resume_checkpoint is None:
+            raise QuenchError("quench requires a selected parent checkpoint")
+        if adaptive_cfl_from_spec(spec) is not None:
+            raise ProductionOracleNotImplementedError(
+                "adaptive_cfl quenching is not supported by the fixed-step "
+                "additional-duration contract"
+            )
+        duration = resolve_fixed_quench_duration(
+            additional_time=additional_time,
+            additional_steps=additional_steps,
+            child_dt=float(spec["time"]["dt"]),
+            parent_time=float(resume_checkpoint.t),
+            parent_step=resume_checkpoint.tstep,
+        )
+        validate_burn_in_request(
+            quench=True,
+            burn_in_steps=burn_in_steps,
+            resolved_additional_steps=duration.additional_steps,
+        )
+        quench_target_step = duration.target_step
 
     if (
         spec.get("representation") == "vector_potential"
@@ -431,7 +488,7 @@ def run_supported_spec(
     ):
         return _run_taylor_couette_vp_mhd_saturation(
             spec,
-            steps=steps,
+            steps=quench_target_step if quench else steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
@@ -528,7 +585,7 @@ def run_supported_spec(
     ):
         return _run_pcf_vector_potential_mhd_saturation(
             spec,
-            steps=steps,
+            steps=quench_target_step if quench else steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
@@ -547,7 +604,7 @@ def run_supported_spec(
     ):
         return _run_pcf_primitive_mhd_saturation(
             spec,
-            steps=steps,
+            steps=quench_target_step if quench else steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
@@ -566,7 +623,7 @@ def run_supported_spec(
     ):
         return _run_pcf_primitive_mhd_saturation(
             spec,
-            steps=steps,
+            steps=quench_target_step if quench else steps,
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
@@ -1332,7 +1389,7 @@ def _run_pcf_primitive_mhd_saturation(
     _assert_nonaxisymmetric_seed(solver, state, spec)
     diagnostic_rows: list[dict[str, Any]] = []
 
-    def collect_diagnostics(t: float, _tstep: int, diag: dict[str, Any]) -> None:
+    def collect_diagnostics(t: float, tstep: int, diag: dict[str, Any]) -> None:
         # FJ-06: the cadence row keeps the stresses/mean-flux/non-axisymmetric
         # signals the solver already computes, not just energies + divergence.
         row = {
@@ -1353,6 +1410,7 @@ def _run_pcf_primitive_mhd_saturation(
             "mean_bz": float(diag["mean_bz"]),
             "nonaxisymmetric_fraction": float(diag["nonaxisymmetric_fraction"]),
             "energy_convention": "half_integral_abs2",
+            **({"tstep": int(tstep)} if quench else {}),
         }
         if "transport_alpha" in diag:
             row["transport_alpha"] = float(diag["transport_alpha"])
@@ -1371,7 +1429,7 @@ def _run_pcf_primitive_mhd_saturation(
     # loaded parent checkpoint on a quench), not the fresh configured seed, so growth
     # rate / magnetic-growth / flux drift reference the correct starting point.
     initial = _pcf_primitive_3d_scalars(solver, state)
-    target_steps, n_steps = _remaining_steps_from_resume(
+    _target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
     )
     health_observations: list[dict[str, float]] = []
@@ -1401,7 +1459,7 @@ def _run_pcf_primitive_mhd_saturation(
     growth_rate = _growth_rate_from_energy(
         initial["total_energy"], final["total_energy"], n_steps, solver.dt
     )
-    elapsed = target_steps * float(spec["time"]["dt"])
+    elapsed = n_steps * float(spec["time"]["dt"])
     magnetic_growth = (
         final["magnetic_energy"] / initial["magnetic_energy"]
         if initial["magnetic_energy"] > 0.0
@@ -1440,7 +1498,7 @@ def _run_pcf_primitive_mhd_saturation(
     )
     last = _pcf_primitive_summary_row(
         final,
-        t=elapsed,
+        t=float(t0) + elapsed,
         extra={
             "growth_rate": float(growth_rate),
             "magnetic_energy_growth_factor": float(magnetic_growth),
@@ -1473,7 +1531,12 @@ def _run_pcf_primitive_mhd_saturation(
         )
         if independent is not None:
             scalars["effective_independent_samples_total_stress"] = float(independent)
-    return {"scalars": scalars, "time_series": series}
+    return _with_quench_horizon(
+        {"scalars": scalars, "time_series": series},
+        quench=quench,
+        final_time=float(t0) + elapsed,
+        final_step=int(tstep0) + int(n_steps),
+    )
 
 
 def _pcf_primitive_summary_row(
@@ -1700,6 +1763,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             "dissipation_magnetic": float(diag["dissipation_magnetic"]),
             "energy_convention": "integral_abs2",
             "dt": float(solver.dt),
+            **({"tstep": int(tstep)} if quench else {}),
             **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
             **(
                 {"insulating_bc_residual": float(diag["insulating_bc_residual"])}
@@ -1858,7 +1922,17 @@ def _run_pcf_vector_potential_mhd_saturation(
     )
     if budget is not None:
         scalars["energy_budget_residual"] = float(budget)
-    return {"scalars": scalars, "time_series": series}
+    final_steps_taken = (
+        int(adaptive_record["steps_taken"])
+        if adaptive_record is not None
+        else int(n_steps)
+    )
+    return _with_quench_horizon(
+        {"scalars": scalars, "time_series": series},
+        quench=quench,
+        final_time=float(t0) + elapsed,
+        final_step=int(tstep0) + final_steps_taken,
+    )
 
 
 def _is_number_scalar(value: Any) -> bool:
@@ -2382,6 +2456,7 @@ def _run_taylor_couette_vp_mhd_saturation(
             "total_stress": float(diag["total_stress"]),
             "mean_bz": float(diag["mean_bz"]),
             "dt": float(solver.dt),
+            **({"tstep": int(tstep)} if quench else {}),
             **(
                 {"insulating_bc_residual": float(diag["insulating_bc_residual"])}
                 if "insulating_bc_residual" in diag
@@ -2520,7 +2595,17 @@ def _run_taylor_couette_vp_mhd_saturation(
         )
         if independent is not None:
             scalars["effective_independent_samples_total_stress"] = float(independent)
-    return {"scalars": scalars, "time_series": series}
+    final_steps_taken = (
+        int(adaptive_record["steps_taken"])
+        if adaptive_record is not None
+        else int(n_steps)
+    )
+    return _with_quench_horizon(
+        {"scalars": scalars, "time_series": series},
+        quench=quench,
+        final_time=float(t0) + elapsed,
+        final_step=int(tstep0) + final_steps_taken,
+    )
 
 
 def _run_taylor_couette_mhd_dns(

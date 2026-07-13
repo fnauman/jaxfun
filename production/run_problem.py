@@ -18,11 +18,13 @@ import sys
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
+from numbers import Integral
 from pathlib import Path
 from typing import Any
 
 try:
     from .adapters import ProductionConfig, load_config
+    from .adaptive import adaptive_cfl_from_spec
     from .compare_goldens import (
         assert_golden_not_quarantined,
         compare_problem,
@@ -42,11 +44,23 @@ try:
     )
     from .problem_spec import ProblemSpecError, UnsupportedSpecError, load_spec
     from .provenance import ReleaseCleanlinessError
-    from .quench import QuenchError, burn_in_horizon, validate_quench
+    from .quench import (
+        QuenchError,
+        burn_in_horizon,
+        finalize_fixed_quench_duration,
+        resolve_fixed_quench_duration,
+        validate_bank_checkpoint_record,
+        validate_burn_in_request,
+        validate_quench,
+        validate_quench_duration_request,
+        validate_quench_output_options,
+        validate_quench_runner_preflight,
+    )
     from .wandb_sink import WandbUnavailableError
 except ImportError:  # pragma: no cover - direct script mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from production.adapters import ProductionConfig, load_config  # type: ignore
+    from production.adaptive import adaptive_cfl_from_spec  # type: ignore
     from production.compare_goldens import (
         assert_golden_not_quarantined,
         compare_problem,
@@ -76,7 +90,14 @@ except ImportError:  # pragma: no cover - direct script mode
     from production.quench import (  # type: ignore
         QuenchError,
         burn_in_horizon,
+        finalize_fixed_quench_duration,
+        resolve_fixed_quench_duration,
+        validate_bank_checkpoint_record,
+        validate_burn_in_request,
         validate_quench,
+        validate_quench_duration_request,
+        validate_quench_output_options,
+        validate_quench_runner_preflight,
     )
     from production.wandb_sink import WandbUnavailableError  # type: ignore
 
@@ -94,6 +115,8 @@ def run_problem(
     write_golden: bool = False,
     device: str = "auto",
     steps: int | None = None,
+    additional_time: float | None = None,
+    additional_steps: int | None = None,
     checkpoint_every: int | None = None,
     snapshot_every: int | None = None,
     diagnostics_every: int | None = None,
@@ -113,15 +136,47 @@ def run_problem(
 ) -> dict[str, Any]:
     """Validate a config, write metadata, and eventually execute its solver."""
 
+    quench_requested = quench_from is not None
+    validate_quench_duration_request(
+        quench=quench_requested,
+        steps=steps,
+        additional_time=additional_time,
+        additional_steps=additional_steps,
+    )
+    validate_quench_output_options(
+        quench=quench_requested,
+        compare_golden=compare_golden,
+        write_golden=write_golden,
+    )
+    validate_burn_in_request(
+        quench=quench_requested,
+        burn_in_steps=burn_in_steps,
+    )
     config = load_config(config_path, resolution_tier=resolution_tier)
+    validate_quench_runner_preflight(config.spec, quench=quench_requested)
+    if quench_requested and adaptive_cfl_from_spec(config.spec) is not None:
+        raise QuenchError(
+            "adaptive_cfl quenching is not supported by the fixed-step additional-"
+            "duration contract; use a fixed child dt"
+        )
     resume_record, quench_metadata = _resolve_resume_or_quench(
         config,
         resume=resume,
         quench_from=quench_from,
         quench_step=quench_step,
         burn_in_steps=burn_in_steps,
+        additional_time=additional_time,
+        additional_steps=additional_steps,
     )
     quench_mode = quench_metadata is not None
+    quench_duration = (
+        None if quench_metadata is None else quench_metadata.get("duration")
+    )
+    quench_additional_steps = None
+    if quench_duration is not None:
+        quench_additional_steps = int(quench_duration["absolute_target"]["step"]) - int(
+            quench_duration["parent_checkpoint"]["step"]
+        )
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     release_gate = _enforce_release_gate(
@@ -137,6 +192,7 @@ def run_problem(
             config.spec,
             diagnostics_every=diagnostics_every,
             steps=steps,
+            quench_steps=quench_additional_steps,
             resolution_tier=resolution_tier,
         )
 
@@ -161,6 +217,8 @@ def run_problem(
             write_golden=write_golden,
             requested_device=device,
             steps=steps,
+            additional_time=additional_time,
+            additional_steps=additional_steps,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
             diagnostics_every=effective_diagnostics_every,
@@ -197,16 +255,22 @@ def run_problem(
             out_dir
         )
         partial_stream = {"close": close_partial, "closed": False}
+        quench_progress, quench_observer = _quench_progress_tracker(quench_duration)
 
         solver_started_at = _utc_timestamp()
         solver_start = time.perf_counter()
         solver_steps = _executed_solver_steps(
-            config.spec, steps=steps, resume_record=resume_record
+            config.spec,
+            steps=steps,
+            resume_record=resume_record,
+            quench_duration=quench_duration,
         )
         try:
             diagnostics = run_supported_spec(
                 config.spec,
                 steps=steps,
+                additional_time=additional_time,
+                additional_steps=additional_steps,
                 out_dir=out_dir,
                 checkpoint_every=checkpoint_every,
                 snapshot_every=snapshot_every,
@@ -215,13 +279,52 @@ def run_problem(
                 resume_checkpoint=resume_record,
                 quench=quench_mode,
                 on_row=_compose_row_callbacks(
+                    quench_observer,
                     sink.log_cadence if sink is not None and sink.active else None,
                     partial_writer,
                 ),
                 checkpoint_bank=checkpoint_bank,
                 burn_in_steps=burn_in_steps if quench_mode else 0,
             )
+            if quench_metadata is not None:
+                duration_metadata = quench_metadata["duration"]
+                series, horizon = _archive_reported_quench_endpoint(
+                    duration_metadata, diagnostics
+                )
+                if (
+                    not series
+                    or not isinstance(series[-1], dict)
+                    or "t" not in series[-1]
+                    or "final_time" not in horizon
+                    or "final_step" not in horizon
+                ):
+                    raise QuenchError(
+                        "quench runner did not emit its attained time/step horizon"
+                    )
+                series_time = float(series[-1]["t"])
+                horizon_time = float(horizon["final_time"])
+                tolerance = 1.0e-12 * max(1.0, abs(series_time), abs(horizon_time))
+                if not math.isclose(
+                    series_time, horizon_time, rel_tol=0.0, abs_tol=tolerance
+                ):
+                    raise QuenchError(
+                        "quench runner endpoint disagrees with its final "
+                        "time-series row"
+                    )
+                finalized_duration = finalize_fixed_quench_duration(
+                    duration_metadata,
+                    final_time=horizon_time,
+                    final_step=horizon["final_step"],
+                )
+                if not finalized_duration["attained"]["target_reached"]:
+                    raise QuenchError(
+                        "fixed-step quench did not attain its requested additional "
+                        "duration"
+                    )
+                finalized_duration["endpoint_validated"] = True
+                quench_metadata["duration"] = finalized_duration
         except ProductionOracleNotImplementedError as exc:
+            _persist_quench_progress(quench_metadata, quench_progress)
             metadata["timing"] = _solver_timing(
                 solver_started_at, solver_start, solver_steps=solver_steps
             )
@@ -230,7 +333,8 @@ def run_problem(
                 f"{exc}; contract validation metadata was written, but no DNS "
                 "or golden comparison was run"
             ) from exc
-        except Exception as exc:
+        except (Exception, KeyboardInterrupt) as exc:
+            _persist_quench_progress(quench_metadata, quench_progress)
             metadata["timing"] = _solver_timing(
                 solver_started_at, solver_start, solver_steps=solver_steps
             )
@@ -269,6 +373,7 @@ def run_problem(
             compare_golden=compare_golden,
             steps=steps,
             resolution_tier=resolution_tier,
+            quench_steps=quench_additional_steps,
         )
         metadata["saturation_checks"] = _saturation_check_metadata(
             diagnostics, validation_scope=metadata["validation_scope"]
@@ -344,6 +449,8 @@ def build_metadata(
     write_golden: bool,
     requested_device: str,
     steps: int | None,
+    additional_time: float | None,
+    additional_steps: int | None,
     checkpoint_every: int | None,
     snapshot_every: int | None,
     diagnostics_every: int | None,
@@ -385,6 +492,8 @@ def build_metadata(
         "run_options": {
             "requested_device": requested_device,
             "steps_override": steps,
+            "additional_time": additional_time,
+            "additional_steps": additional_steps,
             "checkpoint_every": checkpoint_every,
             "snapshot_every": snapshot_every,
             "diagnostics_every": diagnostics_every,
@@ -435,16 +544,20 @@ def _validation_scope_metadata(
     compare_golden: bool,
     steps: int | None,
     resolution_tier: str | None,
+    quench_steps: int | None = None,
 ) -> dict[str, Any]:
     expected_oracle = spec.get("expected_oracle", {})
     fallback_rungs = expected_oracle.get("fallback_rungs", [])
     mode = device_record.get("mode")
     execution_kind = _execution_kind(spec)
     scalar_keys = sorted(diagnostics.get("scalars", {}).keys())
-    bounded_smoke = _is_bounded_smoke_run(steps=steps, resolution_tier=resolution_tier)
+    bounded_smoke = quench_steps is not None or _is_bounded_smoke_run(
+        steps=steps, resolution_tier=resolution_tier
+    )
     common = {
         "checked_observables": scalar_keys,
         "steps_override": steps,
+        "quench_additional_steps": quench_steps,
         "resolution_tier": resolution_tier,
         "bounded_smoke": bounded_smoke,
     }
@@ -454,6 +567,15 @@ def _validation_scope_metadata(
             **common,
             "kind": "golden_comparison",
             "reason": "compared diagnostics against the resolved committed golden",
+        }
+    if quench_steps is not None:
+        return {
+            **common,
+            "kind": "quench_continuation",
+            "reason": (
+                "executed an explicit fixed-step quench horizon; finite/divergence "
+                "health is required, but growth/saturation is a scientific outcome"
+            ),
         }
     if (
         mode == "cpu_smoke"
@@ -512,6 +634,7 @@ def _effective_diagnostics_every(
     diagnostics_every: int | None,
     steps: int | None,
     resolution_tier: str | None,
+    quench_steps: int | None = None,
 ) -> int | None:
     if diagnostics_every is not None:
         return diagnostics_every
@@ -519,7 +642,11 @@ def _effective_diagnostics_every(
         return None
     if _is_bounded_smoke_run(steps=steps, resolution_tier=resolution_tier):
         return None
-    total_steps = _steps_from_spec_metadata(spec, steps=steps)
+    total_steps = (
+        int(quench_steps)
+        if quench_steps is not None
+        else _steps_from_spec_metadata(spec, steps=steps)
+    )
     return max(1, min(100, max(1, total_steps // 16)))
 
 
@@ -555,6 +682,7 @@ _VALIDATION_FLOOR_SCOPES = {
     "bounded_saturation_smoke",
     "cpu_smoke_finiteness_divergence_only",
     "cpu_smoke_fallback_oracle",
+    "quench_continuation",
 }
 _SMOKE_DIVERGENCE_LIMIT = 1.0e-2
 
@@ -713,7 +841,7 @@ def _assert_required_saturation_checks(metadata: dict[str, Any]) -> None:
     raise RuntimeError(message)
 
 
-def _exception_message(exc: Exception) -> str:
+def _exception_message(exc: BaseException) -> str:
     message = str(exc)
     if message:
         return f"{type(exc).__name__}: {message}"
@@ -771,10 +899,18 @@ def _solver_timing(
 
 
 def _executed_solver_steps(
-    spec: dict[str, Any], *, steps: int | None, resume_record: Any | None
+    spec: dict[str, Any],
+    *,
+    steps: int | None,
+    resume_record: Any | None,
+    quench_duration: dict[str, Any] | None = None,
 ) -> int | None:
     if _execution_kind(spec) not in {"dns-saturation", "dns-linear-window"}:
         return None
+    if quench_duration is not None:
+        parent = quench_duration["parent_checkpoint"]
+        target = quench_duration["absolute_target"]
+        return int(target["step"]) - int(parent["step"])
     target_steps = _steps_from_spec_metadata(spec, steps=steps)
     start_step = (
         int(getattr(resume_record, "tstep", 0)) if resume_record is not None else 0
@@ -839,6 +975,89 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(_json_ready(data), sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def _quench_progress_tracker(
+    duration: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, Any | None]:
+    """Track the last solver-confirmed quench endpoint without certifying it."""
+
+    if duration is None:
+        return None, None
+    parent = duration["parent_checkpoint"]
+    state = {
+        "last_observed": _quench_observation(
+            duration,
+            time_value=parent["time"],
+            step_value=parent["step"],
+            source="parent_checkpoint",
+        )
+    }
+
+    def observe(row: dict[str, Any]) -> None:
+        if "t" not in row or "tstep" not in row:
+            raise QuenchError("quench cadence rows must include absolute t and tstep")
+        state["last_observed"] = _quench_observation(
+            duration,
+            time_value=row["t"],
+            step_value=row["tstep"],
+            source="cadence",
+        )
+
+    return state, observe
+
+
+def _quench_observation(
+    duration: dict[str, Any],
+    *,
+    time_value: Any,
+    step_value: Any,
+    source: str,
+) -> dict[str, Any]:
+    time_observed = float(time_value)
+    if not math.isfinite(time_observed):
+        raise QuenchError("quench progress time must be finite")
+    if isinstance(step_value, bool) or not isinstance(step_value, Integral):
+        raise QuenchError("quench progress tstep must be an integer")
+    step_observed = int(step_value)
+    parent = duration["parent_checkpoint"]
+    return {
+        "absolute_time": time_observed,
+        "absolute_step": step_observed,
+        "additional_time": time_observed - float(parent["time"]),
+        "additional_steps": step_observed - int(parent["step"]),
+        "source": source,
+        "is_lower_bound": True,
+    }
+
+
+def _persist_quench_progress(
+    quench_metadata: dict[str, Any] | None,
+    progress: dict[str, Any] | None,
+) -> None:
+    if quench_metadata is None or progress is None:
+        return
+    quench_metadata["duration"]["last_observed"] = dict(progress["last_observed"])
+
+
+def _archive_reported_quench_endpoint(
+    duration: dict[str, Any], diagnostics: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Archive an uncertified runner endpoint before checking its consistency."""
+
+    series_raw = diagnostics.get("time_series")
+    series = series_raw if isinstance(series_raw, list) else []
+    horizon_raw = diagnostics.get("run_horizon")
+    horizon = horizon_raw if isinstance(horizon_raw, dict) else {}
+    duration["reported_endpoint"] = {
+        "final_time": horizon.get("final_time"),
+        "final_step": horizon.get("final_step"),
+    }
+    duration["series_final_time"] = (
+        series[-1].get("t") if series and isinstance(series[-1], dict) else None
+    )
+    duration["endpoint_validated"] = False
+    return series, horizon
 
 
 def _compose_row_callbacks(*callbacks: Any) -> Any | None:
@@ -981,6 +1200,8 @@ def _resolve_resume_or_quench(
     quench_from: str | Path | None,
     quench_step: int | None = None,
     burn_in_steps: int,
+    additional_time: float | None = None,
+    additional_steps: int | None = None,
 ) -> tuple[Any | None, dict[str, Any] | None]:
     """Return ``(resume_record, quench_metadata)`` for resume-exact or quench (FJ-05).
 
@@ -999,8 +1220,25 @@ def _resolve_resume_or_quench(
         selected_step = int(parent_entry["tstep"])
         record = load_resume_checkpoint(source, step=selected_step)
         parent_spec = load_spec(source / "spec.json")
+        validate_bank_checkpoint_record(
+            parent_entry,
+            record,
+            parent_spec_hash=str(parent_spec.get("spec_hash")),
+        )
         diff = validate_quench(parent_spec, config.spec)  # raises on illegal change
         tstep0 = int(getattr(record, "tstep", 0))
+        duration = resolve_fixed_quench_duration(
+            additional_time=additional_time,
+            additional_steps=additional_steps,
+            child_dt=float(config.spec["time"]["dt"]),
+            parent_time=float(record.t),
+            parent_step=tstep0,
+        )
+        validate_burn_in_request(
+            quench=True,
+            burn_in_steps=burn_in_steps,
+            resolved_additional_steps=duration.additional_steps,
+        )
         meta = {
             "mode": "quench",
             "parent_run_dir": str(source),
@@ -1012,6 +1250,7 @@ def _resolve_resume_or_quench(
             "parent_plateau_window_stats": parent_entry["plateau_window_stats"],
             "parent_checkpoint_sha256": parent_entry.get("file_sha256"),
             "mutable_diff": {k: list(v) for k, v in diff["changed"].items()},
+            "duration": duration.to_metadata(),
             **burn_in_horizon(tstep0=tstep0, burn_in_steps=burn_in_steps),
         }
         return record, meta
@@ -1227,6 +1466,19 @@ def _classification_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
     series = diagnostics.get("time_series") or []
     scalars = diagnostics.get("scalars") or {}
     stationary = scalars.get("stationarity_check_passed")
+    # FJ-05: exclude the post-quench burn-in window from every derived
+    # classification input, including the peak used to set the noise floor.
+    t_start = scalars.get("analysis_t_start")
+    if isinstance(t_start, (int, float)) and math.isfinite(float(t_start)):
+        filtered = []
+        for row in series:
+            try:
+                row_time = float(row.get("t", -math.inf))
+            except (TypeError, ValueError):
+                continue
+            if row_time >= float(t_start) - 1.0e-12:
+                filtered.append(row)
+        series = filtered
     # Noise floor: a tiny fraction of the peak fluctuation energy in the series.
     peak = 0.0
     for row in series:
@@ -1235,14 +1487,6 @@ def _classification_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
             if isinstance(value, (int, float)) and math.isfinite(value):
                 peak = max(peak, abs(float(value)))
     noise_floor = 1.0e-10 * peak
-    # FJ-05: exclude the post-quench burn-in window from the fitted history.
-    t_start = scalars.get("analysis_t_start")
-    if isinstance(t_start, (int, float)):
-        series = [
-            row
-            for row in series
-            if float(row.get("t", -math.inf)) >= float(t_start) - 1.0e-12
-        ]
     # Review round 3: the health contract quarantines under-resolved runs from
     # scientific-class inference instead of trusting their thresholds.
     underresolved = underresolved_from_scalars(scalars)
@@ -1378,6 +1622,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--device", default="auto", choices=["auto", "cpu", "cuda", "gpu"]
     )
     parser.add_argument("--steps", type=int)
+    parser.add_argument(
+        "--additional-time",
+        type=float,
+        help="Fixed-step quench horizon measured from the selected parent time; "
+        "must be an integer multiple of the child dt.",
+    )
+    parser.add_argument(
+        "--additional-steps",
+        type=int,
+        help="Fixed-step quench horizon measured from the selected parent step.",
+    )
     parser.add_argument("--checkpoint-every", type=int)
     parser.add_argument("--snapshot-every", type=int)
     parser.add_argument("--diagnostics-every", type=int)
@@ -1484,6 +1739,25 @@ def _requires_release_gate(args: argparse.Namespace, config_path: Path) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    try:
+        validate_quench_duration_request(
+            quench=args.quench_from is not None,
+            steps=args.steps,
+            additional_time=args.additional_time,
+            additional_steps=args.additional_steps,
+        )
+        validate_quench_output_options(
+            quench=args.quench_from is not None,
+            compare_golden=args.compare_golden,
+            write_golden=args.write_golden,
+        )
+        validate_burn_in_request(
+            quench=args.quench_from is not None,
+            burn_in_steps=args.burn_in_steps,
+        )
+    except QuenchError as exc:
+        print(f"quench rejected: {exc}", file=sys.stderr)
+        return 1
     resume_dir = Path(args.resume) if args.resume else None
     config_path = Path(args.config) if args.config else None
     out_dir = Path(args.out) if args.out else None
@@ -1522,6 +1796,8 @@ def main(argv: list[str] | None = None) -> int:
                 write_golden=args.write_golden,
                 device=args.device,
                 steps=args.steps,
+                additional_time=args.additional_time,
+                additional_steps=args.additional_steps,
                 checkpoint_every=args.checkpoint_every,
                 snapshot_every=args.snapshot_every,
                 diagnostics_every=args.diagnostics_every,
