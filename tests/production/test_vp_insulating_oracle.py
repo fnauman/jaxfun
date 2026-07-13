@@ -23,6 +23,7 @@ from production.oracles import run_supported_spec
 # The cylindrical TC family keeps its separate, resolution-dependent
 # projected-witness tolerance (see test_tc_vector_potential_oracle.py).
 SOLENOIDAL_CEIL = 1.0e3 * np.finfo(float).eps  # ~2.2e-13
+DIVERGENCE_GUARD = 1.0e-12
 
 
 def _pcf_insulating_spec(**groups):
@@ -30,10 +31,14 @@ def _pcf_insulating_spec(**groups):
         "problem_id": "pcf_mri_vp_insulating_smoke",
         "spec_hash": "vp-insulating-smoke-hash",
         "numerics_contract_version": 2,
+        "precision": "float64",
         "geometry": "pcf",
         "physics": "mri",
         "representation": "vector_potential",
-        "expected_oracle": {"type": "gpu_generated_saturated_dns"},
+        "expected_oracle": {
+            "type": "gpu_generated_saturated_dns",
+            "divergence_b_guard_l2": DIVERGENCE_GUARD,
+        },
         "boundary_conditions": {
             "velocity": {"type": "no_slip_shearbox_walls"},
             "magnetic": {"type": "insulating"},
@@ -70,6 +75,7 @@ def test_insulating_oracle_holds_divergence_and_matching_rows():
     sc = out["scalars"]
     assert sc["representation"] == "vector_potential"
     assert sc["magnetic_bc"] == "insulating"
+    assert sc["divergence_b_guard_l2"] == DIVERGENCE_GUARD
     assert sc["divergence_b_l2"] < SOLENOIDAL_CEIL
     assert _max_series(out, "divergence_b_l2") < SOLENOIDAL_CEIL
     assert sc["insulating_bc_residual"] < SOLENOIDAL_CEIL
