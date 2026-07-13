@@ -2,16 +2,24 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from production.adapters import load_config
 from production.compare_goldens import validate_golden
-from production.oracles import _channel_poiseuille_kmm_state, _saturation_passed
+from production.oracles import (
+    _channel_poiseuille_kmm_state,
+    _saturation_passed,
+    run_supported_spec,
+)
 from production.problem_spec import UnsupportedSpecError
+from production.quench import QuenchError, resolve_fixed_quench_duration
 from production.run_problem import (
     _assert_required_saturation_checks,
     _assert_validation_floor_checks,
+    _classification_metadata,
+    _effective_diagnostics_every,
     _saturation_check_metadata,
     _validation_floor_metadata,
     _validation_scope_metadata,
@@ -21,6 +29,368 @@ from production.run_problem import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _install_fake_quench_solver(monkeypatch, solve):
+    import production.run_problem as runner
+
+    config_path = ROOT / "production/runs/exp_pcf_mri_vector_potential.json"
+    config = load_config(config_path)
+    dt = float(config.spec["time"]["dt"])
+    duration = resolve_fixed_quench_duration(
+        additional_time=None,
+        additional_steps=4,
+        child_dt=dt,
+        parent_time=10 * dt,
+        parent_step=10,
+    )
+    record = SimpleNamespace(t=duration.parent_time, tstep=duration.parent_step)
+    quench_metadata = {"mode": "quench", "duration": duration.to_metadata()}
+    monkeypatch.setattr(
+        runner,
+        "_resolve_resume_or_quench",
+        lambda *_args, **_kwargs: (record, quench_metadata),
+    )
+    monkeypatch.setattr(
+        runner, "validate_resume_checkpoint", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(runner, "run_supported_spec", solve)
+    return config_path, duration
+
+
+def _run_fake_quench(config_path, out):
+    return run_problem(
+        config_path=config_path,
+        out=out,
+        quench_from="unused-parent",
+        additional_steps=4,
+        capture_device=False,
+    )
+
+
+def test_final_time_only_quench_is_rejected_before_config_or_output(tmp_path):
+    out = tmp_path / "must-not-exist"
+    with pytest.raises(QuenchError, match="final_time alone"):
+        run_problem(
+            config_path=tmp_path / "missing-child.json",
+            out=out,
+            quench_from=tmp_path / "missing-parent",
+        )
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"additional_steps": 2},
+        {"quench_from": "parent", "steps": 4, "additional_steps": 2},
+        {
+            "quench_from": "parent",
+            "additional_time": 0.1,
+            "additional_steps": 2,
+        },
+    ],
+)
+def test_run_problem_rejects_ambiguous_duration_api_before_output(tmp_path, options):
+    out = tmp_path / "must-not-exist"
+    with pytest.raises(QuenchError):
+        run_problem(
+            config_path=tmp_path / "missing-child.json",
+            out=out,
+            **options,
+        )
+    assert not out.exists()
+
+
+def test_cli_rejects_final_time_only_quench_before_output(tmp_path, capsys):
+    out = tmp_path / "must-not-exist"
+    rc = main(
+        [
+            "--config",
+            str(tmp_path / "missing-child.json"),
+            "--out",
+            str(out),
+            "--quench",
+            str(tmp_path / "missing-parent"),
+        ]
+    )
+    assert rc == 1
+    assert "final_time alone" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_adaptive_quench_stays_rejected_before_bank_or_output(tmp_path):
+    data = json.loads(
+        (ROOT / "production" / "runs" / "exp_pcf_mri_vector_potential.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    data["time"]["adaptive_cfl"] = {}
+    child = tmp_path / "adaptive-child.json"
+    child.write_text(json.dumps(data), encoding="utf-8")
+    out = tmp_path / "must-not-exist"
+
+    with pytest.raises(QuenchError, match="adaptive_cfl quenching is not supported"):
+        run_problem(
+            config_path=child,
+            out=out,
+            quench_from=tmp_path / "missing-parent",
+            additional_steps=2,
+        )
+    assert not out.exists()
+
+
+def test_direct_quench_rejects_unwired_runner_before_output_or_parent_load(tmp_path):
+    spec = load_config(ROOT / "production/runs/pcf_fluct_re400.json").spec
+    out = tmp_path / "must-not-exist"
+    with pytest.raises(QuenchError, match="quench runner is not implemented"):
+        run_supported_spec(
+            spec,
+            additional_steps=2,
+            quench=True,
+            out_dir=out,
+        )
+    assert not out.exists()
+
+
+def test_validate_only_api_rejects_unwired_quench_runner_before_output(tmp_path):
+    out = tmp_path / "must-not-exist"
+    with pytest.raises(QuenchError, match="quench runner is not implemented"):
+        run_problem(
+            config_path=ROOT / "production/runs/pcf_fluct_re400.json",
+            out=out,
+            quench_from=tmp_path / "missing-parent",
+            additional_steps=2,
+            validate_only=True,
+        )
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("option", ["compare_golden", "write_golden"])
+def test_quench_rejects_golden_workflows_before_config_or_output(tmp_path, option):
+    out = tmp_path / "must-not-exist"
+    options = {option: True}
+    with pytest.raises(QuenchError, match=option):
+        run_problem(
+            config_path=tmp_path / "missing-child.json",
+            out=out,
+            quench_from=tmp_path / "missing-parent",
+            additional_steps=2,
+            **options,
+        )
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("burn_in_steps", [True, 1.5, 1])
+def test_invalid_nonquench_burn_in_is_rejected_before_config_or_output(
+    tmp_path, burn_in_steps
+):
+    out = tmp_path / "must-not-exist"
+    with pytest.raises(QuenchError, match="burn_in_steps"):
+        run_problem(
+            config_path=tmp_path / "missing-child.json",
+            out=out,
+            burn_in_steps=burn_in_steps,
+        )
+    assert not out.exists()
+
+
+def test_direct_quench_rejects_burn_in_at_resolved_horizon_before_output(tmp_path):
+    spec = load_config(ROOT / "production/runs/exp_pcf_mri_vector_potential.json").spec
+    out = tmp_path / "must-not-exist"
+    record = SimpleNamespace(t=0.0, tstep=0)
+    with pytest.raises(QuenchError, match="strictly less"):
+        run_supported_spec(
+            spec,
+            additional_steps=2,
+            resume_checkpoint=record,
+            quench=True,
+            burn_in_steps=2,
+            out_dir=out,
+        )
+    assert not out.exists()
+
+
+def test_quench_failure_before_first_row_persists_parent_lower_bound(
+    tmp_path, monkeypatch
+):
+    def fail_before_row(*_args, **_kwargs):
+        raise RuntimeError("failed before cadence")
+
+    config_path, duration = _install_fake_quench_solver(monkeypatch, fail_before_row)
+    out = tmp_path / "failed-before-row"
+    with pytest.raises(RuntimeError, match="before cadence"):
+        _run_fake_quench(config_path, out)
+
+    recorded = json.loads((out / "metadata.json").read_text())["quench"]["duration"]
+    assert all(value is None for value in recorded["attained"].values())
+    assert recorded["last_observed"] == {
+        "absolute_time": duration.parent_time,
+        "absolute_step": duration.parent_step,
+        "additional_time": 0.0,
+        "additional_steps": 0,
+        "source": "parent_checkpoint",
+        "is_lower_bound": True,
+    }
+
+
+def test_quench_keyboard_interrupt_after_row_persists_cadence_lower_bound(
+    tmp_path, monkeypatch
+):
+    observed = {}
+
+    def interrupt_after_row(_spec, *, on_row, **_kwargs):
+        on_row(observed)
+        raise KeyboardInterrupt
+
+    config_path, duration = _install_fake_quench_solver(
+        monkeypatch, interrupt_after_row
+    )
+    observed.update(
+        {
+            "t": duration.parent_time + 2 * duration.child_dt,
+            "tstep": duration.parent_step + 2,
+        }
+    )
+    out = tmp_path / "interrupted-after-row"
+    with pytest.raises(KeyboardInterrupt):
+        _run_fake_quench(config_path, out)
+
+    recorded = json.loads((out / "metadata.json").read_text())["quench"]["duration"]
+    assert all(value is None for value in recorded["attained"].values())
+    assert recorded["last_observed"] == {
+        "absolute_time": pytest.approx(observed["t"]),
+        "absolute_step": observed["tstep"],
+        "additional_time": pytest.approx(2 * duration.child_dt),
+        "additional_steps": 2,
+        "source": "cadence",
+        "is_lower_bound": True,
+    }
+
+
+@pytest.mark.parametrize("endpoint_case", ["missing", "mismatched"])
+def test_quench_invalid_reported_endpoint_is_archived_without_attainment(
+    tmp_path, monkeypatch, endpoint_case
+):
+    result = {}
+
+    def return_invalid_endpoint(_spec, **_kwargs):
+        return result
+
+    config_path, duration = _install_fake_quench_solver(
+        monkeypatch, return_invalid_endpoint
+    )
+    result.update(
+        {
+            "scalars": {},
+            "time_series": [{"t": duration.target_time}],
+        }
+    )
+    if endpoint_case == "mismatched":
+        result["run_horizon"] = {
+            "final_time": duration.target_time + duration.child_dt,
+            "final_step": duration.target_step,
+        }
+    out = tmp_path / endpoint_case
+    with pytest.raises(QuenchError):
+        _run_fake_quench(config_path, out)
+
+    recorded = json.loads((out / "metadata.json").read_text())["quench"]["duration"]
+    assert all(value is None for value in recorded["attained"].values())
+    assert recorded["endpoint_validated"] is False
+    assert recorded["series_final_time"] == pytest.approx(duration.target_time)
+    if endpoint_case == "missing":
+        assert recorded["reported_endpoint"] == {
+            "final_time": None,
+            "final_step": None,
+        }
+    else:
+        assert recorded["reported_endpoint"] == {
+            "final_time": pytest.approx(duration.target_time + duration.child_dt),
+            "final_step": duration.target_step,
+        }
+
+
+def test_quench_success_certifies_consistent_endpoint_only_after_validation(
+    tmp_path, monkeypatch
+):
+    result = {}
+
+    def return_success(_spec, *, on_row, **_kwargs):
+        on_row(
+            {
+                "t": result["run_horizon"]["final_time"],
+                "tstep": result["run_horizon"]["final_step"],
+                "divergence_b_l2": 0.0,
+            }
+        )
+        return result
+
+    config_path, duration = _install_fake_quench_solver(monkeypatch, return_success)
+    result.update(
+        {
+            "scalars": {"magnetic_energy": 1.0, "divergence_b_l2": 0.0},
+            "time_series": [
+                {
+                    "t": duration.target_time,
+                    "magnetic_energy": 1.0,
+                    "divergence_b_l2": 0.0,
+                }
+            ],
+            "run_horizon": {
+                "final_time": duration.target_time,
+                "final_step": duration.target_step,
+            },
+        }
+    )
+    metadata = _run_fake_quench(config_path, tmp_path / "success")
+    recorded = metadata["quench"]["duration"]
+    assert recorded["endpoint_validated"] is True
+    assert recorded["reported_endpoint"] == result["run_horizon"]
+    assert recorded["series_final_time"] == pytest.approx(duration.target_time)
+    assert recorded["attained"]["target_reached"] is True
+    assert "last_observed" not in recorded
+
+
+def test_quench_diagnostics_cadence_uses_additional_child_steps():
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    assert (
+        _effective_diagnostics_every(
+            spec,
+            diagnostics_every=None,
+            steps=None,
+            resolution_tier=None,
+            quench_steps=32,
+        )
+        == 2
+    )
+    scope = _validation_scope_metadata(
+        spec,
+        {"scalars": {"saturation_check_passed": False, "divergence_b_l2": 0.0}},
+        device_record={"mode": "cpu_smoke"},
+        compare_golden=False,
+        steps=None,
+        resolution_tier=None,
+        quench_steps=32,
+    )
+    assert scope["kind"] == "quench_continuation"
+    assert scope["quench_additional_steps"] == 32
+    assert (
+        _saturation_check_metadata(
+            {"scalars": {"saturation_check_passed": False}},
+            validation_scope=scope,
+        )["required"]
+        is False
+    )
+    assert (
+        _validation_floor_metadata(
+            {"scalars": {"divergence_b_l2": 0.0}},
+            validation_scope=scope,
+        )["required"]
+        is True
+    )
 
 
 def test_saturation_predicate_rejects_nonfinite_growth_and_energy():
@@ -45,6 +415,94 @@ def test_cpu_full_saturation_scope_uses_generated_gate():
 
     assert scope["kind"] == "generated_saturated_golden"
     assert scope["bounded_smoke"] is False
+    checks = _saturation_check_metadata(
+        {
+            "scalars": {
+                "saturation_check_passed": False,
+                "stationarity_check_passed": False,
+            }
+        },
+        validation_scope=scope,
+    )
+    assert checks["required"] is True
+
+
+def test_decaying_quench_is_an_outcome_but_health_floor_stays_strict(tmp_path):
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    diagnostics = {
+        "scalars": {
+            "growth_rate": -0.25,
+            "saturation_check_passed": False,
+            "stationarity_check_passed": False,
+            "divergence_b_l2": 1.0e-12,
+        },
+        "time_series": [
+            {"t": 1.0, "magnetic_energy": 1.0, "divergence_b_l2": 1.0e-12},
+            {"t": 2.0, "magnetic_energy": 0.5, "divergence_b_l2": 1.0e-12},
+        ],
+    }
+    scope = _validation_scope_metadata(
+        spec,
+        diagnostics,
+        device_record={"mode": "cpu_smoke"},
+        compare_golden=False,
+        steps=None,
+        resolution_tier=None,
+        quench_steps=32,
+    )
+    saturation = _saturation_check_metadata(diagnostics, validation_scope=scope)
+    floor = _validation_floor_metadata(diagnostics, validation_scope=scope)
+    assert scope["kind"] == "quench_continuation"
+    assert saturation["required"] is False
+    assert floor["required"] is True
+    assert floor["passed"] is True
+
+    metadata = {
+        "out_dir": str(tmp_path),
+        "execution": {"status": "completed"},
+        "saturation_checks": saturation,
+        "validation_floor": floor,
+    }
+    _assert_required_saturation_checks(metadata)
+    _assert_validation_floor_checks(metadata)
+
+    bad_floor = _validation_floor_metadata(
+        {
+            "scalars": {
+                "magnetic_energy": float("inf"),
+                "divergence_b_l2": 2.0e-2,
+            }
+        },
+        validation_scope=scope,
+    )
+    assert bad_floor["passed"] is False
+    assert bad_floor["nonfinite_diagnostics"] == ["scalars.magnetic_energy"]
+    assert bad_floor["max_divergence"] == pytest.approx(2.0e-2)
+
+
+def test_classification_noise_floor_and_fit_exclude_pre_burn_rows():
+    diagnostics = {
+        "scalars": {"analysis_t_start": 10.0},
+        "time_series": [
+            {"t": 0.0, "mag_energy_fluct": 1.0e20},
+            *[
+                {
+                    "t": float(t),
+                    "mag_energy_fluct": 2.0 ** (t - 10),
+                }
+                for t in range(10, 18)
+            ],
+        ],
+    }
+
+    classification = _classification_metadata(diagnostics)
+
+    assert classification["scientific_class"] == "growing"
+    assert classification["fit"]["samples"] == 4
+    assert classification["fit"]["window_start_t"] == pytest.approx(14.0)
+    assert classification["fit"]["noise_floor"] == pytest.approx(1.0e-10 * 2.0**7)
 
 
 def test_validation_floor_rejects_nonfinite_smoke_diagnostics(tmp_path):

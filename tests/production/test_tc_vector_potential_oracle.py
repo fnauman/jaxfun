@@ -269,18 +269,29 @@ def test_tc_vp_checkpoint_resume_matches_straight_run(tmp_path):
     # A hash-changing quench must accept the TC checkpoint and apply the same
     # burn-in analysis semantics as the PCF vector-potential workhorse.
     child = {**spec, "spec_hash": "tc-vp-quench-child-hash"}
+    streamed = []
     quenched = run_supported_spec(
         child,
-        steps=4,
+        additional_steps=2,
         resume_checkpoint=record,
         quench=True,
         diagnostics_every=1,
         burn_in_steps=1,
+        on_row=streamed.append,
     )
     assert quenched["scalars"]["analysis_burn_in_steps"] == 1
     assert quenched["scalars"]["analysis_t_start"] == pytest.approx(
         record.t + spec["time"]["dt"]
     )
+    assert quenched["time_series"][-1]["t"] == pytest.approx(
+        record.t + 2 * spec["time"]["dt"]
+    )
+    assert quenched["run_horizon"] == {
+        "final_time": pytest.approx(record.t + 2 * spec["time"]["dt"]),
+        "final_step": record.tstep + 2,
+    }
+    assert streamed
+    assert all(isinstance(row["tstep"], int) for row in streamed)
 
 
 def test_tc_vp_rejects_unsupported_magnetic_bc():

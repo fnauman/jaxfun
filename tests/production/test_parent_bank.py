@@ -134,7 +134,7 @@ def test_quench_from_banked_plateau_applies_burn_in_to_fits(tmp_path):
     child["spec_hash"] = "vp-bank-child-hash"
     out = run_supported_spec(
         child,
-        steps=8,
+        additional_steps=6,
         resume_checkpoint=record,
         quench=True,
         diagnostics_every=1,
@@ -225,6 +225,32 @@ def test_cli_parent_bank_quench_workflow(tmp_path, monkeypatch):
     child_path = tmp_path / "child_spec.json"
     child_path.write_text(json.dumps(child_spec), encoding="utf-8")
 
+    validate_dir = tmp_path / "child-validate"
+    rc = main(
+        [
+            "--config",
+            str(child_path),
+            "--out",
+            str(validate_dir),
+            "--additional-steps",
+            "6",
+            "--quench",
+            str(parent_dir),
+            "--quench-step",
+            "2",
+            "--validate-only",
+        ]
+    )
+    assert rc == 0
+    validated = json.loads((validate_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert validated["quench"]["duration"]["attained"] == {
+        "final_time": None,
+        "final_step": None,
+        "additional_time": None,
+        "additional_steps": None,
+        "target_reached": None,
+    }
+
     child_dir = tmp_path / "child"
     rc = main(
         [
@@ -232,8 +258,8 @@ def test_cli_parent_bank_quench_workflow(tmp_path, monkeypatch):
             str(child_path),
             "--out",
             str(child_dir),
-            "--steps",
-            "8",
+            "--additional-steps",
+            "6",
             "--diagnostics-every",
             "1",
             "--quench",
@@ -242,6 +268,7 @@ def test_cli_parent_bank_quench_workflow(tmp_path, monkeypatch):
             "2",
             "--burn-in-steps",
             "2",
+            "--allow-dirty",
         ]
     )
     assert rc == 0
@@ -253,3 +280,20 @@ def test_cli_parent_bank_quench_workflow(tmp_path, monkeypatch):
     assert metadata["quench"]["parent_plateau_window_stats"]["stationary"] is True
     assert metadata["quench"]["burn_in_steps"] == 2
     assert metadata["quench"]["classification_valid_after_tstep"] == 4
+    duration = metadata["quench"]["duration"]
+    assert duration["schema_version"] == 1
+    assert duration["stepping"] == "fixed"
+    assert duration["request_kind"] == "additional_steps"
+    assert duration["parent_checkpoint"] == {"time": 0.002, "step": 2}
+    assert duration["requested"] == {
+        "additional_time": None,
+        "additional_steps": 6,
+    }
+    assert duration["absolute_target"] == {"time": 0.008, "step": 8}
+    assert duration["attained"] == {
+        "final_time": 0.008,
+        "final_step": 8,
+        "additional_time": 0.006,
+        "additional_steps": 6,
+        "target_reached": True,
+    }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +13,14 @@ from production.quench import (
     QuenchError,
     burn_in_horizon,
     checkpoint_bank_entry,
+    finalize_fixed_quench_duration,
+    resolve_fixed_quench_duration,
+    validate_bank_checkpoint_record,
+    validate_burn_in_request,
     validate_quench,
+    validate_quench_duration_request,
+    validate_quench_output_options,
+    validate_quench_runner_preflight,
 )
 from production.sweep import apply_overrides
 
@@ -35,6 +43,218 @@ def _parent():
         "resolution": {"production": {"Nx": 32, "Ny": 32, "Nz": 32}},
         "boundary_conditions": {"magnetic": {"type": "conducting"}},
     }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"quench": True}, "requires exactly one"),
+        (
+            {"quench": True, "steps": 10, "additional_steps": 2},
+            "cannot be used for a quench",
+        ),
+        (
+            {"quench": True, "additional_time": 0.1, "additional_steps": 2},
+            "requires exactly one",
+        ),
+        (
+            {"quench": False, "additional_steps": 2},
+            "require an explicit quench",
+        ),
+    ],
+)
+def test_quench_duration_request_rejects_ambiguous_modes(kwargs, message):
+    options = {
+        "quench": False,
+        "steps": None,
+        "additional_time": None,
+        "additional_steps": None,
+        **kwargs,
+    }
+    with pytest.raises(QuenchError, match=message):
+        validate_quench_duration_request(**options)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])
+def test_quench_additional_time_must_be_finite_and_positive(value):
+    with pytest.raises(QuenchError, match="finite and strictly positive"):
+        validate_quench_duration_request(
+            quench=True,
+            steps=None,
+            additional_time=value,
+            additional_steps=None,
+        )
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True])
+def test_quench_additional_steps_must_be_a_positive_integer(value):
+    with pytest.raises(QuenchError, match="positive integer"):
+        validate_quench_duration_request(
+            quench=True,
+            steps=None,
+            additional_time=None,
+            additional_steps=value,
+        )
+
+
+def test_burn_in_contract_requires_integer_and_zero_outside_quench():
+    validate_burn_in_request(quench=False, burn_in_steps=0)
+    for invalid in (True, 1.5):
+        with pytest.raises(QuenchError, match="must be an integer"):
+            validate_burn_in_request(quench=True, burn_in_steps=invalid)
+    for nonzero in (-1, 1):
+        with pytest.raises(QuenchError, match="must be 0 outside"):
+            validate_burn_in_request(quench=False, burn_in_steps=nonzero)
+
+
+def test_burn_in_contract_is_strictly_inside_resolved_quench_horizon():
+    validate_burn_in_request(quench=True, burn_in_steps=0, resolved_additional_steps=4)
+    validate_burn_in_request(quench=True, burn_in_steps=3, resolved_additional_steps=4)
+    with pytest.raises(QuenchError, match="must be non-negative"):
+        validate_burn_in_request(
+            quench=True, burn_in_steps=-1, resolved_additional_steps=4
+        )
+    for invalid in (4, 5):
+        with pytest.raises(QuenchError, match="strictly less"):
+            validate_burn_in_request(
+                quench=True,
+                burn_in_steps=invalid,
+                resolved_additional_steps=4,
+            )
+
+
+def test_quench_golden_options_are_explicitly_unsupported():
+    validate_quench_output_options(quench=False, compare_golden=True, write_golden=True)
+    for option in ("compare_golden", "write_golden"):
+        values = {"compare_golden": False, "write_golden": False, option: True}
+        with pytest.raises(QuenchError, match=option):
+            validate_quench_output_options(quench=True, **values)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "production/runs/pcf_mhd_divfree.json",
+        "production/runs/exp_pcf_mri_pseudo_vacuum.json",
+        "production/runs/exp_pcf_mri_vector_potential.json",
+        "production/runs/exp_tc_mri_vector_potential.json",
+    ],
+)
+def test_quench_runner_preflight_accepts_only_wired_saturation_families(path):
+    spec = json.loads((Path(__file__).resolve().parents[2] / path).read_text())
+    validate_quench_runner_preflight(spec, quench=True)
+
+
+def test_quench_runner_preflight_rejects_unwired_saturation_runner():
+    spec = json.loads(
+        (
+            Path(__file__).resolve().parents[2] / "production/runs/pcf_fluct_re400.json"
+        ).read_text()
+    )
+    with pytest.raises(QuenchError, match="quench runner is not implemented"):
+        validate_quench_runner_preflight(spec, quench=True)
+
+
+def test_fixed_quench_duration_resolves_absolute_target_from_parent():
+    duration = resolve_fixed_quench_duration(
+        additional_time=0.3,
+        additional_steps=None,
+        child_dt=0.1,
+        parent_time=1.25,
+        parent_step=7,
+    )
+
+    assert duration.additional_steps == 3
+    assert duration.additional_time == pytest.approx(0.3)
+    assert duration.target_step == 10
+    assert duration.target_time == pytest.approx(1.55)
+    metadata = duration.to_metadata()
+    assert metadata["schema_version"] == 1
+    assert metadata["request_kind"] == "additional_time"
+    assert metadata["requested"] == {
+        "additional_time": 0.3,
+        "additional_steps": None,
+    }
+    assert metadata["attained"]["target_reached"] is None
+
+
+def test_fixed_quench_duration_rejects_nonintegral_or_substep_time():
+    for additional_time in (0.15, 1.0e-20):
+        with pytest.raises(QuenchError, match="integer multiple"):
+            resolve_fixed_quench_duration(
+                additional_time=additional_time,
+                additional_steps=None,
+                child_dt=0.1,
+                parent_time=0.0,
+                parent_step=0,
+            )
+
+
+def test_fixed_quench_duration_rejects_nonintegral_parent_step():
+    with pytest.raises(QuenchError, match="parent checkpoint step must be an integer"):
+        resolve_fixed_quench_duration(
+            additional_time=None,
+            additional_steps=2,
+            child_dt=0.1,
+            parent_time=0.0,
+            parent_step=3.5,
+        )
+
+
+def _bank_record(*, t=1.25, tstep=7, spec_hash="parent", version=2):
+    return SimpleNamespace(
+        t=t,
+        tstep=tstep,
+        attrs={
+            "spec_hash": spec_hash,
+            "numerics_contract_version": version,
+        },
+    )
+
+
+def _bank_entry(*, state_time=1.25, tstep=7, spec_hash="parent", version=2):
+    return {
+        "state_time": state_time,
+        "tstep": tstep,
+        "spec_hash": spec_hash,
+        "numerics_contract_version": version,
+    }
+
+
+def test_bank_entry_must_match_loaded_checkpoint_contract():
+    validate_bank_checkpoint_record(
+        _bank_entry(), _bank_record(), parent_spec_hash="parent"
+    )
+    with pytest.raises(QuenchError, match="tstep 8 != 7"):
+        validate_bank_checkpoint_record(_bank_entry(tstep=8), _bank_record())
+    with pytest.raises(QuenchError, match="time"):
+        validate_bank_checkpoint_record(_bank_entry(state_time=1.5), _bank_record())
+    with pytest.raises(QuenchError, match="spec_hash"):
+        validate_bank_checkpoint_record(_bank_entry(spec_hash="other"), _bank_record())
+    with pytest.raises(QuenchError, match="must be integers"):
+        validate_bank_checkpoint_record(_bank_entry(tstep=7.5), _bank_record())
+
+
+def test_attained_duration_uses_actual_solver_time_and_step():
+    duration = resolve_fixed_quench_duration(
+        additional_time=None,
+        additional_steps=3,
+        child_dt=0.1,
+        parent_time=1.25,
+        parent_step=7,
+    ).to_metadata()
+    attained = finalize_fixed_quench_duration(duration, final_time=1.55, final_step=10)
+    assert attained["attained"] == {
+        "final_time": 1.55,
+        "final_step": 10,
+        "additional_time": pytest.approx(0.3),
+        "additional_steps": 3,
+        "target_reached": True,
+    }
+
+    wrong_step = finalize_fixed_quench_duration(duration, final_time=1.55, final_step=9)
+    assert wrong_step["attained"]["final_step"] == 9
+    assert wrong_step["attained"]["target_reached"] is False
 
 
 def test_quench_allows_lowering_Rm_and_eta():
