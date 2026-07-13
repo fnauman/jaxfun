@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from production.adapters import config_from_spec
 from production.oracles import _tc_vp_solver_from_spec
 from production.problem_spec import ProblemSpecError
 from production.run_problem import _resolved_physics_metadata
@@ -90,7 +91,7 @@ def test_B0_override_syncs_Bz_for_specs_that_use_it():
     )
     assert "Bz" in shearbox["nondimensional_groups"]
     out = apply_overrides(shearbox, {"B0": 0.05})
-    assert out["nondimensional_groups"]["Bz"] == 0.05
+    assert out["nondimensional_groups"]["Bz"] == pytest.approx(0.05)
     assert out["nondimensional_groups"]["B0"] == 0.05
 
 
@@ -224,6 +225,22 @@ def test_tiered_resolution_override_deep_merges_consumed_keys():
         assert changed["resolution"]["smoke"][key] == smoke_before[key]
 
 
+def test_tiered_resolution_override_accepts_inherited_consumed_controls():
+    base = _base()
+    changed = apply_overrides(
+        base,
+        {"resolution": {"start": {"family": "C", "dealias": 1.0}}},
+    )
+
+    assert changed["resolution"]["start"]["family"] == "C"
+    assert changed["resolution"]["start"]["dealias"] == pytest.approx(1.0)
+    # Exercise the real adapter path: it validates the base, selects the tier,
+    # and materializes inherited defaults plus tier-local shadows.
+    effective = config_from_spec(changed, resolution_tier="start").spec["resolution"]
+    assert effective["family"] == "C"
+    assert effective["dealias"] == pytest.approx(1.0)
+
+
 def test_bc_override_requires_separate_oracle_and_golden_identity():
     pcf = json.loads(PCF_LINEAR.read_text())
     with pytest.raises(SweepOverrideError, match="not a sweepable control.*golden"):
@@ -262,6 +279,42 @@ def test_scalar_b0_override_must_be_nonnegative_and_finite():
 
 def test_positive_b0_override_rescales_explicit_component_direction():
     pcf = json.loads(PCF_LINEAR.read_text())
+    assert "Bx" not in pcf["nondimensional_groups"]
     out = apply_overrides(pcf, {"B0": 0.05})
     assert out["forcing"]["B0"] == pytest.approx([0.0, 0.0, 0.05])
     assert out["nondimensional_groups"]["Bz"] == pytest.approx(0.05)
+
+
+def test_b0_override_rejects_nonzero_component_omitted_by_selected_solver():
+    pcf = json.loads(PCF_LINEAR.read_text())
+    pcf["forcing"]["B0"] = [0.1, 0.0, 0.1]
+
+    with pytest.raises(SweepOverrideError, match="Bx.*not consumed"):
+        apply_overrides(pcf, {"B0": 0.05})
+
+
+def test_oblique_b0_override_syncs_archived_and_solver_consumed_components():
+    pcf = json.loads(PCF_LINEAR.read_text())
+    pcf["forcing"]["B0"] = [0.0, 3.0, 4.0]
+    pcf["nondimensional_groups"]["By"] = 3.0
+    pcf["nondimensional_groups"]["Bz"] = 4.0
+
+    out = apply_overrides(pcf, {"B0": 10.0})
+    groups = out["nondimensional_groups"]
+    archived = out["forcing"]["B0"]
+
+    assert archived == pytest.approx([0.0, 6.0, 8.0])
+    assert groups["By"] == pytest.approx(6.0)
+    assert groups["Bz"] == pytest.approx(8.0)
+    assert groups["B0"] == pytest.approx(10.0)
+    assert (groups["By"] ** 2 + groups["Bz"] ** 2) ** 0.5 == pytest.approx(10.0)
+
+
+def test_component_only_b0_override_preserves_solver_direction():
+    shearbox = json.loads(PCF_IDEAL_LINEAR.read_text())
+    shearbox["nondimensional_groups"]["By"] = 3.0
+    shearbox["nondimensional_groups"]["Bz"] = 4.0
+
+    out = apply_overrides(shearbox, {"B0": 2.5})
+    assert out["nondimensional_groups"]["By"] == pytest.approx(1.5)
+    assert out["nondimensional_groups"]["Bz"] == pytest.approx(2.0)

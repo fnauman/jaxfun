@@ -182,14 +182,19 @@ def _validate_resolution_override(spec: dict[str, Any], value: Any) -> None:
         )
 
     def validate_block(
-        override: dict[str, Any], base: dict[str, Any], context: str
+        override: dict[str, Any],
+        base: dict[str, Any],
+        context: str,
+        *,
+        inherited: dict[str, Any] | None = None,
     ) -> None:
+        available = base.keys() | (inherited.keys() if inherited is not None else set())
         for key in override:
-            if key not in allowed or key not in base:
+            if key not in allowed or key not in available:
                 raise SweepOverrideError(
                     f"resolution key {context}.{key} is ignored by selected oracle "
                     f"{_oracle_type(spec)!r}; consumed keys present in this block: "
-                    f"{sorted(allowed & base.keys())}"
+                    f"{sorted(allowed & available)}"
                 )
 
     tiers = {key for key in ("smoke", "start", "production") if key in resolution}
@@ -197,7 +202,12 @@ def _validate_resolution_override(spec: dict[str, Any], value: Any) -> None:
         if key in tiers:
             if not isinstance(item, dict) or not isinstance(resolution[key], dict):
                 raise SweepOverrideError(f"resolution.{key} override must be an object")
-            validate_block(item, resolution[key], f"resolution.{key}")
+            validate_block(
+                item,
+                resolution[key],
+                f"resolution.{key}",
+                inherited=resolution,
+            )
         else:
             if key in {"smoke", "start", "production"}:
                 raise SweepOverrideError(
@@ -233,6 +243,42 @@ def _rescale_component_vector(value: Any, amplitude: float) -> list[float]:
             "state the intended direction in the base spec"
         )
     return [amplitude * component / norm for component in components]
+
+
+def _rescaled_solver_components(
+    groups: dict[str, Any], forcing_vector: Any | None, amplitude: float
+) -> list[float] | None:
+    """Rescale the imposed-field direction consumed by component-based solvers.
+
+    The PCF linear families read ``By``/``Bz`` from nondimensional groups while
+    the archived forcing records ``[Bx, By, Bz]``. When either representation is
+    component-based, update both from one direction vector so metadata and the
+    assembled operator cannot diverge.
+    """
+
+    component_keys = ("Bx", "By", "Bz")
+    present = {key for key in component_keys if key in groups}
+    if forcing_vector is not None:
+        components = [float(component) for component in forcing_vector]
+        if present and len(components) != len(component_keys):
+            raise SweepOverrideError(
+                "forcing.B0 must have three [Bx, By, Bz] components when the "
+                "selected solver consumes component groups"
+            )
+        if present:
+            for index, key in enumerate(component_keys):
+                if key not in present and not math.isclose(
+                    components[index], 0.0, rel_tol=0.0, abs_tol=1.0e-15
+                ):
+                    raise SweepOverrideError(
+                        f"forcing.B0 component {key} is nonzero but is not consumed "
+                        "by the selected solver"
+                    )
+        return _rescale_component_vector(components, amplitude)
+    if present:
+        components = [float(groups.get(key, 0.0)) for key in component_keys]
+        return _rescale_component_vector(components, amplitude)
+    return None
 
 
 def supported_overrides_for_spec(base_spec: dict[str, Any]) -> frozenset[str]:
@@ -341,17 +387,20 @@ def apply_overrides(
         groups.pop("Pm", None)
     if "B0" in overrides:
         b0 = float(overrides["B0"])
-        groups["B0"] = b0
-        # Some specs (e.g. the ideal-MRI shearbox) express the imposed field via the
-        # vertical component Bz that the linear oracle reads directly; keep it in sync
-        # so a B0 sweep cannot silently run the unchanged field.
-        if "Bz" in groups:
-            groups["Bz"] = b0
         forcing = spec.get("forcing")
+        forcing_vector = None
+        if isinstance(forcing, dict) and isinstance(forcing.get("B0"), (list, tuple)):
+            forcing_vector = forcing["B0"]
+        components = _rescaled_solver_components(groups, forcing_vector, b0)
+        groups["B0"] = b0
+        if components is not None:
+            for index, key in enumerate(("Bx", "By", "Bz")):
+                if key in groups:
+                    groups[key] = components[index]
         if isinstance(forcing, dict):
             if "B0" in forcing:
-                if isinstance(forcing["B0"], (list, tuple)):
-                    forcing["B0"] = _rescale_component_vector(forcing["B0"], b0)
+                if forcing_vector is not None:
+                    forcing["B0"] = components
                 else:
                     forcing["B0"] = b0
             if "bz" in forcing and not isinstance(forcing["bz"], (list, tuple)):
