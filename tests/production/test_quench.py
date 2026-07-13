@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -255,6 +256,46 @@ def test_attained_duration_uses_actual_solver_time_and_step():
     wrong_step = finalize_fixed_quench_duration(duration, final_time=1.55, final_step=9)
     assert wrong_step["attained"]["final_step"] == 9
     assert wrong_step["attained"]["target_reached"] is False
+
+
+def test_attained_duration_allows_step_scaled_long_run_time_drift():
+    additional_steps = 2_000_000
+    duration = resolve_fixed_quench_duration(
+        additional_time=None,
+        additional_steps=additional_steps,
+        child_dt=1.0e-6,
+        parent_time=1.25,
+        parent_step=7,
+    ).to_metadata()
+    target_time = duration["absolute_target"]["time"]
+    scale = max(1.0, abs(target_time))
+    accumulated_drift = 4.0 * additional_steps * math.ulp(scale)
+
+    attained = finalize_fixed_quench_duration(
+        duration,
+        final_time=target_time + accumulated_drift,
+        final_step=duration["absolute_target"]["step"],
+    )
+
+    assert attained["attained"]["target_reached"] is True
+
+
+def test_attained_duration_rejects_time_error_beyond_roundoff_envelope():
+    duration = resolve_fixed_quench_duration(
+        additional_time=None,
+        additional_steps=2_000_000,
+        child_dt=1.0e-6,
+        parent_time=1.25,
+        parent_step=7,
+    ).to_metadata()
+
+    attained = finalize_fixed_quench_duration(
+        duration,
+        final_time=duration["absolute_target"]["time"] + 1.0e-3,
+        final_step=duration["absolute_target"]["step"],
+    )
+
+    assert attained["attained"]["target_reached"] is False
 
 
 def test_quench_allows_lowering_Rm_and_eta():

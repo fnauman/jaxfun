@@ -406,19 +406,31 @@ def finalize_fixed_quench_duration(
         raise QuenchError("quench solver endpoint step must be an integer")
     stepf = int(final_step)
     elapsed = tf - t0
-    step_ratio = elapsed / dt
     taken = stepf - step0
-    tolerance = 1.0e-10 * max(1.0, abs(tf), abs(float(target["time"])))
-    integral = math.isclose(
-        step_ratio,
-        float(taken),
-        rel_tol=1.0e-10,
-        abs_tol=1.0e-10,
+    target_time = float(target["time"])
+    step_consistent_time = t0 + float(taken) * dt
+    time_scale = max(1.0, abs(tf), abs(target_time), abs(step_consistent_time))
+    # The integer endpoint is authoritative for fixed stepping. Repeated time
+    # additions can accumulate O(n * ulp) drift on a long run, so retain a
+    # fail-closed time guard without rejecting an exact requested step count.
+    time_tolerance = max(
+        1.0e-10 * time_scale,
+        8.0 * max(1, abs(taken)) * math.ulp(time_scale),
     )
     reached = (
-        integral
-        and stepf == int(target["step"])
-        and math.isclose(tf, float(target["time"]), rel_tol=0.0, abs_tol=tolerance)
+        stepf == int(target["step"])
+        and math.isclose(
+            tf,
+            step_consistent_time,
+            rel_tol=0.0,
+            abs_tol=time_tolerance,
+        )
+        and math.isclose(
+            step_consistent_time,
+            target_time,
+            rel_tol=0.0,
+            abs_tol=8.0 * math.ulp(time_scale),
+        )
     )
     data["attained"] = {
         "final_time": tf,
