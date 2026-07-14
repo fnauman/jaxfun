@@ -161,6 +161,51 @@ def test_tc_materialized_coefficients_are_the_solver_coefficients():
     assert solver.Rm == pytest.approx(meta["Rm_TC"])
 
 
+def test_tc_cylinder_radius_and_modal_overrides_reach_solver_constructor():
+    base = _tc_base()
+    controls = {"R1", "R2", "Omega1", "Omega2"}
+    assert controls <= supported_overrides_for_spec(base)
+
+    out = apply_overrides(
+        base,
+        {
+            "R1": 1.25,
+            "R2": 2.25,
+            "Omega1": 0.8,
+            "Omega2": 0.2,
+            "resolution": {"smoke": {"Nr": 8, "Ntheta": 4, "Nz": 6, "dealias": 1.0}},
+        },
+    )
+    effective = config_from_spec(out, resolution_tier="smoke").spec
+    solver = _tc_vp_solver_from_spec(effective)
+    groups = effective["nondimensional_groups"]
+    meta = _resolved_physics_metadata(effective, precision="float64")
+
+    assert effective["domain"]["r"] == pytest.approx([1.25, 2.25])
+    assert groups["radius_ratio"] == pytest.approx(1.25 / 2.25)
+    assert meta["curvature"] == pytest.approx(0.5 / 1.75)
+    assert pytest.approx((1.25, 2.25)) == (solver.base.R1, solver.base.R2)
+    assert (solver.base.Omega1, solver.base.Omega2) == pytest.approx((0.8, 0.2))
+    assert (solver.Nr, solver.Ntheta, solver.Nz) == (8, 4, 6)
+    assert solver.nu == pytest.approx(groups["nu"])
+    assert solver.eta_mag == pytest.approx(groups["eta_mag"])
+    assert groups["Re"] == pytest.approx(groups["Re_TC"])
+    assert groups["Rm"] == pytest.approx(groups["Rm_TC"])
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("R1", 0.0, "R1 must be positive"),
+        ("R2", float("nan"), "R2 must be finite"),
+        ("Omega1", float("inf"), "Omega1 must be finite"),
+    ],
+)
+def test_tc_cylinder_overrides_reject_invalid_values(key, value, message):
+    with pytest.raises(SweepOverrideError, match=message):
+        apply_overrides(_tc_base(), {key: value})
+
+
 def test_tc_rejects_inert_cartesian_ly_and_non_full_annulus():
     tc = _tc_base()
     assert "Ly" not in supported_overrides_for_spec(tc)

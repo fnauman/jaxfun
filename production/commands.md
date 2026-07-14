@@ -512,9 +512,14 @@ points. Adaptive refinement is tracked in `production/KNOWN_ISSUES.md` (KI-6).
 For Taylor-Couette, `Re_h` and `Rm_h` are midpoint-local controls,
 `|S_mid| h^2/nu` and `|S_mid| h^2/eta`. Materialized specs and run metadata
 also record the native inner-cylinder values `Re_TC` and `Rm_TC`; legacy `Re`
-and `Rm` remain aliases for those native values. TC production solvers use the
-full `2*pi` annulus, so Cartesian `Ly`/azimuthal-wedge overrides are rejected;
-`Lz` remains available for nonlinear TC runs.
+and `Rm` remain aliases for those native values. `R1`, `R2`, `Omega1`, and
+`Omega2` are sweep controls; radius changes update the radial domain and radius
+ratio, while curvature and both Reynolds-number conventions are re-derived.
+The tiered `resolution` control exposes the modal axes consumed by each solver,
+including `Nr`, `Ntheta`, and `Nz` for the 3D vector-potential family. TC
+production solvers use the full `2*pi` annulus, so Cartesian `Ly` and
+azimuthal-wedge overrides are rejected; `Lz` remains available for nonlinear TC
+runs.
 
 Override availability follows the selected oracle. Static validation oracles
 reject inert box, time, coefficient, and resolution axes. Magnetic wall-family
