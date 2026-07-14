@@ -224,6 +224,11 @@ path. `--resume` defaults `--config` and `--out` to the resumed run directory wh
 omitted, validates the checkpoint spec hash/dtype metadata, continues `tstep`,
 and appends diagnostics without duplicating the first resumed row.
 
+Before each fixed-step snapshot is persisted, the runner applies the divergence
+guard to the candidate state. The configured limit is an inclusive ceiling:
+equality is accepted, while a value above the limit aborts without creating the
+rejected step's shard or adding it to the snapshot index.
+
 ## PCF fluctuation smoke
 
 ```bash
