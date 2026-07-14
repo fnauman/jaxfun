@@ -16,6 +16,37 @@ Taylor-Couette runners here with the shearing box in
 scopes are documented below; open implementation and measurement gates remain
 authoritative in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
 
+## Cross-repository comparison manifests
+
+`python -m production.comparison_manifest` builds the portable
+`spectraldns.cross_repository_comparison.v1` contract used to pair shearpy,
+plane-Couette (PCF), and midpoint-local Taylor-Couette runs. It accepts either a
+`shearpy.run_manifest.v2` plus a JAXfun PCF spec (`shearbox_to_pcf`) or JAXfun
+PCF and Taylor-Couette specs (`local_pcf_to_taylor_couette`). JAXfun controls
+come from `resolve_physics`; the builder does not reimplement them.
+
+Every output contains two content identifiers. `comparison_id` hashes the
+versioned coordinate/control/observable contract and is shared by every pair
+using that contract. `pair_id` additionally hashes the ordered endpoints,
+including each canonical input hash, repository URL, and full commit object ID.
+Canonical JSON has sorted keys, finite numbers, no timestamps, and no local
+paths, so identical inputs produce byte-identical output in either repository.
+
+The shearing-box/PCF mapping fixes `x,y,z` component identity,
+`U_y(x)=-S*x`, `S=-d(U_y)/dx`, and anchors the periodic box's reference `h` to
+the paired PCF half-gap. It is explicitly a local rotating-shear bulk mapping;
+it does not equate periodic and wall boundary conditions. The PCF/TC mapping
+uses `h=(R2-R1)/2`, `r_mid=(R1+R2)/2`, `y=r_mid*theta`, midpoint `Omega`,
+`S=-r*d(Omega)/dr`, `q=S/Omega`, and curvature `h/r_mid`.
+
+Canonical observables use `h`, `1/abs(S)`, and `U0=abs(S)*h`: time is
+`abs(S)*t`, growth is `gamma/abs(S)`, energies are physical half-energy volume
+means divided by `U0^2`, stresses are volume means divided by `U0^2`, and mean
+magnetic fields are divided by `U0`. Endpoint adapters record exact raw keys and
+conversion multipliers, including the factor-of-two PCF vector-potential energy
+convention and the annular Taylor-Couette volume. See
+[`commands.md`](commands.md) for invocation examples.
+
 ## Production-run inventory
 
 | problem_id | geometry | physics | solver file | status | fallback rung |

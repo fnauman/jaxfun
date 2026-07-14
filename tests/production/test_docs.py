@@ -65,6 +65,12 @@ def test_validation_scope_docs_cover_bounded_smoke_outputs():
     assert "25 MB HDF5 checkpoint is intentionally not" in commands
     assert "52 MB HDF5 checkpoint is intentionally not" in commands
     assert "807 MB HDF5 payload" in commands
+    assert "spectraldns.cross_repository_comparison.v1" in readme
+    assert "shearbox_to_pcf" in readme
+    assert "local_pcf_to_taylor_couette" in readme
+    assert "comparison_id" in commands
+    assert "pair_id" in commands
+    assert "byte-for-byte deterministic" in commands
 
 
 def test_vector_potential_bc_menu_docs_are_current():
