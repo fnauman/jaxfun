@@ -142,6 +142,21 @@ def _observable_adapter(
     }
 
 
+def _comparison_b0(spec: Mapping[str, Any], resolved_b0: float) -> tuple[float, str]:
+    """Return the imposed-field magnitude, including legacy PCF components."""
+
+    groups = spec.get("nondimensional_groups", {})
+    legacy_keys = ("Bx", "By", "Bz")
+    if not any(key in groups for key in legacy_keys):
+        return resolved_b0, "resolved_physics"
+    components = tuple(_finite(groups.get(key, 0.0), key) for key in legacy_keys)
+    legacy_b0 = math.sqrt(sum(component**2 for component in components))
+    if resolved_b0 != 0.0:
+        _close(resolved_b0, legacy_b0, "legacy Bx/By/Bz magnitude vs B0")
+        return resolved_b0, "resolved_physics+legacy_components"
+    return legacy_b0, "legacy_components"
+
+
 def _jaxfun_endpoint(
     spec: Mapping[str, Any], *, expected_geometry: str, provenance: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -169,6 +184,7 @@ def _jaxfun_endpoint(
             raise ValueError("jaxfun q is declared while Omega is zero")
         _close(_finite(declared_q, "jaxfun q"), q, "jaxfun q=S/Omega")
     volume = _volume(physics)
+    b0, b0_source = _comparison_b0(spec_dict, physics.B0)
     controls = {
         "h": physics.h,
         "S": physics.S,
@@ -180,8 +196,9 @@ def _jaxfun_endpoint(
         "Re_h": physics.Re_h,
         "Rm_h": physics.Rm_h,
         "Pm": physics.Pm,
-        "B0": physics.B0,
-        "B0_over_U0": physics.B0 / physics.U0,
+        "B0": b0,
+        "B0_over_U0": b0 / physics.U0,
+        "B0_source": b0_source,
         "Ly_over_h": physics.Ly / physics.h,
         "Lz_over_h": physics.Lz / physics.h,
         "curvature": physics.curvature or 0.0,
@@ -295,6 +312,8 @@ def _shearpy_endpoint(
             "U0": velocity_scale,
             "nu": nu,
             "eta": eta,
+            "Re_shearpy": re_value,
+            "Rm_shearpy": rm_value,
             "Re_h": scale / nu,
             "Rm_h": scale / eta,
             "Pm": nu / eta,
@@ -396,6 +415,12 @@ def _mapping_contract(relation: str) -> dict[str, Any]:
             "background_flow": "U_y(x)=-S*x",
             "signed_shear": "S=-d(U_y)/dx",
             "length_anchor": "shearbox reference h equals the paired PCF half-gap",
+            "shearpy_native_controls": {
+                "Re_shearpy": "1/nu",
+                "Rm_shearpy": "1/eta",
+                "Re_h": "abs(S)*h^2/nu",
+                "Rm_h": "abs(S)*h^2/eta",
+            },
         }
     if relation == RELATION_PCF_TC:
         return {

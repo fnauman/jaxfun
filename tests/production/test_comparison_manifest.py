@@ -110,6 +110,42 @@ def test_manifest_is_invariant_to_json_object_key_order():
     assert first == second
 
 
+def test_nonunit_shear_and_half_gap_keep_native_and_local_reynolds_distinct():
+    left = _shearpy_manifest()
+    left.update(shear=3.0, omega=2.0, q=1.5)
+    right = _spec("exp_pcf_mri_vector_potential.json")
+    right["domain"]["x"] = [-2.0, 2.0]
+    groups = right["nondimensional_groups"]
+    groups.update(S=3.0, Omega=2.0, q_shear=1.5, Re=12000.0, Rm=12000.0)
+
+    manifest = _shearbox_pcf(left=left, right=right)
+    shearbox = manifest["endpoints"][0]
+
+    assert shearbox["controls"]["Re_shearpy"] == pytest.approx(1000.0)
+    assert shearbox["controls"]["Rm_shearpy"] == pytest.approx(1000.0)
+    assert shearbox["controls"]["Re_h"] == pytest.approx(12000.0)
+    assert shearbox["controls"]["Rm_h"] == pytest.approx(12000.0)
+
+
+def test_legacy_pcf_field_components_are_not_serialized_as_zero():
+    legacy = _spec("../examples/pcf_mri_shearbox_v1.json")
+    tc_spec = _spec("exp_tc_mri_vector_potential.json")
+    manifest = build_comparison_manifest(
+        relation=RELATION_PCF_TC,
+        left=legacy,
+        right=tc_spec,
+        left_repository=JAXFUN_REPOSITORY,
+        left_commit=JAXFUN_COMMIT,
+        right_repository=JAXFUN_REPOSITORY,
+        right_commit=JAXFUN_COMMIT,
+    )
+
+    pcf = manifest["endpoints"][0]
+    assert pcf["controls"]["B0"] == pytest.approx(0.025)
+    assert pcf["controls"]["B0_over_U0"] == pytest.approx(0.0125)
+    assert pcf["controls"]["B0_source"] == "legacy_components"
+
+
 def test_pair_id_changes_with_inputs_but_comparison_id_is_contract_stable():
     first = _shearbox_pcf()
     changed = _shearpy_manifest()
