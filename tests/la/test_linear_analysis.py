@@ -4,6 +4,7 @@ import pytest
 from jaxfun.la import (
     finite_eigensystem,
     parse_times,
+    physical_eigensystem,
     transient_growth_from_eigs,
 )
 
@@ -42,3 +43,18 @@ def test_finite_eigensystem_and_transient_growth_match_reference_helper():
     rows = transient_growth_from_eigs(w, V, Q, times)
     ref_rows = reference_transient_growth_from_eigs(rw, rV, Q, times)
     assert rows == pytest.approx(ref_rows, rel=1.0e-12, abs=1.0e-12)
+
+
+def test_physical_eigensystem_filters_metric_null_modes_in_both_twins():
+    from couette._linear_analysis import (
+        physical_eigensystem as reference_physical_eigensystem,
+    )
+
+    L = np.diag([1.0e5, 0.5, -0.25]).astype(complex)
+    M = np.eye(3, dtype=complex)
+    Q = np.diag([0.0, 2.0, 1.0]).astype(complex)
+
+    for solve in (physical_eigensystem, reference_physical_eigensystem):
+        values, vectors = solve(L, M, Q, n_return=2)
+        assert values == pytest.approx([0.5, -0.25])
+        assert vectors.shape == (3, 2)

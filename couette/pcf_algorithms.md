@@ -466,8 +466,10 @@ flag wraps.
 ### 13.2 Shared backend (`_linear_analysis.py`)
 
 `FINITE_CAP = 1e8` (drops the spurious infinite eigenvalues from the singular-`M`
-constraint rows; insensitive 1e6-1e12); `finite_eigensystem` (filter + sort by
-`Re(s)`); `transient_growth_from_eigs` (finite modal expansion → energy-norm
+constraint rows; insensitive 1e6-1e12); `finite_eigensystem` (finite filter +
+sort by `Re(s)`); `physical_eigensystem` (also rejects multiplier/gauge vectors
+below the `sqrt(machine epsilon)` physical-energy fraction before modal seeding);
+`transient_growth_from_eigs` (finite modal expansion → energy-norm
 propagator SVD); `parse_times`; `match_eigenvalues` (one-to-one Hungarian
 set-match of two spectra — orientation/tie-break robust); and the IMEXRK
 `imex_tableau` / `imexrk_step` shared with §13.3. Pure NumPy/SciPy.
