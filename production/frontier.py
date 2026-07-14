@@ -364,10 +364,7 @@ def execute_frontier_sweep(
             value = _finite_or_none(overrides.get(axis))
             if value is None or not low <= value <= high:
                 continue
-            if any(
-                overrides.get(key) != expected
-                for key, expected in fixed.items()
-            ):
+            if any(overrides.get(key) != expected for key, expected in fixed.items()):
                 continue
             resolved = apply_overrides(base_spec, {**fixed, axis: value})
             if (

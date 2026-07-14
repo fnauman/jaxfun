@@ -105,9 +105,7 @@ def test_frontier_rejects_reversed_transition_direction():
         _entry(400.0, "growing", 0.2, 0.01),
         _entry(800.0, "decayed", -0.2, 0.01),
     ]
-    decision = frontier_decision(
-        reversed_transition, axis="Rm_h", abs_tolerance=25.0
-    )
+    decision = frontier_decision(reversed_transition, axis="Rm_h", abs_tolerance=25.0)
     assert decision["status"] == "nonmonotonic"
     assert decision["bracket"] is None
 
@@ -181,9 +179,7 @@ def test_frontier_ignores_stale_sweep_rows_from_other_requests(tmp_path):
             "overrides": {"Rm_h": 900.0, "B0": 0.025},
         },
     ]
-    (tmp_path / "sweep_index.json").write_text(
-        json.dumps(stale), encoding="utf-8"
-    )
+    (tmp_path / "sweep_index.json").write_text(json.dumps(stale), encoding="utf-8")
 
     def classified_runner(*, config_path, **kwargs):
         spec = json.loads(Path(config_path).read_text(encoding="utf-8"))
