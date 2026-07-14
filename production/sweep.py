@@ -34,6 +34,10 @@ _KNOWN_OVERRIDES = {
     "Re_h",
     "Rm_h",
     "B0",
+    "R1",
+    "R2",
+    "Omega1",
+    "Omega2",
     "Ly",
     "Lz",
     "horizon",
@@ -80,6 +84,15 @@ _TC_NONLINEAR_ORACLES = frozenset(
         "tc_mri_saturation_ladder",
     }
 )
+_TC_CYLINDER_ORACLES = frozenset(
+    {
+        "circular_couette_base_flow",
+        "tc_mhd_linear_conducting",
+        "tc_mhd_linear_insulating",
+        *_TC_NONLINEAR_ORACLES,
+    }
+)
+_TC_CYLINDER_OVERRIDES = frozenset({"R1", "R2", "Omega1", "Omega2"})
 _RE_H_ORACLES = frozenset(
     {
         "plane_poiseuille_laminar",
@@ -228,6 +241,15 @@ def _validate_override_values(
             raise SweepOverrideError("B0 amplitude must be numeric") from exc
         if not math.isfinite(b0) or b0 < 0.0:
             raise SweepOverrideError("B0 amplitude must be finite and nonnegative")
+    for key in _TC_CYLINDER_OVERRIDES & overrides.keys():
+        try:
+            value = float(overrides[key])
+        except (TypeError, ValueError) as exc:
+            raise SweepOverrideError(f"{key} must be numeric") from exc
+        if not math.isfinite(value):
+            raise SweepOverrideError(f"{key} must be finite")
+        if key in {"R1", "R2"} and value <= 0.0:
+            raise SweepOverrideError(f"{key} must be positive")
 
 
 def _rescale_component_vector(value: Any, amplitude: float) -> list[float]:
@@ -298,6 +320,8 @@ def supported_overrides_for_spec(base_spec: dict[str, Any]) -> frozenset[str]:
 
     if oracle in _RE_H_ORACLES:
         allowed.add("Re_h")
+    if base_spec.get("geometry") == "taylor_couette" and oracle in _TC_CYLINDER_ORACLES:
+        allowed.update(_TC_CYLINDER_OVERRIDES)
     if _consumes_ly(base_spec):
         allowed.add("Ly")
 
@@ -363,6 +387,39 @@ def apply_overrides(
     spec = copy.deepcopy(base_spec)
     groups = spec.setdefault("nondimensional_groups", {})
     is_tc = spec.get("geometry") == "taylor_couette"
+    tc_controls = _TC_CYLINDER_OVERRIDES & overrides.keys()
+    if tc_controls:
+        for key in tc_controls:
+            groups[key] = float(overrides[key])
+        if {"R1", "R2"} & tc_controls:
+            r1 = float(groups["R1"])
+            r2 = float(groups["R2"])
+            spec["domain"]["r"] = [r1, r2]
+            groups["radius_ratio"] = r1 / r2
+
+        # Keep the representation that actually supplies each coefficient.
+        # Resolved specs carry a material coefficient, so it remains authoritative.
+        # Reynolds-only specs retain the resolver precedence: local, then native,
+        # then the legacy native alias.
+        if groups.get("nu") is not None:
+            for key in ("Re", "Re_h", "Re_TC"):
+                groups.pop(key, None)
+        elif groups.get("Re_h") is not None:
+            groups.pop("Re", None)
+            groups.pop("Re_TC", None)
+        elif groups.get("Re_TC") is not None:
+            groups.pop("Re", None)
+
+        if spec.get("physics") in {"mhd", "mri"}:
+            if groups.get("eta_mag") is not None or groups.get("eta") is not None:
+                for key in ("Rm", "Rm_h", "Rm_TC"):
+                    groups.pop(key, None)
+            elif groups.get("Rm_h") is not None:
+                groups.pop("Rm", None)
+                groups.pop("Rm_TC", None)
+            elif groups.get("Rm_TC") is not None:
+                groups.pop("Rm", None)
+            groups.pop("Pm", None)
 
     if "Re_h" in overrides:
         if is_tc:
