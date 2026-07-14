@@ -266,7 +266,7 @@ def _write_quench_run(
         {
             "t": 10.0 + 0.5 * index,
             "mag_energy_fluct": value,
-            "energy_convention": "integral_abs2",
+            **({"energy_convention": "integral_abs2"} if status == "completed" else {}),
         }
         for index, value in enumerate(values)
     ]
@@ -316,6 +316,17 @@ def test_run_loader_groups_parent_clusters_and_censors_partial_runs(tmp_path):
     assert censored["operational_status"] == "walltime"
     assert event["parent_cluster_id"] == censored["parent_cluster_id"]
     assert tuple(event["group"]) == SURVIVAL_GROUPING_KEYS
+    assert event["group_hash"] == censored["group_hash"]
+    assert censored["group"]["energy_convention"] == "integral_abs2"
+
+    metadata_path = censored_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    del metadata["quench"]["classification_valid_after_tstep"]
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(SurvivalAnalysisError, match="declare classification"):
+        load_quench_observation(
+            censored_dir, energy_key="mag_energy_fluct", threshold=1.0, dwell_time=0.5
+        )
 
 
 def test_cli_writes_clustered_survival_analysis(tmp_path):

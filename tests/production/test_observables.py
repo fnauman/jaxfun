@@ -1,4 +1,8 @@
-from production.observables import canonicalize_scalars, expected_divergence_keys
+from production.observables import (
+    canonicalize_scalars,
+    energy_convention_for_spec,
+    expected_divergence_keys,
+)
 
 
 def test_hydro_cheap_uses_divergence_l2():
@@ -65,3 +69,26 @@ def test_dns_goldens_drop_l2_suffixes():
     assert scalars["divergence_u"] == 1.0e-10
     assert scalars["divergence_b"] == 2.0e-10
     assert scalars["growth_rate"] == 0.4
+
+
+def test_energy_convention_follows_solver_family():
+    assert (
+        energy_convention_for_spec(
+            {
+                "geometry": "taylor_couette",
+                "physics": "mri",
+                "representation": "vector_potential",
+            }
+        )
+        == "half_integral_abs2_annulus"
+    )
+    assert (
+        energy_convention_for_spec(
+            {
+                "geometry": "pcf",
+                "physics": "mri",
+                "representation": "vector_potential",
+            }
+        )
+        == "integral_abs2"
+    )

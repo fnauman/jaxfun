@@ -35,6 +35,7 @@ try:
         validate_golden,
     )
     from .device import capture_device_record, configure_production_dtype
+    from .observables import energy_convention_for_spec
     from .oracles import (
         ProductionOracleNotImplementedError,
         load_resume_checkpoint,
@@ -74,6 +75,7 @@ except ImportError:  # pragma: no cover - direct script mode
         capture_device_record,
         configure_production_dtype,
     )
+    from production.observables import energy_convention_for_spec  # type: ignore
     from production.oracles import (
         ProductionOracleNotImplementedError,
         load_resume_checkpoint,
@@ -235,6 +237,9 @@ def run_problem(
 
         if validate_only:
             return metadata
+        # Archive the immutable child spec before any external sink or solver can
+        # fail, so interrupted quench artifacts remain self-contained.
+        _write_json(out_dir / "spec.json", config.spec)
 
         # FJ-07: construct the sink BEFORE the solve so cadence rows stream live
         # (a long remote run is visible while it runs, and a crash still leaves
@@ -252,7 +257,8 @@ def run_problem(
         # mid-run crash leaves the same history locally that W&B received; on
         # success the canonical diagnostics.jsonl replaces it.
         partial_writer, close_partial, partial_path = _partial_diagnostics_writer(
-            out_dir
+            out_dir,
+            energy_convention=energy_convention_for_spec(config.spec),
         )
         partial_stream = {"close": close_partial, "closed": False}
         quench_progress, quench_observer = _quench_progress_tracker(quench_duration)
@@ -352,7 +358,6 @@ def run_problem(
             solver_started_at, solver_start, solver_steps=solver_steps
         )
 
-        _write_json(out_dir / "spec.json", config.spec)
         _write_diagnostics(
             out_dir / "diagnostics.jsonl",
             diagnostics,
@@ -1076,7 +1081,7 @@ def _compose_row_callbacks(*callbacks: Any) -> Any | None:
     return fanout
 
 
-def _partial_diagnostics_writer(out_dir: Path):
+def _partial_diagnostics_writer(out_dir: Path, *, energy_convention: str | None):
     """Stream cadence rows to ``diagnostics.partial.jsonl`` during the solve.
 
     Keeps the declared local source of truth at least as complete as any
@@ -1089,7 +1094,10 @@ def _partial_diagnostics_writer(out_dir: Path):
     handle = path.open("w", encoding="utf-8")
 
     def write(row: dict[str, Any]) -> None:
-        handle.write(json.dumps(_json_ready(row), sort_keys=True) + "\n")
+        payload = dict(row)
+        if energy_convention is not None:
+            payload.setdefault("energy_convention", energy_convention)
+        handle.write(json.dumps(_json_ready(payload), sort_keys=True) + "\n")
         handle.flush()
 
     def close(*, keep: bool) -> None:
@@ -1353,23 +1361,11 @@ def _wandb_sink(
             "spec_hash": config.spec["spec_hash"],
             # Cross-code safety: energies are family-convention volume
             # integrals; consumers convert to physical means via box volume.
-            "energy_convention": _energy_convention_for_spec(config.spec),
+            "energy_convention": energy_convention_for_spec(config.spec),
             **{k: resolved.get(k) for k in ("Re_h", "Rm_h", "Pm", "B0", "nu", "eta")},
         },
         mode="offline" if offline else None,
     )
-
-
-def _energy_convention_for_spec(spec: dict[str, Any]) -> str | None:
-    """Family energy convention for E* scalars (None when not a PCF MHD family)."""
-
-    if spec.get("geometry") != "pcf":
-        return None
-    if spec.get("representation") == "vector_potential":
-        return "integral_abs2"
-    if spec.get("physics") in {"mhd", "mri"}:
-        return "half_integral_abs2"
-    return None
 
 
 def _finish_wandb(

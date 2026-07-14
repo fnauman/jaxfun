@@ -48,6 +48,23 @@ CANONICAL_CANDIDATES: dict[str, tuple[str, ...]] = {
 }
 
 
+def energy_convention_for_spec(spec: dict[str, Any]) -> str | None:
+    """Return the solver-family energy convention encoded by a problem spec."""
+
+    geometry = spec.get("geometry")
+    representation = spec.get("representation")
+    physics = spec.get("physics")
+    if geometry == "taylor_couette" and representation == "vector_potential":
+        return "half_integral_abs2_annulus"
+    if geometry != "pcf":
+        return None
+    if representation == "vector_potential":
+        return "integral_abs2"
+    if physics in {"mhd", "mri"}:
+        return "half_integral_abs2"
+    return None
+
+
 def expected_divergence_keys(
     *,
     geometry: str,

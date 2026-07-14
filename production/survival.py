@@ -19,6 +19,8 @@ from typing import Any
 
 import numpy as np
 
+from production.observables import energy_convention_for_spec
+
 SURVIVAL_SCHEMA_VERSION = 1
 SURVIVAL_GROUPING_KEYS = (
     "problem_id",
@@ -314,7 +316,11 @@ def _analysis_start_age(
     dt: float,
 ) -> float:
     quench = metadata["quench"]
-    valid_after = quench.get("classification_valid_after_tstep", parent_step)
+    if "classification_valid_after_tstep" not in quench:
+        raise SurvivalAnalysisError(
+            "quench metadata must declare classification_valid_after_tstep explicitly"
+        )
+    valid_after = quench["classification_valid_after_tstep"]
     if isinstance(valid_after, bool):
         raise SurvivalAnalysisError(
             "classification_valid_after_tstep must be an integer"
@@ -355,7 +361,7 @@ def _survival_group(
             for row in reversed(rows)
             if isinstance(row.get("energy_convention"), str)
         ),
-        None,
+        energy_convention_for_spec(spec),
     )
     group = {
         "problem_id": metadata.get("problem_id"),
