@@ -193,6 +193,24 @@ def test_tc_cylinder_radius_and_modal_overrides_reach_solver_constructor():
     assert groups["Rm"] == pytest.approx(groups["Rm_TC"])
 
 
+def test_tc_cylinder_override_preserves_reynolds_only_transport_controls():
+    base = _tc_base()
+    groups = base["nondimensional_groups"]
+    groups.pop("nu")
+    groups.pop("eta_mag")
+
+    out = apply_overrides(base, {"Omega1": 0.8})
+    groups = out["nondimensional_groups"]
+
+    assert groups["nu"] > 0.0
+    assert groups["eta_mag"] > 0.0
+    assert groups["Re_TC"] == pytest.approx(1000.0)
+    assert groups["Re"] == pytest.approx(1000.0)
+    assert groups["Rm_TC"] == pytest.approx(1000.0)
+    assert groups["Rm"] == pytest.approx(1000.0)
+    assert groups["Pm"] == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize(
     ("key", "value", "message"),
     [

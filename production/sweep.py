@@ -397,14 +397,29 @@ def apply_overrides(
             spec["domain"]["r"] = [r1, r2]
             groups["radius_ratio"] = r1 / r2
 
-        # Cylinder inputs determine the local shear and both TC Reynolds-number
-        # conventions. Retain the material coefficients unless a Reynolds-number
-        # override below explicitly replaces them, and refresh every derived alias.
-        for key in ("Re", "Re_h", "Re_TC"):
-            groups.pop(key, None)
-        if spec.get("physics") in {"mhd", "mri"}:
-            for key in ("Rm", "Rm_h", "Rm_TC"):
+        # Keep the representation that actually supplies each coefficient.
+        # Resolved specs carry a material coefficient, so it remains authoritative.
+        # Reynolds-only specs retain the resolver precedence: local, then native,
+        # then the legacy native alias.
+        if groups.get("nu") is not None:
+            for key in ("Re", "Re_h", "Re_TC"):
                 groups.pop(key, None)
+        elif groups.get("Re_h") is not None:
+            groups.pop("Re", None)
+            groups.pop("Re_TC", None)
+        elif groups.get("Re_TC") is not None:
+            groups.pop("Re", None)
+
+        if spec.get("physics") in {"mhd", "mri"}:
+            if groups.get("eta_mag") is not None or groups.get("eta") is not None:
+                for key in ("Rm", "Rm_h", "Rm_TC"):
+                    groups.pop(key, None)
+            elif groups.get("Rm_h") is not None:
+                groups.pop("Rm", None)
+                groups.pop("Rm_TC", None)
+            elif groups.get("Rm_TC") is not None:
+                groups.pop("Rm", None)
+            groups.pop("Pm", None)
 
     if "Re_h" in overrides:
         if is_tc:
