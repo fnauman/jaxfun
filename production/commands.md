@@ -494,6 +494,33 @@ not quench workflows and are rejected. A failed or interrupted solve leaves the
 certified `attained` fields unset and records only a conservative
 `last_observed` cadence lower bound when one is available.
 
+### First-passage survival ensembles
+
+Build transition-regime survival curves from completed and interrupted quench
+children with explicit, reviewable decay controls:
+
+```bash
+.venv/bin/python -m production.survival \
+  runs/quench/q1 runs/quench/q2 runs/quench/q3 \
+  --energy-key mag_energy_fluct --threshold 1e-8 --dwell-time 5 \
+  --cluster-bootstrap 2000 --seed 0 --out runs/quench/survival.json
+```
+
+Every diagnostic time is converted to age since the authenticated parent
+checkpoint. Burn-in samples are excluded using
+`classification_valid_after_tstep`. A decay event is recorded at the first
+below-threshold age only when subsequent samples remain below the threshold for
+the requested dwell time; the later qualification age is stored separately.
+Unqualified, interrupted, or wall-time-limited histories are right-censored at
+their last canonical diagnostic sample.
+
+The output separates ensembles by the complete numerical, physical, provenance,
+energy, and decay-policy key set recorded in `grouping_keys`. It reports
+Kaplan-Meier risk sets, pointwise log-log Greenwood intervals, and percentile
+intervals from resampling whole parent clusters. Quenches from different
+checkpoints of the same parent run therefore remain dependent during bootstrap
+uncertainty estimation.
+
 ### Cartesian sweeps
 
 ```bash
