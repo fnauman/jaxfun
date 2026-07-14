@@ -505,9 +505,28 @@ certified `attained` fields unset and records only a conservative
 ```
 
 Materializes every combination (validated, physics-resolved, archived per run
-id), executes serially, and records per-point status in `sweep_index.json`
-after each point; re-invocation (including with a widened grid) skips completed
-points. Adaptive refinement is tracked in `production/KNOWN_ISSUES.md` (KI-6).
+id), executes serially, and records per-point status plus canonical
+`operational_status`, `scientific_class`, fit uncertainty, and eligibility in
+`sweep_index.json`. Re-invocation (including with a widened grid) skips
+completed points.
+
+A one-axis transition frontier can refine those results automatically:
+
+```bash
+.venv/bin/python -m production.sweep \
+  --base production/runs/exp_pcf_mri_vector_potential.json \
+  --out runs/frontiers/rm_onset \
+  --frontier "{\"axis\":\"Rm_h\",\"bounds\":[400,800],\"fixed\":{\"B0\":0.025},\"abs_tolerance\":25,\"confidence_z\":1.96,\"max_refinements\":8}" \
+  --execute --resolution-tier smoke --steps 200
+```
+
+Each decision is appended to `frontier_index.json` with endpoint run IDs and
+spec hashes plus a SHA-256 parent link. Growing/decayed endpoints must exclude
+zero at the requested slope-confidence width; a `sustained` endpoint has
+already passed the classifier stationarity, stress, and independent-sample
+gates. Marginal, inconclusive, nonmonotonic, or uncertain evidence stops without
+claiming convergence. Re-invocation verifies the full hash chain and resumes the
+pending midpoint.
 
 For Taylor-Couette, `Re_h` and `Rm_h` are midpoint-local controls,
 `|S_mid| h^2/nu` and `|S_mid| h^2/eta`. Materialized specs and run metadata
