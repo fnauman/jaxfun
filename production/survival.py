@@ -289,16 +289,33 @@ def _load_run_spec(run_dir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _diagnostics_source(run_dir: Path) -> Path:
+def _diagnostics_source(run_dir: Path, metadata: dict[str, Any]) -> Path:
+    execution = metadata.get("execution")
+    execution = execution if isinstance(execution, dict) else {}
+    status = execution.get("status")
     canonical = run_dir / "diagnostics.jsonl"
-    if canonical.exists():
-        return canonical
+    if status == "completed":
+        if canonical.exists():
+            return canonical
+        raise SurvivalAnalysisError(
+            f"{run_dir} is completed but lacks diagnostics.jsonl"
+        )
+
+    declared = execution.get("partial_diagnostics_path")
+    if not isinstance(declared, str) or not declared:
+        raise SurvivalAnalysisError(
+            f"{run_dir} is non-completed but does not declare its partial diagnostics"
+        )
+    if Path(declared).name != "diagnostics.partial.jsonl":
+        raise SurvivalAnalysisError(
+            f"{run_dir} declares an unsupported partial diagnostics artifact"
+        )
     partial = run_dir / "diagnostics.partial.jsonl"
-    if partial.exists():
-        return partial
-    raise SurvivalAnalysisError(
-        f"{run_dir} has neither diagnostics.jsonl nor diagnostics.partial.jsonl"
-    )
+    if not partial.exists():
+        raise SurvivalAnalysisError(
+            f"{run_dir} declares diagnostics.partial.jsonl but the file is missing"
+        )
+    return partial
 
 
 def _magnetic_bc(spec: dict[str, Any]) -> Any:
@@ -444,7 +461,7 @@ def load_quench_observation(
         raise SurvivalAnalysisError("parent checkpoint step must be an integer")
 
     spec = _load_run_spec(path, metadata)
-    diagnostics_path = _diagnostics_source(path)
+    diagnostics_path = _diagnostics_source(path, metadata)
     rows = _read_jsonl(diagnostics_path)
     integrator = metadata.get("integrator")
     integrator = integrator if isinstance(integrator, dict) else {}

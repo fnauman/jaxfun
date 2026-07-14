@@ -248,7 +248,14 @@ def _write_quench_run(
         "run_options": {"resolution_tier": "production"},
         "device": {"production_run_dtype": "float64"},
         "integrator": {"actual": "IMEXRK222", "dt": 0.5},
-        "execution": {"status": status},
+        "execution": {
+            "status": status,
+            **(
+                {"partial_diagnostics_path": str(run_dir / "diagnostics.partial.jsonl")}
+                if status != "completed"
+                else {}
+            ),
+        },
         "quench": {
             "mode": "quench",
             "parent_run_dir": parent_run_dir,
@@ -295,6 +302,14 @@ def test_run_loader_groups_parent_clusters_and_censors_partial_runs(tmp_path):
         parent_run_dir="/parents/a",
         values=[2.0, 2.0, 2.0, 0.5],
         status="walltime",
+    )
+    stale_rows = [
+        {"t": 10.0, "mag_energy_fluct": 2.0},
+        {"t": 12.0, "mag_energy_fluct": 0.1},
+    ]
+    (censored_dir / "diagnostics.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in stale_rows),
+        encoding="utf-8",
     )
     event = load_quench_observation(
         event_dir,
