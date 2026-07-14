@@ -266,6 +266,13 @@ def test_quench_keyboard_interrupt_after_row_persists_cadence_lower_bound(
         "source": "cadence",
         "is_lower_bound": True,
     }
+    archived_spec = json.loads((out / "spec.json").read_text())
+    assert archived_spec == load_config(config_path).spec
+    partial_rows = [
+        json.loads(line)
+        for line in (out / "diagnostics.partial.jsonl").read_text().splitlines()
+    ]
+    assert partial_rows == [{**observed, "energy_convention": "integral_abs2"}]
 
 
 @pytest.mark.parametrize("endpoint_case", ["missing", "mismatched"])
