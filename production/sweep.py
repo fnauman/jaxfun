@@ -22,7 +22,11 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .frontier import canonical_sweep_result, execute_frontier_sweep
+from .frontier import (
+    FRONTIER_TERMINAL_STATUSES,
+    canonical_sweep_result,
+    execute_frontier_sweep,
+)
 from .physics import resolve_physics
 from .problem_spec import ProblemSpecError, load_spec, spec_hash, validate_spec
 
@@ -747,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
             wandb=args.wandb,
         )
         print(json.dumps(summary, indent=2))
-        return 0 if summary["status"] == "converged" else 1
+        return 0 if summary["status"] in FRONTIER_TERMINAL_STATUSES else 1
 
     if args.grid is not None:
         grid = json.loads(args.grid)

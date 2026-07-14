@@ -20,7 +20,7 @@ FRONTIER_SCHEMA_VERSION = 1
 _NEGATIVE_CLASSES = frozenset({"decayed"})
 _POSITIVE_CLASSES = frozenset({"growing", "sustained"})
 _BRACKET_CLASSES = _NEGATIVE_CLASSES | _POSITIVE_CLASSES
-_TERMINAL_STATUSES = frozenset(
+FRONTIER_TERMINAL_STATUSES = frozenset(
     {
         "converged",
         "max_refinements",
@@ -220,6 +220,8 @@ def frontier_decision(
         return _seal({**base, "status": "nonmonotonic"})
 
     left, right = transitions[0]
+    if left[2] != -1 or right[2] != 1:
+        return _seal({**base, "status": "nonmonotonic"})
     if any(_side(point) == 0 for point in points[left[0] + 1 : right[0]]):
         return _seal({**base, "status": "uncertain_points"})
 
@@ -313,7 +315,7 @@ def execute_frontier_sweep(
 ) -> dict[str, Any]:
     """Execute/resume a one-axis bisection until a safe terminal decision."""
 
-    from .sweep import execute_sweep
+    from .sweep import apply_overrides, execute_sweep, run_id_for
 
     if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
         raise FrontierRefinementError("frontier bounds must contain exactly two values")
@@ -338,10 +340,43 @@ def execute_frontier_sweep(
             "abs_tolerance": float(abs_tolerance),
             "rel_tolerance": float(rel_tolerance),
             "confidence_z": float(confidence_z),
+            "max_refinements": int(max_refinements),
             "resolution_tier": resolution_tier,
             "steps": steps,
         }
     )
+
+    expected_override_keys = {axis, *fixed}
+
+    def requested_entries(
+        entries: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Select only points authenticated for this base spec and control slice."""
+
+        selected: list[dict[str, Any]] = []
+        for entry in entries:
+            overrides = entry.get("overrides")
+            if (
+                not isinstance(overrides, dict)
+                or set(overrides) != expected_override_keys
+            ):
+                continue
+            value = _finite_or_none(overrides.get(axis))
+            if value is None or not low <= value <= high:
+                continue
+            if any(
+                overrides.get(key) != expected
+                for key, expected in fixed.items()
+            ):
+                continue
+            resolved = apply_overrides(base_spec, {**fixed, axis: value})
+            if (
+                entry.get("run_id") != run_id_for(resolved)
+                or entry.get("spec_hash") != resolved["spec_hash"]
+            ):
+                continue
+            selected.append(entry)
+        return selected
 
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -358,7 +393,7 @@ def execute_frontier_sweep(
             raise FrontierRefinementError(
                 "frontier resume request does not match the authenticated lineage"
             )
-        if records and records[-1].get("status") in _TERMINAL_STATUSES:
+        if records and records[-1].get("status") in FRONTIER_TERMINAL_STATUSES:
             return _frontier_summary(
                 decision=records[-1],
                 sweep_index_path=sweep_index_path,
@@ -368,12 +403,8 @@ def execute_frontier_sweep(
     values = {low, high}
     if sweep_index_path.exists():
         existing = json.loads(sweep_index_path.read_text(encoding="utf-8"))
-        for entry in existing:
-            overrides = entry.get("overrides")
-            if isinstance(overrides, dict):
-                value = _finite_or_none(overrides.get(axis))
-                if value is not None:
-                    values.add(value)
+        for entry in requested_entries(existing):
+            values.add(float(entry["overrides"][axis]))
 
     parent = records[-1]["lineage_hash"] if records else None
     refinements = sum(record.get("status") == "refine" for record in records)
@@ -393,7 +424,9 @@ def execute_frontier_sweep(
             steps=steps,
             wandb=wandb,
         )
-        entries = json.loads(sweep_index_path.read_text(encoding="utf-8"))
+        entries = requested_entries(
+            json.loads(sweep_index_path.read_text(encoding="utf-8"))
+        )
         decision = frontier_decision(
             entries,
             axis=axis,

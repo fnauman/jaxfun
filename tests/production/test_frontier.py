@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import production.sweep as sweep_module
 from production.frontier import (
     FrontierRefinementError,
     execute_frontier_sweep,
@@ -99,6 +100,18 @@ def test_frontier_refuses_uncertain_or_marginal_evidence():
     assert decision["status"] == "uncertain_points"
 
 
+def test_frontier_rejects_reversed_transition_direction():
+    reversed_transition = [
+        _entry(400.0, "growing", 0.2, 0.01),
+        _entry(800.0, "decayed", -0.2, 0.01),
+    ]
+    decision = frontier_decision(
+        reversed_transition, axis="Rm_h", abs_tolerance=25.0
+    )
+    assert decision["status"] == "nonmonotonic"
+    assert decision["bracket"] is None
+
+
 def test_frontier_rejects_duplicate_coordinates():
     entries = [
         _entry(400.0, "decayed", -0.2, 0.01),
@@ -151,6 +164,51 @@ def test_incomplete_frontier_retries_failed_endpoint(tmp_path):
     assert attempts == {400.0: 1, 800.0: 2}
     lineage = json.loads(Path(second["lineage_path"]).read_text(encoding="utf-8"))
     assert verify_frontier_lineage(lineage) is True
+
+
+def test_frontier_ignores_stale_sweep_rows_from_other_requests(tmp_path):
+    stale = [
+        {
+            **_entry(400.0, "growing", 0.2, 0.01),
+            "overrides": {"Rm_h": 400.0, "B0": 0.05},
+        },
+        {
+            **_entry(600.0, "growing", 0.2, 0.01),
+            "overrides": {"Rm_h": 600.0, "B0": 0.025},
+        },
+        {
+            **_entry(900.0, "growing", 0.2, 0.01),
+            "overrides": {"Rm_h": 900.0, "B0": 0.025},
+        },
+    ]
+    (tmp_path / "sweep_index.json").write_text(
+        json.dumps(stale), encoding="utf-8"
+    )
+
+    def classified_runner(*, config_path, **kwargs):
+        spec = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        value = float(spec["nondimensional_groups"]["Rm"])
+        if value < 600.0:
+            return _metadata("decayed", -0.1, 0.01)
+        return _metadata("growing", 0.1, 0.01)
+
+    summary = execute_frontier_sweep(
+        BASE,
+        axis="Rm_h",
+        bounds=[400.0, 800.0],
+        out_dir=tmp_path,
+        fixed_overrides={"B0": 0.025},
+        abs_tolerance=25.0,
+        max_refinements=0,
+        runner=classified_runner,
+    )
+    assert summary["status"] == "max_refinements"
+    assert summary["sampled_points"] == 2
+    lineage = json.loads(Path(summary["lineage_path"]).read_text(encoding="utf-8"))
+    assert [point["value"] for point in lineage[-1]["sampled_points"]] == [
+        400.0,
+        800.0,
+    ]
 
 
 def test_execute_frontier_sweep_refines_resumes_and_persists_results(tmp_path):
@@ -212,3 +270,51 @@ def test_execute_frontier_sweep_refines_resumes_and_persists_results(tmp_path):
             abs_tolerance=50.0,
             runner=classified_runner,
         )
+
+    with pytest.raises(FrontierRefinementError, match="does not match"):
+        execute_frontier_sweep(
+            BASE,
+            axis="Rm_h",
+            bounds=[400.0, 800.0],
+            out_dir=tmp_path,
+            fixed_overrides={"B0": 0.025},
+            abs_tolerance=50.0,
+            max_refinements=9,
+            runner=classified_runner,
+        )
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_exit"),
+    [
+        ("converged", 0),
+        ("max_refinements", 0),
+        ("nonmonotonic", 0),
+        ("uncertain_endpoints", 0),
+        ("uncertain_points", 0),
+        ("unbracketed", 0),
+        ("incomplete", 1),
+    ],
+)
+def test_frontier_cli_distinguishes_scientific_stops_from_incomplete_runs(
+    monkeypatch, tmp_path, status, expected_exit
+):
+    def fake_frontier(*_args, **_kwargs):
+        return {"status": status}
+
+    monkeypatch.setattr(sweep_module, "execute_frontier_sweep", fake_frontier)
+    frontier_json = json.dumps(
+        {"axis": "Rm_h", "bounds": [400, 800], "abs_tolerance": 25}
+    )
+    exit_code = sweep_module.main(
+        [
+            "--base",
+            str(BASE),
+            "--out",
+            str(tmp_path),
+            "--execute",
+            "--frontier",
+            frontier_json,
+        ]
+    )
+    assert exit_code == expected_exit
