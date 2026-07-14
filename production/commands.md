@@ -6,6 +6,44 @@
 .venv/bin/python -m pytest -q tests/production
 ```
 
+## Immutable production promotion
+
+Promotion is a separate, stricter step than writing a golden. The checkout and
+the production run must use the same exact tag, and that tag must already resolve
+to the same commit on the selected remote. A branch ref, including `main`, is
+not a release identity.
+
+```bash
+.venv/bin/python -m production.promotion \
+  --run runs/pcf_mri_vp/full \
+  --test-summary artifacts/release-test-summary.json \
+  --test-artifact artifacts/junit-fast.xml \
+  --test-artifact artifacts/junit-live-shenfun.xml \
+  --out releases/pcf-mri-vp-production-v1
+```
+
+The JSON test summary must contain integer `failed` and `errors` totals plus
+`live_shenfun.passed > 0` and `live_shenfun.skipped == 0`. The referenced
+JUnit/log/coverage files are copied into the bundle rather than represented by
+manually entered counts.
+
+The command refuses promotion unless all of these are true:
+
+- `uv.lock` exists, registry packages have locked versions, and every remote
+  git source is pinned to a full commit;
+- the run completed at full production scope under the strict remote-tag gate;
+- every diagnostics row is finite, time is strictly increasing across the full
+  requested horizon, and every row carries passing constraint evidence;
+- the recorded whole-horizon CFL, spectral-tail, and occupancy maxima pass the
+  health contract, the energy budget closes, and saturation is stationary;
+- classification is `sustained`, resolved, persistently stressed, and based on
+  enough independent samples; and
+- the golden, metadata, spec, current checkout, dependency hashes, and remote tag
+  all identify the same release.
+
+The output directory is created atomically and cannot already exist. Its
+`release.json` hashes every archived dependency, run, golden, and test file.
+
 ## Device capture
 
 ```bash

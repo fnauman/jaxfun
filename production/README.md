@@ -248,6 +248,11 @@ Current implemented entry points:
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses, compares final numeric diagnostics for CPU/GPU agreement checks, and records left/right wall times plus speedup; production run specs can pass `--resolution-tier smoke|start|production` plus `--steps` for bounded agreement evidence. Same-backend comparisons fail by default; pass `--allow-same-backend` only for intentional CPU/CPU smoke checks.
 - `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, fallback rung fields, and failed comparison details. `production/validate_gpu.sh` writes this report before exiting nonzero when an executed run fails.
+- `python -m production.promotion` is the only campaign-release promotion path.
+  It requires an exact tag verified at the same commit on the remote, a complete
+  locked dependency graph, archived passing test artifacts, and whole-horizon
+  constraint/health/budget/classification evidence. It writes a content-hashed,
+  non-overwritable release bundle; see `production/commands.md`.
 
 ## Validation scopes
 

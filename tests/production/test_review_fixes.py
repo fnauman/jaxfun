@@ -80,7 +80,15 @@ def test_release_ref_and_untracked_archive(tmp_path):
     from production.provenance import _head_release_ref, assert_release_clean
 
     ref = _head_release_ref()
-    assert set(ref) == {"exact_tag", "merged_to_origin_main", "is_immutable_ref"}
+    assert set(ref) == {
+        "exact_tag",
+        "tag_commit",
+        "remote",
+        "remote_tag_commit",
+        "remote_verified",
+        "is_immutable_ref",
+    }
+    assert ref["is_immutable_ref"] is ref["remote_verified"]
 
     # The working tree during development is dirty/unpinned, so allow_dirty archives.
     prov = assert_release_clean(tmp_path, allow_dirty=True)
