@@ -40,32 +40,47 @@ def _git(*args: str) -> str | None:
     return out.stdout.strip()
 
 
-def _git_rc(*args: str) -> int:
-    """Return the exit code of a git command (127 if git is unavailable)."""
+def _head_release_ref(remote: str = "origin") -> dict[str, Any]:
+    """Verify that HEAD is pinned by the same exact tag on ``remote``.
 
-    try:
-        out = subprocess.run(
-            ["git", *args],
-            cwd=_REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return 127
-    return out.returncode
+    A branch -- including ``main`` -- is a movable ref and therefore cannot be a
+    production release identity. Annotated tags are compared through their peeled
+    commit; lightweight tags compare directly.
+    """
 
-
-def _head_release_ref() -> dict[str, Any]:
-    """Whether HEAD is an immutable release ref: an exact tag or merged to main."""
-
+    commit = _git("rev-parse", "HEAD")
     exact_tag = _git("describe", "--exact-match", "--tags", "HEAD")
-    on_main = _git_rc("merge-base", "--is-ancestor", "HEAD", "origin/main") == 0
+    tag_commit = _git("rev-list", "-n", "1", exact_tag) if exact_tag else None
+    remote_tag_commit = None
+    if exact_tag:
+        listing = _git(
+            "ls-remote",
+            "--tags",
+            remote,
+            f"refs/tags/{exact_tag}",
+            f"refs/tags/{exact_tag}^{{}}",
+        )
+        direct = None
+        peeled = None
+        for line in (listing or "").splitlines():
+            fields = line.split()
+            if len(fields) != 2:
+                continue
+            if fields[1].endswith("^{}"):
+                peeled = fields[0]
+            else:
+                direct = fields[0]
+        remote_tag_commit = peeled or direct
+    verified = bool(
+        commit and exact_tag and tag_commit == commit and remote_tag_commit == commit
+    )
     return {
         "exact_tag": exact_tag,
-        "merged_to_origin_main": on_main,
-        "is_immutable_ref": bool(exact_tag) or on_main,
+        "tag_commit": tag_commit,
+        "remote": remote,
+        "remote_tag_commit": remote_tag_commit,
+        "remote_verified": verified,
+        "is_immutable_ref": verified,
     }
 
 
@@ -150,7 +165,12 @@ def capture_provenance() -> dict[str, Any]:
     }
 
 
-def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[str, Any]:
+def assert_release_clean(
+    out_dir: Path,
+    *,
+    allow_dirty: bool = False,
+    remote: str = "origin",
+) -> dict[str, Any]:
     """Enforce the FJ-13 gate: no run from a dirty/untagged/unpushed commit.
 
     With ``allow_dirty`` the run is permitted as *discovery-only*: the exact diff and
@@ -158,7 +178,7 @@ def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[st
     """
 
     prov = capture_provenance()
-    release_ref = _head_release_ref()
+    release_ref = _head_release_ref(remote)
     prov["release_ref"] = release_ref
     problems: list[str] = []
     if prov["commit"] is None:
@@ -171,15 +191,16 @@ def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[st
         problems.append("no upstream/remote-tracking branch (commit not pushed)")
     if not release_ref["is_immutable_ref"]:
         problems.append(
-            "HEAD is not an immutable release ref: no exact tag and not merged to "
-            "origin/main (a movable branch ref is not sufficient provenance, FJ-13)"
+            "HEAD is not an immutable release ref: an exact local tag resolving to "
+            f"HEAD must exist at the same commit on {remote} "
+            "(a branch, including main, is a movable ref)"
         )
 
     if problems and not allow_dirty:
         raise ReleaseCleanlinessError(
             "production run refused: "
             + "; ".join(problems)
-            + ". Run from a clean, pushed commit that is tagged or merged to main, or "
+            + ". Run from a clean commit pinned by an exact pushed tag, or "
             "pass --allow-dirty for a discovery-only run (its diff will be archived)."
         )
 
@@ -187,6 +208,7 @@ def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[st
         "passed": not problems,
         "problems": problems,
         "discovery_only": bool(problems and allow_dirty),
+        "release_ref": release_ref,
     }
     if problems and allow_dirty:
         prov["release_gate"].update(_archive_worktree(out_dir))
