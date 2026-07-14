@@ -12,6 +12,7 @@ import numpy as np
 from _linear_analysis import (
     FINITE_CAP,
     finite_eigensystem,
+    physical_eigensystem,
     transient_growth_from_eigs,
 )
 
@@ -311,8 +312,9 @@ class PlaneCouetteLinear:
         return Q
 
     def eigs(self, ky, kz, n_return=8, finite_cap=FINITE_CAP):
-        return finite_eigensystem(
-            *self.assemble(ky, kz), finite_cap=finite_cap, n_return=n_return
+        L, M = self.assemble(ky, kz)
+        return physical_eigensystem(
+            L, M, self.energy_matrix("total"), finite_cap=finite_cap, n_return=n_return
         )
 
     def growth_rate(self, ky, kz):

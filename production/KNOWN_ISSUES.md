@@ -5,30 +5,6 @@ review rounds. Each entry states the symptom, why it is not fixed yet, and the
 acceptance criterion for closing it. Remove entries when closed and reference
 the closing commit.
 
-## KI-1: smoke-tier eigenmode seeding can select spurious collocation modes
-
-**Symptom.** At under-resolved smoke tiers (`Nx <= ~12`), the collocation
-linear operator (`examples/pcf_linear_jax.py` / `couette/_pcf_linear.py`) can
-return a spurious leading eigenvalue (observed: `growth_rate_linear ~ 4e5` at
-`Nx=8-12` for the pseudo-vacuum shearbox), so `seed_linear_eigenmode(which=0)`
-seeds a numerically spurious mode and labels `growth_rate_linear` with it. The
-run itself stays finite and the health guards pass; the label and the seed
-shape are the artifact.
-
-**Why open.** Spurious modes are a known hazard of row-replacement collocation
-eigenproblems. Filtering them (e.g. a `|Re(lambda)|` cap or a resolution-pair
-convergence check inside `eigs`) must be applied identically to both operator
-twins and would touch the anchored onset scan (Rm_c = 415.288) and the parity
-eigenvalue tests, so it needs its own carefully-tested pass, not a drive-by.
-
-**Workaround.** Trust eigen-seeded `growth_rate_linear` only at `start`/
-`production` tiers (converged by `Nx ~ 16-48`); smoke tiers validate
-finiteness/divergence only (already the recorded `validation_scope`).
-
-**Close when.** `eigs` filters spurious modes symmetrically in both twins with
-the onset anchor and eigenvalue parity tests still passing, plus a regression
-test that the `Nx=12` pseudo-vacuum leading mode is physical.
-
 ## KI-2: pseudo-vacuum for the vector-potential (curl) family
 
 The workhorse is conducting-only; pseudo-vacuum walls need A-formulation

@@ -45,6 +45,53 @@ def finite_eigensystem(L, M, finite_cap=FINITE_CAP, n_return=None):
     return w, V
 
 
+def physical_eigensystem(
+    L,
+    M,
+    metric,
+    finite_cap=FINITE_CAP,
+    n_return=None,
+    metric_rtol=None,
+):
+    """Return growth-sorted eigenpairs with non-negligible physical energy.
+
+    Descriptor pencils can contain large finite multiplier/gauge modes as well
+    as eigenvalues at infinity. A genuine state eigenvector has energy under the
+    supplied positive-semidefinite metric; a vector numerically in its null space
+    is not a seedable physical mode. The default relative threshold is
+    ``sqrt(machine epsilon)``, applied after Euclidean normalization.
+    """
+
+    tolerance = (
+        float(np.sqrt(np.finfo(float).eps))
+        if metric_rtol is None
+        else float(metric_rtol)
+    )
+    if not np.isfinite(tolerance) or tolerance < 0.0:
+        raise ValueError("metric_rtol must be finite and nonnegative")
+
+    w, V = finite_eigensystem(L, M, finite_cap=finite_cap)
+    Q = np.asarray(metric, dtype=complex)
+    expected_shape = (V.shape[0], V.shape[0])
+    if Q.shape != expected_shape:
+        raise ValueError(
+            f"energy metric must have shape {expected_shape}, got {Q.shape}"
+        )
+    if V.shape[1] == 0:
+        return w, V
+
+    metric_scale = float(np.linalg.norm(Q, ord=2))
+    if not np.isfinite(metric_scale) or metric_scale <= 0.0:
+        raise ValueError("energy metric must have a finite positive scale")
+    vector_norm = np.sum(np.abs(V) ** 2, axis=0)
+    physical_energy = np.real(np.sum(V.conj() * (Q @ V), axis=0))
+    keep = physical_energy > tolerance * metric_scale * vector_norm
+    w, V = w[keep], V[:, keep]
+    if n_return is not None:
+        w, V = w[:n_return], V[:, :n_return]
+    return w, V
+
+
 def transient_growth_from_eigs(evals, evecs, metric, times, metric_rtol=1.0e-10):
     r"""Energy-norm transient growth from a finite modal expansion.
 

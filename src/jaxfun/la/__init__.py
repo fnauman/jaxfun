@@ -12,6 +12,7 @@ from .eig import (
     finite_eigenvalues as finite_eigenvalues,
     generalized_eig as generalized_eig,
     parse_times as parse_times,
+    physical_eigensystem as physical_eigensystem,
     print_eigenvalues as print_eigenvalues,
     print_transient_growth as print_transient_growth,
     transient_growth_from_eigs as transient_growth_from_eigs,

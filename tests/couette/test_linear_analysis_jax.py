@@ -1,3 +1,4 @@
+import math
 import sys
 from pathlib import Path
 
@@ -35,6 +36,31 @@ def test_pcf_linear_nonmodal_matches_reference_helper():
         1.0, 0.5, [0.0, 0.25], n_modes=8, energy="total"
     )
     assert rows == pytest.approx(ref_rows, rel=1.0e-12, abs=1.0e-12)
+
+
+def test_pcf_pseudovacuum_smoke_leading_mode_is_physical():
+    ReferencePlaneCouetteLinear = _load_reference_pcf_linear()
+    options = {
+        "nx": 12,
+        "Re": 1000.0,
+        "Rm": 1000.0,
+        "shear_rate": 1.0,
+        "omega": 2.0 / 3.0,
+        "bz": 0.025,
+        "magnetic_bc": "pseudo_vacuum",
+    }
+    solver = PlaneCouetteLinear.shearpy(**options)
+    reference = ReferencePlaneCouetteLinear.shearpy(**options)
+    ky = 2.0 * math.pi / 4.0
+    kz = 2.0 * math.pi / 1.0
+
+    value = solver.eigs(ky, kz, n_return=1)[0][0]
+    reference_value = reference.eigs(ky, kz, n_return=1)[0][0]
+
+    assert abs(value.real) < 1.0
+    assert abs(reference_value.real) < 1.0
+    assert value.real == pytest.approx(reference_value.real, abs=1.0e-2)
+    assert abs(value.imag) == pytest.approx(abs(reference_value.imag), abs=2.0e-2)
 
 
 def test_tc_linear_nonmodal_returns_finite_kinetic_gain():
