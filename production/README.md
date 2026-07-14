@@ -131,7 +131,7 @@ of `b = curl(A)` (the representation the current density and diagnostics use),
 so it carries the spectrally convergent quadrature error of the cylindrical
 `1/r` projections. It is both resolution- and amplitude-dependent (`m=1`:
 `1.8e-12` at `Nr=24` vs `3.7e-15` at `Nr=40` for the same seed scale) but
-must remain at the corresponding projection floor instead of growing
+must remain at or below the corresponding projection floor instead of growing
 secularly. The shipped TC specs therefore state tiered absolute ceilings
 (`1e-9` for the deliberately coarse smoke tier and `1e-12` for start and
 production); the runner enforces the selected ceiling every health block and
@@ -142,7 +142,10 @@ witness has no `1/r` factors and sits at `~1e-16` independent of resolution.
 Both shipped PCF vector-potential specs therefore pin `precision=float64` and
 an explicit `divergence_b_guard_l2=1e-12`; float32 smoke measurements have an
 `O(1e-9)` witness floor and are not eligible for this qualification contract.
-The PCF runner emits the selected ceiling as `divergence_b_guard_l2`.
+The PCF runner emits the selected ceiling as `divergence_b_guard_l2`. The
+ceiling is inclusive: a finite value equal to the configured limit is accepted,
+while any value above it is rejected. Fixed-step snapshot callbacks apply this
+guard before creating a shard or updating the snapshot index.
 
 ### Adaptive CFL stepping
 

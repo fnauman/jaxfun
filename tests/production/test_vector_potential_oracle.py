@@ -181,6 +181,28 @@ def test_vector_potential_guard_reaches_fixed_step_block_endpoints(monkeypatch):
         oracles._run_pcf_vector_potential_mhd_saturation(spec, steps=1)
 
 
+def test_vector_potential_guard_treats_limit_as_inclusive_ceiling():
+    import production.oracles as oracles
+
+    oracles._raise_on_divergence_drift(
+        None,
+        None,
+        t=1.0,
+        tstep=1,
+        diagnostics={"divB_L2": SOLENOIDAL_CEIL},
+        magnetic_limit=SOLENOIDAL_CEIL,
+    )
+    with pytest.raises(FloatingPointError, match="divergence guard failed"):
+        oracles._raise_on_divergence_drift(
+            None,
+            None,
+            t=1.0,
+            tstep=1,
+            diagnostics={"divB_L2": 2.0 * SOLENOIDAL_CEIL},
+            magnetic_limit=SOLENOIDAL_CEIL,
+        )
+
+
 def test_vector_potential_guard_rejects_checkpoint_before_write(tmp_path):
     import production.oracles as oracles
     from jaxfun.io import run_with_cadence
@@ -247,6 +269,41 @@ def test_vector_potential_guard_rejects_checkpoint_before_write(tmp_path):
 
     assert not (tmp_path / "checkpoints" / "checkpoints.h5").exists()
     assert not (tmp_path / "checkpoints" / "bank").exists()
+
+
+def test_vector_potential_guard_rejects_snapshot_before_write(tmp_path):
+    import production.oracles as oracles
+
+    class UnsafeSnapshotSolver:
+        dt = 1.0
+
+        def solve_with_cadence(self, state, *_args, **callbacks):
+            callbacks["on_snapshot"](1.0, 1, state)
+            return state
+
+        @staticmethod
+        def diagnostics(_state):
+            return {"divB_L2": 2.0 * SOLENOIDAL_CEIL}
+
+    with pytest.raises(FloatingPointError, match="tstep=1"):
+        oracles._solve_with_optional_checkpoints(
+            UnsafeSnapshotSolver(),
+            0,
+            1,
+            spec={
+                "problem_id": "unit",
+                "spec_hash": "hash",
+                "golden": {"artifact_id": "unit"},
+            },
+            out_dir=tmp_path,
+            checkpoint_every=None,
+            snapshot_every=1,
+            diagnostics_every=None,
+            state_kind="unit",
+            magnetic_divergence_limit=SOLENOIDAL_CEIL,
+        )
+
+    assert not (tmp_path / "snapshots").exists()
 
 
 def test_vector_potential_guard_reaches_adaptive_block_endpoints(monkeypatch):

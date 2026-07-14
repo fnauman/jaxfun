@@ -2868,6 +2868,17 @@ def _solve_with_optional_checkpoints(
 
     def on_snapshot(t: float, tstep: int, snapshot_state: Any) -> None:
         assert snapshot_path is not None
+        # Snapshot callbacks run before should_stop. Guard the candidate state
+        # before creating output so a rejected state cannot leave a shard or
+        # enter the promotable snapshot index.
+        _raise_on_divergence_drift(
+            solver,
+            snapshot_state,
+            t=t,
+            tstep=tstep,
+            diagnostics=diagnostics_cache.get(int(tstep)),
+            magnetic_limit=magnetic_divergence_limit,
+        )
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_payload, snapshot_spaces = _snapshot_payload(solver, snapshot_state)
         _write_atomic_uniform_snapshot(
