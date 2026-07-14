@@ -13,6 +13,10 @@ the production run must use the same exact tag, and that tag must already resolv
 to the same commit on the selected remote. A branch ref, including `main`, is
 not a release identity.
 
+When the release tag is hosted somewhere other than `origin`, launch the full
+run with `run_problem --release-remote NAME` and pass the same
+`production.promotion --remote NAME`; the remote name is part of the identity.
+
 ```bash
 .venv/bin/python -m production.promotion \
   --run runs/pcf_mri_vp/full \

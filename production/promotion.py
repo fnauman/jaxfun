@@ -305,8 +305,13 @@ def audit_run(run_dir: Path) -> dict[str, Any]:
         if not isinstance(final_time, int | float) or not isinstance(dt, int | float):
             problems.append("spec has no numeric final_time and dt")
         else:
-            tolerance = max(abs(float(dt)), 1.0e-12)
-            if times[0] > tolerance:
+            tolerance = 1.0e-12 * max(
+                1.0,
+                abs(float(final_time)),
+                abs(times[0]),
+                abs(times[-1]),
+            )
+            if abs(times[0]) > tolerance:
                 problems.append("diagnostics do not start at the initial horizon")
             if abs(times[-1] - float(final_time)) > tolerance:
                 problems.append(
@@ -314,7 +319,6 @@ def audit_run(run_dir: Path) -> dict[str, Any]:
                     f"expected {float(final_time):g}"
                 )
 
-    final = rows[-1]
     health_limits = {
         "cfl_total": CFL_LIMIT,
         "spectral_tail_max": SPECTRAL_TAIL_LIMIT,
@@ -322,22 +326,35 @@ def audit_run(run_dir: Path) -> dict[str, Any]:
     }
     health_values: dict[str, float] = {}
     for key, limit in health_limits.items():
-        value = final.get(key)
-        if isinstance(value, bool) or not isinstance(value, int | float):
+        seen = False
+        maximum = -math.inf
+        for index, row in enumerate(rows):
+            value = row.get(key)
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                continue
+            seen = True
+            number = float(value)
+            maximum = max(maximum, number)
+            if not math.isfinite(number) or number > limit:
+                problems.append(
+                    f"diagnostics row {index} health {key}={number:g} exceeds {limit:g}"
+                )
+        if not seen:
             problems.append(f"whole-horizon health aggregate {key} is missing")
             continue
-        number = float(value)
-        health_values[key] = number
-        if not math.isfinite(number) or number > limit:
-            problems.append(f"health aggregate {key}={number:g} exceeds {limit:g}")
+        health_values[key] = maximum
 
+    final = rows[-1]
     budget = final.get("energy_budget_residual")
     if isinstance(budget, bool) or not isinstance(budget, int | float):
         problems.append("energy_budget_residual is missing")
         budget_value = None
     else:
         budget_value = float(budget)
-        if not math.isfinite(budget_value) or budget_value > _BUDGET_RESIDUAL_LIMIT:
+        if (
+            not math.isfinite(budget_value)
+            or abs(budget_value) > _BUDGET_RESIDUAL_LIMIT
+        ):
             problems.append(
                 f"energy budget residual {budget_value:g} exceeds "
                 f"{_BUDGET_RESIDUAL_LIMIT:g}"
@@ -414,8 +431,12 @@ def build_release_bundle(
     }:
         problems.append("run dependency hashes differ from the release checkout")
     run_ref = (run_provenance.get("release_gate") or {}).get("release_ref") or {}
-    if run_ref.get("remote_tag_commit") != release_ref.get("remote_tag_commit"):
-        problems.append("run and release remote tags resolve to different commits")
+    for key in ("exact_tag", "remote", "remote_tag_commit"):
+        if run_ref.get(key) != release_ref.get(key):
+            problems.append(
+                f"run and release refs disagree on {key}: "
+                f"{run_ref.get(key)!r} != {release_ref.get(key)!r}"
+            )
     _fail(problems)
 
     out_dir.parent.mkdir(parents=True, exist_ok=True)

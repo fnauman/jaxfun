@@ -128,6 +128,7 @@ def run_problem(
     resume: str | Path | None = None,
     require_clean: bool = False,
     allow_dirty: bool = False,
+    release_remote: str = "origin",
     wandb: bool = False,
     wandb_project: str | None = None,
     wandb_offline: bool = False,
@@ -182,7 +183,10 @@ def run_problem(
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     release_gate = _enforce_release_gate(
-        out_dir, require_clean=require_clean, allow_dirty=allow_dirty
+        out_dir,
+        require_clean=require_clean,
+        allow_dirty=allow_dirty,
+        remote=release_remote,
     )
     compilation_cache, restore_compilation_cache = _configure_compilation_cache(out_dir)
     metadata: dict[str, Any] = {}
@@ -1268,7 +1272,11 @@ def _resolve_resume_or_quench(
 
 
 def _enforce_release_gate(
-    out_dir: Path, *, require_clean: bool, allow_dirty: bool
+    out_dir: Path,
+    *,
+    require_clean: bool,
+    allow_dirty: bool,
+    remote: str,
 ) -> dict[str, Any] | None:
     """FJ-13: enforce the clean-worktree gate when a production launch requests it."""
 
@@ -1278,7 +1286,7 @@ def _enforce_release_gate(
         from .provenance import assert_release_clean
     except ImportError:  # pragma: no cover - direct script mode
         from production.provenance import assert_release_clean  # type: ignore
-    prov = assert_release_clean(out_dir, allow_dirty=allow_dirty)
+    prov = assert_release_clean(out_dir, allow_dirty=allow_dirty, remote=remote)
     return prov.get("release_gate")
 
 
@@ -1652,6 +1660,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Permit a discovery-only run from a dirty tree; archives the diff.",
     )
     parser.add_argument(
+        "--release-remote",
+        default="origin",
+        help="Remote whose exact tag must pin production runs (default: origin). "
+        "Use the same value for production.promotion --remote.",
+    )
+    parser.add_argument(
         "--wandb",
         action="store_true",
         help="FJ-07: stream cadence rows to Weights & Biases live during the "
@@ -1805,6 +1819,7 @@ def main(argv: list[str] | None = None) -> int:
                 # (--allow-dirty is the explicit discovery-run escape).
                 require_clean=_requires_release_gate(args, config_path),
                 allow_dirty=args.allow_dirty,
+                release_remote=args.release_remote,
                 wandb=args.wandb,
                 wandb_project=args.wandb_project,
                 wandb_offline=args.wandb_offline,

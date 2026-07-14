@@ -165,7 +165,12 @@ def capture_provenance() -> dict[str, Any]:
     }
 
 
-def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[str, Any]:
+def assert_release_clean(
+    out_dir: Path,
+    *,
+    allow_dirty: bool = False,
+    remote: str = "origin",
+) -> dict[str, Any]:
     """Enforce the FJ-13 gate: no run from a dirty/untagged/unpushed commit.
 
     With ``allow_dirty`` the run is permitted as *discovery-only*: the exact diff and
@@ -173,7 +178,7 @@ def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[st
     """
 
     prov = capture_provenance()
-    release_ref = _head_release_ref()
+    release_ref = _head_release_ref(remote)
     prov["release_ref"] = release_ref
     problems: list[str] = []
     if prov["commit"] is None:
@@ -187,8 +192,8 @@ def assert_release_clean(out_dir: Path, *, allow_dirty: bool = False) -> dict[st
     if not release_ref["is_immutable_ref"]:
         problems.append(
             "HEAD is not an immutable release ref: an exact local tag resolving to "
-            "HEAD must exist at the same commit on origin (a branch, including main, "
-            "is a movable ref)"
+            f"HEAD must exist at the same commit on {remote} "
+            "(a branch, including main, is a movable ref)"
         )
 
     if problems and not allow_dirty:
