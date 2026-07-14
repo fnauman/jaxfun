@@ -64,13 +64,6 @@ equation residual evaluated at the walls (tau error). Not implemented; the
 energy-budget residual (`production/health.py`) currently covers global
 consistency (closes to ~5e-5 on the curl smoke run).
 
-## KI-6: adaptive sweep frontier
-
-`production/sweep.py` executes Cartesian grids with per-point status, resume,
-and skip-completed (a widened re-invocation is the manual frontier workflow).
-Choosing the next points automatically from prior results (bisection toward
-onset, refinement near classification boundaries) is not implemented.
-
 ## KI-7: TC family not yet on the round-3 diagnostic contract
 
 The total-field mean/split semantics, `energy_convention`/`box_volume` stamps,

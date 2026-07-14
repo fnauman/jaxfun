@@ -45,6 +45,8 @@ def test_execute_sweep_records_status_and_skips_completed(tmp_path):
     index = json.loads(Path(summary["index_path"]).read_text(encoding="utf-8"))
     assert len(index) == 2
     assert all(entry["status"] == "completed" for entry in index)
+    assert all(entry["result"]["schema_version"] == 1 for entry in index)
+    assert all(entry["result"]["operational_status"] == "completed" for entry in index)
     # Each materialized spec resolved the swept Rm into eta_mag before launch.
     for entry in index:
         spec = json.loads(Path(entry["spec_path"]).read_text(encoding="utf-8"))
@@ -87,3 +89,5 @@ def test_execute_sweep_records_failure_and_continues(tmp_path):
     assert statuses == ["completed", "failed"]
     failed = next(e for e in index if e["status"] == "failed")
     assert "FloatingPointError" in failed["failure_reason"]
+    assert failed["result"]["operational_status"] == "failed"
+    assert "FloatingPointError" in failed["result"]["failure_reason"]

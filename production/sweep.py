@@ -22,6 +22,11 @@ import math
 from pathlib import Path
 from typing import Any
 
+from .frontier import (
+    FRONTIER_TERMINAL_STATUSES,
+    canonical_sweep_result,
+    execute_frontier_sweep,
+)
 from .physics import resolve_physics
 from .problem_spec import ProblemSpecError, load_spec, spec_hash, validate_spec
 
@@ -581,8 +586,7 @@ def execute_sweep(
     ``skip_completed`` a re-invocation -- including one with a widened grid --
     skips already-completed run ids: the basic continuation/frontier workflow.
     A failing point is recorded and does not abort the remaining grid.
-    Adaptive refinement (choosing the next points from results) is tracked in
-    production/KNOWN_ISSUES.md.
+    Adaptive refinement is provided by :func:`execute_frontier_sweep`.
     """
 
     base_spec = load_spec(base_spec_path)
@@ -618,7 +622,7 @@ def execute_sweep(
         if not execute:
             continue
         try:
-            runner(
+            metadata = runner(
                 config_path=record["spec_path"],
                 out=out_path / run_id / "run",
                 resolution_tier=resolution_tier,
@@ -627,10 +631,20 @@ def execute_sweep(
             )
         except Exception as exc:  # record and continue with the rest of the grid
             entry["status"] = "failed"
-            entry["failure_reason"] = f"{type(exc).__name__}: {exc}"
+            failure_reason = f"{type(exc).__name__}: {exc}"
+            entry["failure_reason"] = failure_reason
+            entry["result"] = canonical_sweep_result(
+                None,
+                fallback_status="failed",
+                failure_reason=failure_reason,
+            )
             failed += 1
         else:
             entry["status"] = "completed"
+            entry["result"] = canonical_sweep_result(
+                metadata if isinstance(metadata, dict) else None,
+                fallback_status="completed",
+            )
             completed += 1
         flush()
     return {
@@ -675,6 +689,12 @@ def main(argv: list[str] | None = None) -> int:
         "serially and records per-point status in sweep_index.json "
         "(re-invocation skips completed points).",
     )
+    parser.add_argument(
+        "--frontier",
+        default=None,
+        help="Adaptive frontier JSON with axis, bounds, abs_tolerance, and optional "
+        "fixed, rel_tolerance, confidence_z, and max_refinements fields.",
+    )
     parser.add_argument("--execute", action="store_true")
     parser.add_argument(
         "--resolution-tier", choices=["smoke", "start", "production"], default=None
@@ -682,6 +702,56 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--wandb", action="store_true")
     args = parser.parse_args(argv)
+    if args.frontier is not None:
+        if args.grid is not None or args.set:
+            raise SweepOverrideError(
+                "--frontier cannot be combined with --grid or --set"
+            )
+        if not args.execute:
+            raise SweepOverrideError("--frontier requires --execute")
+        try:
+            frontier = json.loads(args.frontier)
+        except json.JSONDecodeError as exc:
+            raise SweepOverrideError("--frontier must be valid JSON") from exc
+        if not isinstance(frontier, dict):
+            raise SweepOverrideError("--frontier must be a JSON object")
+        allowed = {
+            "axis",
+            "bounds",
+            "fixed",
+            "abs_tolerance",
+            "rel_tolerance",
+            "confidence_z",
+            "max_refinements",
+        }
+        unknown = set(frontier) - allowed
+        if unknown:
+            raise SweepOverrideError(f"unknown --frontier field(s): {sorted(unknown)}")
+        missing = {"axis", "bounds", "abs_tolerance"} - set(frontier)
+        if missing:
+            raise SweepOverrideError(f"missing --frontier field(s): {sorted(missing)}")
+        axis = frontier["axis"]
+        if not isinstance(axis, str) or not axis:
+            raise SweepOverrideError("--frontier axis must be a non-empty string")
+        fixed = frontier.get("fixed", {})
+        if not isinstance(fixed, dict):
+            raise SweepOverrideError("--frontier fixed must be a JSON object")
+        summary = execute_frontier_sweep(
+            args.base,
+            axis=axis,
+            bounds=frontier["bounds"],
+            out_dir=args.out,
+            fixed_overrides=fixed,
+            abs_tolerance=float(frontier["abs_tolerance"]),
+            rel_tolerance=float(frontier.get("rel_tolerance", 0.0)),
+            confidence_z=float(frontier.get("confidence_z", 1.96)),
+            max_refinements=frontier.get("max_refinements", 8),
+            resolution_tier=args.resolution_tier,
+            steps=args.steps,
+            wandb=args.wandb,
+        )
+        print(json.dumps(summary, indent=2))
+        return 0 if summary["status"] in FRONTIER_TERMINAL_STATUSES else 1
 
     if args.grid is not None:
         grid = json.loads(args.grid)
