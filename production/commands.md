@@ -6,6 +6,43 @@
 .venv/bin/python -m pytest -q tests/production
 ```
 
+## Cross-repository comparison manifest
+
+The left input for `shearbox_to_pcf` is the JSON emitted by shearpy's
+`build_run_manifest`; the right input is a JAXfun PCF problem spec. Provenance
+requires full Git object IDs, not branches or abbreviated hashes.
+
+```bash
+.venv/bin/python -m production.comparison_manifest \
+  --relation shearbox_to_pcf \
+  --left artifacts/shearpy-run-manifest.json \
+  --right production/runs/exp_pcf_mri_vector_potential.json \
+  --left-repository https://github.com/fnauman/shearpy-jimenez \
+  --left-commit 0123456789abcdef0123456789abcdef01234567 \
+  --right-repository https://github.com/fnauman/jaxfun \
+  --right-commit 89abcdef0123456789abcdef0123456789abcdef \
+  --out artifacts/shearbox-pcf-comparison.json
+```
+
+For the local PCF-to-Taylor-Couette control map, both inputs are JAXfun specs:
+
+```bash
+.venv/bin/python -m production.comparison_manifest \
+  --relation local_pcf_to_taylor_couette \
+  --left production/runs/exp_pcf_mri_vector_potential.json \
+  --right production/runs/exp_tc_mri_vector_potential.json \
+  --left-repository https://github.com/fnauman/jaxfun \
+  --left-commit 89abcdef0123456789abcdef0123456789abcdef \
+  --right-repository https://github.com/fnauman/jaxfun \
+  --right-commit 89abcdef0123456789abcdef0123456789abcdef \
+  --out artifacts/pcf-tc-comparison.json
+```
+
+The output is canonical JSON. `comparison_id` identifies the versioned mapping
+and normalized-observable contract; `pair_id` also binds the ordered input
+hashes, repositories, and commits. Rebuilding with identical inputs is
+byte-for-byte deterministic.
+
 ## Immutable production promotion
 
 Promotion is a separate, stricter step than writing a golden. The checkout and
