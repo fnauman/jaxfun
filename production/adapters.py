@@ -41,6 +41,19 @@ SOLVER_SOURCE_FILES: dict[tuple[str, str], list[str]] = {
     ],
 }
 
+VECTOR_POTENTIAL_SOURCE_FILES: dict[tuple[str, str], list[str]] = {
+    ("pcf", "mhd"): [
+        "examples/pcf_mhd_jax.py",
+        "examples/pcf_mhd_mri_shearpy_jax.py",
+    ],
+    ("pcf", "mri"): [
+        "examples/pcf_mhd_jax.py",
+        "examples/pcf_mhd_mri_shearpy_jax.py",
+    ],
+    ("taylor_couette", "mhd"): ["examples/taylor_couette_vp_jax.py"],
+    ("taylor_couette", "mri"): ["examples/taylor_couette_vp_jax.py"],
+}
+
 GEOMETRY_AXIS_CONVENTIONS: dict[str, dict[str, str]] = {
     "pcf": {
         "axis_0": "x wall-normal",
@@ -93,7 +106,12 @@ def config_from_spec(
     )
     geometry = validated["geometry"]
     physics = validated["physics"]
-    source_files = tuple(SOLVER_SOURCE_FILES.get((geometry, physics), ()))
+    source_map = (
+        VECTOR_POTENTIAL_SOURCE_FILES
+        if validated.get("representation") == "vector_potential"
+        else SOLVER_SOURCE_FILES
+    )
+    source_files = tuple(source_map.get((geometry, physics), ()))
     solver_args = solver_arguments_from_spec(validated)
     metadata = {
         "canonical_axes": validated["canonical_axes"],

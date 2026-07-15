@@ -574,6 +574,10 @@ def execute_sweep(
     runner: Any | None = None,
     resolution_tier: str | None = None,
     steps: int | None = None,
+    checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    profiles_every: int | None = None,
+    diagnostics_every: int | None = None,
     wandb: bool = False,
     skip_completed: bool = True,
 ) -> dict[str, Any]:
@@ -627,6 +631,10 @@ def execute_sweep(
                 out=out_path / run_id / "run",
                 resolution_tier=resolution_tier,
                 steps=steps,
+                checkpoint_every=checkpoint_every,
+                snapshot_every=snapshot_every,
+                profiles_every=profiles_every,
+                diagnostics_every=diagnostics_every,
                 wandb=wandb,
             )
         except Exception as exc:  # record and continue with the rest of the grid
@@ -700,6 +708,10 @@ def main(argv: list[str] | None = None) -> int:
         "--resolution-tier", choices=["smoke", "start", "production"], default=None
     )
     parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--checkpoint-every", type=int, default=None)
+    parser.add_argument("--snapshot-every", type=int, default=None)
+    parser.add_argument("--profiles-every", type=int, default=None)
+    parser.add_argument("--diagnostics-every", type=int, default=None)
     parser.add_argument("--wandb", action="store_true")
     args = parser.parse_args(argv)
     if args.frontier is not None:
@@ -748,6 +760,10 @@ def main(argv: list[str] | None = None) -> int:
             max_refinements=frontier.get("max_refinements", 8),
             resolution_tier=args.resolution_tier,
             steps=args.steps,
+            checkpoint_every=args.checkpoint_every,
+            snapshot_every=args.snapshot_every,
+            profiles_every=args.profiles_every,
+            diagnostics_every=args.diagnostics_every,
             wandb=args.wandb,
         )
         print(json.dumps(summary, indent=2))
@@ -764,12 +780,34 @@ def main(argv: list[str] | None = None) -> int:
             execute=args.execute,
             resolution_tier=args.resolution_tier,
             steps=args.steps,
+            checkpoint_every=args.checkpoint_every,
+            snapshot_every=args.snapshot_every,
+            profiles_every=args.profiles_every,
+            diagnostics_every=args.diagnostics_every,
             wandb=args.wandb,
         )
         print(json.dumps(summary, indent=2))
         return 1 if summary["failed"] else 0
 
     overrides = dict(_parse_override(token) for token in args.set)
+    if args.execute:
+        if not overrides:
+            raise SweepOverrideError("--execute without --grid requires --set")
+        summary = execute_sweep(
+            args.base,
+            {key: [value] for key, value in overrides.items()},
+            args.out,
+            execute=True,
+            resolution_tier=args.resolution_tier,
+            steps=args.steps,
+            checkpoint_every=args.checkpoint_every,
+            snapshot_every=args.snapshot_every,
+            profiles_every=args.profiles_every,
+            diagnostics_every=args.diagnostics_every,
+            wandb=args.wandb,
+        )
+        print(json.dumps(summary, indent=2))
+        return 1 if summary["failed"] else 0
     record = materialize_run_spec(args.base, overrides, args.out)
     print(json.dumps(record, indent=2))
     return 0

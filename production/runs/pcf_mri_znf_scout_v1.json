@@ -1,0 +1,148 @@
+{
+  "family": "shenfun",
+  "problem_id": "pcf_mri_znf_scout_v1",
+  "geometry": "pcf",
+  "physics": "mri",
+  "support_state": "experimental",
+  "numerics_contract_version": 2,
+  "precision": "float64",
+  "representation": "vector_potential",
+  "formulation": {
+    "internal": "rotating wall-bounded PCF ZNF DNS with B=curl(A)",
+    "pressure": "KMM velocity-vorticity flow block; no magnetic pressure variable"
+  },
+  "evolved_variables": ["u_x", "u_y", "u_z", "A_x", "A_y", "A_z"],
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "mag_energy_fluct",
+    "maxwell_stress_xy",
+    "reynolds_stress",
+    "alpha_Sh",
+    "channel_kz1_total_rms",
+    "mean_bx",
+    "mean_by",
+    "mean_bz"
+  ],
+  "canonical_axes": {
+    "x": "wall-normal/shear-gradient direction; h=1 and full wall spacing is 2h",
+    "y": "streamwise direction",
+    "z": "spanwise/vertical-field direction"
+  },
+  "native_axes": {
+    "axis_0": "x wall-normal (Legendre)",
+    "axis_1": "y streamwise (Fourier)",
+    "axis_2": "z spanwise/vertical (Fourier)"
+  },
+  "nondimensional_groups": {
+    "Re": 2000.0,
+    "Rm": 6000.0,
+    "Pm": 3.0,
+    "Omega": 0.6666666666666666,
+    "S": 1.0,
+    "q_shear": 1.5,
+    "B0": 0.0,
+    "nu": 0.0005,
+    "eta_mag": 0.00016666666666666666
+  },
+  "boundary_conditions": {
+    "velocity": {
+      "type": "no_slip_shearbox_walls"
+    },
+    "magnetic": {
+      "type": "conducting",
+      "details": "A=0 at x=+-h; b=curl(A) remains solenoidal"
+    }
+  },
+  "domain": {
+    "x": [-1.0, 1.0],
+    "y_period": 4.0,
+    "z_period": 1.0
+  },
+  "resolution": {
+    "smoke": {"Nx": 17, "Ny": 16, "Nz": 16, "dealias": 1.0},
+    "start": {"Nx": 65, "Ny": 128, "Nz": 64},
+    "production": {"Nx": 129, "Ny": 256, "Nz": 128},
+    "dealias": {"x": 1.0, "y": 1.5, "z": 1.5},
+    "family": "L"
+  },
+  "time": {
+    "integrator": "IMEXRK222",
+    "dt": 0.001,
+    "final_time": 25.0
+  },
+  "initial_condition": {
+    "type": "mri_znf_sinusoidal_bz",
+    "magnetic_seed": "sinusoidal_bz_x",
+    "solenoidal_velocity_seed": true,
+    "velocity_amplitude": 0.001,
+    "magnetic_amplitude": 0.1,
+    "reference": "shearpy h100 ZNF scout: Bz=0.1*sin(pi*x/h)"
+  },
+  "forcing": {
+    "type": "rotation_shear_zero_net_flux",
+    "B0": 0.0,
+    "by": 0.0,
+    "bz": 0.0
+  },
+  "diagnostics": [
+    "kinetic_energy",
+    "magnetic_energy",
+    "mag_energy_fluct",
+    "maxwell_stress_xy",
+    "reynolds_stress",
+    "total_stress",
+    "alpha_Sh",
+    "channel_kz1_velocity_rms",
+    "channel_kz1_magnetic_rms",
+    "channel_kz1_total_rms",
+    "divergence_b_l2",
+    "divergence_u_l2",
+    "mean_bx",
+    "mean_by",
+    "mean_bz",
+    "flux_drift_bx",
+    "flux_drift_by",
+    "flux_drift_bz",
+    "dissipation_kinetic",
+    "dissipation_magnetic",
+    "energy_budget_residual",
+    "spectral_tail_x",
+    "spectral_tail_y",
+    "spectral_tail_z",
+    "mode_occupancy"
+  ],
+  "expected_oracle": {
+    "type": "mri_saturation_ladder",
+    "source": "fixed-rotation zero-net-flux survival scout paired with shearpy multiplane_v2",
+    "plan_inventory_id": "pcf_MRI_ZNF_scout_v1",
+    "fallback_rungs": [1, 2, 3],
+    "divergence_b_guard_l2": 1e-12
+  },
+  "tolerance_model": {
+    "kind": "dns-production",
+    "scalars": {
+      "divergence_b_l2": 1e-10,
+      "divergence_u_l2": 1e-10,
+      "kinetic_energy": 1e-06,
+      "magnetic_energy": 1e-06,
+      "mag_energy_fluct": 1e-06,
+      "maxwell_stress_xy": 1e-06,
+      "reynolds_stress": 1e-06,
+      "total_stress": 1e-06,
+      "alpha_Sh": 1e-06,
+      "channel_kz1_velocity_rms": 1e-06,
+      "channel_kz1_magnetic_rms": 1e-06,
+      "channel_kz1_total_rms": 1e-06,
+      "mean_bx": 1e-06,
+      "mean_by": 1e-06,
+      "mean_bz": 1e-06
+    }
+  },
+  "golden": {
+    "artifact_id": "pcf_mri_znf_scout_v1",
+    "regeneration_command": ".venv/bin/python production/run_problem.py --config production/runs/pcf_mri_znf_scout_v1.json --out runs/pcf_mri_znf_scout_v1/full --device gpu --profiles-every 1000 --diagnostics-every 100 --write-golden"
+  },
+  "unsupported_subcases": [
+    "radial shearing-periodic boundaries are not represented by wall-bounded PCF"
+  ]
+}

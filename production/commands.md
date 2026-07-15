@@ -1,5 +1,54 @@
 # jaxfun production commands
 
+## PCF zero-net-flux MRI scout
+
+The fixed-rotation scout uses conducting walls, `S=1`, `Omega=2/3`
+(`q=1.5`, `R_Omega=-4/3`), `Re=2000`, `Rm=6000`, and no imposed net
+field. Its seed is `B_z=0.1 sin(pi x/h)`, represented as `curl(A)`.
+
+Run the bounded operational check before moving to the GPU server:
+
+```bash
+.venv/bin/python -m production.run_problem \
+  --config production/runs/pcf_mri_znf_scout_v1.json \
+  --out runs/pcf_mri_znf_scout_v1/smoke \
+  --device cpu --resolution-tier smoke --steps 2 \
+  --profiles-every 1 --diagnostics-every 1
+```
+
+For an H100 start-tier scout, retain restart, snapshot, scalar, and multiplane
+artifacts explicitly:
+
+```bash
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+.venv/bin/python -m production.run_problem \
+  --config production/runs/pcf_mri_znf_scout_v1.json \
+  --out runs/pcf_mri_znf_scout_v1/start \
+  --device gpu --resolution-tier start \
+  --checkpoint-every 1000 --snapshot-every 1000 \
+  --profiles-every 1000 --diagnostics-every 100
+```
+
+The same cadences pass through sweep execution. For example, a one-point
+operational launch is:
+
+```bash
+.venv/bin/python -m production.sweep \
+  --base production/runs/pcf_mri_znf_scout_v1.json \
+  --out runs/pcf_mri_znf_scout_v1/sweep \
+  --set Rm_h=6000 --execute --resolution-tier start \
+  --checkpoint-every 1000 --snapshot-every 1000 \
+  --profiles-every 1000 --diagnostics-every 100
+```
+
+The PCF `multiplane_v2` file is written to
+`profiles/multiplane_v2.h5`. It preserves shearpy's 33 channel names and its
+`z_profile`, `xy`, `xz`, and `yz` products. PCF wall-normal means use Galerkin
+quadrature; periodic means are arithmetic. Velocity channels are perturbations
+about `U_y=-S x`, while magnetic channels contain the represented total field.
+EMF channels use total velocity crossed with total represented magnetic field,
+matching the induction equation and retaining the base-shear contribution.
+
 ## Contract and comparator smoke
 
 ```bash

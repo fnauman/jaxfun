@@ -375,6 +375,23 @@ class KMM:
             self.TD.backward(u[2], N=counts),
         )
 
+    def velocity_vorticity_physical(
+        self, u: Velocity, *, padded: bool = False
+    ) -> Velocity:
+        """Return curl(u) on the requested physical quadrature mesh."""
+
+        counts = self.padding_counts if padded else None
+        spaces = (self.TB, self.TD, self.TD)
+
+        def derivative(component: int, order: tuple[int, int, int]) -> Array:
+            return spaces[component].backward_primitive(u[component], order, N=counts)
+
+        return (
+            derivative(2, (0, 1, 0)) - derivative(1, (0, 0, 1)),
+            derivative(0, (0, 0, 1)) - derivative(2, (1, 0, 0)),
+            derivative(1, (1, 0, 0)) - derivative(0, (0, 1, 0)),
+        )
+
     def _velocity_gradients(self, u: Velocity) -> dict[str, Array]:
         counts = self.padding_counts
         return {
