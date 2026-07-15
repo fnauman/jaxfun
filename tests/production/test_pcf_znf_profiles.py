@@ -67,6 +67,7 @@ def test_multiplane_v2_shapes_and_append_layout(tmp_path: Path) -> None:
     assert all(
         np.all(np.isfinite(profiles[name])) for name in ("z_profile", "xy", "xz", "yz")
     )
+    assert all(np.isrealobj(profiles[name]) for name in ("z_profile", "xy", "xz", "yz"))
 
     path = tmp_path / "profiles" / "multiplane_v2.h5"
     write_pcf_multiplane_h5(path, profiles=profiles, t=0.0, tstep=0)
@@ -80,6 +81,9 @@ def test_multiplane_v2_shapes_and_append_layout(tmp_path: Path) -> None:
         assert group["xy"].shape == (2, 33, 9, 8)
         assert group["xz"].shape == (2, 33, 9, 8)
         assert group["yz"].shape == (2, 33, 8, 8)
+        assert all(
+            group[name].dtype.kind == "f" for name in ("z_profile", "xy", "xz", "yz")
+        )
         assert handle["meta"].attrs["format_version"] == 2
         assert json.loads(group.attrs["channels_json"]) == list(
             MULTIPLANE_PROFILE_CHANNELS

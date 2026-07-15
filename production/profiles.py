@@ -68,17 +68,29 @@ def pcf_multiplane_profiles(solver: Any, state: Any) -> dict[str, Any]:
     contributions.
     """
 
-    u = tuple(solver._backward_velocity(state.flow.u))
-    u_total = tuple(solver.total_velocity_physical(state.flow))
+    u = tuple(
+        jnp.real(component) for component in solver._backward_velocity(state.flow.u)
+    )
+    u_total = tuple(
+        jnp.real(component) for component in solver.total_velocity_physical(state.flow)
+    )
     b_coeff = tuple(solver.update_B_from_A(state.A))
-    b_fluctuation = tuple(solver._backward_B(b_coeff, padded=False))
+    b_fluctuation = tuple(
+        jnp.real(component) for component in solver._backward_B(b_coeff, padded=False)
+    )
     background = tuple(getattr(solver, "background_b", (0.0, 0.0, 0.0)))
     b = tuple(
         component + background[index] for index, component in enumerate(b_fluctuation)
     )
-    omega = tuple(solver.velocity_vorticity_physical(state.flow.u))
+    omega = tuple(
+        jnp.real(component)
+        for component in solver.velocity_vorticity_physical(state.flow.u)
+    )
     current_coeff = tuple(solver.update_J_from_B(b_coeff))
-    current = tuple(solver._backward_J(current_coeff, padded=False))
+    current = tuple(
+        jnp.real(component)
+        for component in solver._backward_J(current_coeff, padded=False)
+    )
     emf = tuple(physical_cross(u_total, b))
     kinetic = tuple(0.5 * component * component for component in u)
     magnetic = tuple(0.5 * component * component for component in b)
