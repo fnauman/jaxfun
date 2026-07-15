@@ -33,6 +33,7 @@ def _solver() -> PlaneCouetteMRIShearpyJax:
         perturbation_amplitude=1.0e-3,
         magnetic_amplitude=0.1,
         magnetic_seed="sinusoidal_bz_x",
+        solenoidal_velocity_seed=True,
     )
 
 
@@ -93,6 +94,7 @@ def test_scout_spec_is_wired_to_vector_potential_sources() -> None:
     assert effective.spec["nondimensional_groups"]["Omega"] == pytest.approx(2.0 / 3.0)
     assert effective.spec["nondimensional_groups"]["S"] == 1.0
     assert effective.spec["initial_condition"]["magnetic_seed"] == "sinusoidal_bz_x"
+    assert effective.spec["initial_condition"]["solenoidal_velocity_seed"] is True
     assert effective.metadata["solver_source_files"] == [
         "examples/pcf_mhd_jax.py",
         "examples/pcf_mhd_mri_shearpy_jax.py",

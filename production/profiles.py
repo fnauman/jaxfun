@@ -1,7 +1,7 @@
 """Wall-bounded PCF counterpart of shearpy's ``multiplane_v2`` output.
 
 The channel names and plane layout intentionally match shearpy so analysis code
-can consume both files.  The coordinate metadata remains honest about the
+can consume both files. The coordinate metadata remains honest about the
 physical difference: PCF is already in a fixed wall-bounded Cartesian frame,
 and means over the wall-normal direction use the Galerkin quadrature weights.
 """
@@ -14,6 +14,8 @@ from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
+
+from jaxfun.integrators.nonlinear import physical_cross
 
 MULTIPLANE_PROFILE_CHANNELS = (
     "u_x",
@@ -52,47 +54,32 @@ MULTIPLANE_PROFILE_CHANNELS = (
 )
 
 _STRESS_PAIRS = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
-
-
-def _curl_from_coefficients(
-    coefficients: tuple[Any, Any, Any],
-    spaces: tuple[Any, Any, Any],
-    counts: tuple[int, ...],
-) -> tuple[Any, Any, Any]:
-    """Evaluate a spectral curl on the standard PCF output mesh."""
-
-    d = lambda component, derivative: spaces[component].backward_primitive(  # noqa: E731
-        coefficients[component], derivative, N=counts
-    )
-    return (
-        d(2, (0, 1, 0)) - d(1, (0, 0, 1)),
-        d(0, (0, 0, 1)) - d(2, (1, 0, 0)),
-        d(1, (1, 0, 0)) - d(0, (0, 1, 0)),
-    )
+_PROFILE_RECORDS = ("z_profile", "xy", "xz", "yz")
+_ROOT_RECORDS = ("time", "tstep")
 
 
 def pcf_multiplane_profiles(solver: Any, state: Any) -> dict[str, Any]:
     """Compute the 33-channel multiplane bundle for a PCF curl state.
 
-    Velocity is the perturbation about ``U_y=-S*x`` and magnetic field is the
-    represented total field (the configured uniform background is included).
-    This matches shearpy's configured-fluctuation EMF convention while keeping
-    mean-flux diagnostics physically meaningful for net-flux runs.
+    Velocity and Reynolds channels are perturbations about the Couette base
+    flow. Magnetic channels contain the represented field plus any configured
+    uniform background. EMF uses the same total-velocity/total-field cross
+    product as the induction equation, so profile budgets retain base-shear
+    contributions.
     """
 
-    counts = tuple(int(value) for value in solver.TD.num_quad_points)
     u = tuple(solver._backward_velocity(state.flow.u))
+    u_total = tuple(solver.total_velocity_physical(state.flow))
     b_coeff = tuple(solver.update_B_from_A(state.A))
-    b = tuple(solver._total_B_physical(b_coeff, padded=False))
-    omega = _curl_from_coefficients(
-        tuple(state.flow.u), (solver.TB, solver.TD, solver.TD), counts
+    b_fluctuation = tuple(solver._backward_B(b_coeff, padded=False))
+    background = tuple(getattr(solver, "background_b", (0.0, 0.0, 0.0)))
+    b = tuple(
+        component + background[index] for index, component in enumerate(b_fluctuation)
     )
-    current = _curl_from_coefficients(b_coeff, tuple(solver.b_coeff_spaces), counts)
-    emf = (
-        u[1] * b[2] - u[2] * b[1],
-        u[2] * b[0] - u[0] * b[2],
-        u[0] * b[1] - u[1] * b[0],
-    )
+    omega = tuple(solver.velocity_vorticity_physical(state.flow.u))
+    current_coeff = tuple(solver.update_J_from_B(b_coeff))
+    current = tuple(solver._backward_J(current_coeff, padded=False))
+    emf = tuple(physical_cross(u_total, b))
     kinetic = tuple(0.5 * component * component for component in u)
     magnetic = tuple(0.5 * component * component for component in b)
     reynolds = tuple(u[i] * u[j] for i, j in _STRESS_PAIRS)
@@ -153,16 +140,69 @@ def _axis(group: Any, name: str, value: Any) -> None:
     group.create_dataset(name, data=data)
 
 
+def _validate_record_layout(handle: Any) -> int:
+    group = handle.get("multiplane_profiles")
+    present = {name for name in _ROOT_RECORDS if name in handle}
+    if group is not None:
+        present.update(name for name in _PROFILE_RECORDS if name in group)
+    expected = {*_ROOT_RECORDS, *_PROFILE_RECORDS}
+    if not present:
+        return 0
+    if present != expected:
+        missing = sorted(expected - present)
+        raise ValueError(f"incomplete multiplane record layout; missing {missing}")
+    lengths = [int(handle[name].shape[0]) for name in _ROOT_RECORDS]
+    lengths.extend(int(group[name].shape[0]) for name in _PROFILE_RECORDS)
+    if len(set(lengths)) != 1:
+        raise ValueError(
+            f"multiplane record datasets have inconsistent lengths {lengths}"
+        )
+    steps = np.asarray(handle["tstep"][...], dtype=np.int64)
+    if len(steps) > 1 and np.any(np.diff(steps) <= 0):
+        raise ValueError("multiplane tsteps must be strictly increasing")
+    return lengths[0]
+
+
+def _resize_records(handle: Any, length: int) -> None:
+    group = handle["multiplane_profiles"]
+    for name in _ROOT_RECORDS:
+        dataset = handle[name]
+        dataset.resize((length, *dataset.shape[1:]))
+    for name in _PROFILE_RECORDS:
+        dataset = group[name]
+        dataset.resize((length, *dataset.shape[1:]))
+
+
+def truncate_pcf_multiplane_h5(path: str | Path, *, after_tstep: int) -> Path:
+    """Discard profile records newer than a resume checkpoint."""
+
+    import h5py
+
+    path = Path(path)
+    if not path.exists():
+        return path
+    with h5py.File(path, "r+") as handle:
+        count = _validate_record_layout(handle)
+        if count == 0:
+            return path
+        steps = np.asarray(handle["tstep"][...], dtype=np.int64)
+        keep = int(np.searchsorted(steps, int(after_tstep), side="right"))
+        if keep < count:
+            _resize_records(handle, keep)
+    return path
+
+
 def write_pcf_multiplane_h5(
     path: str | Path, *, profiles: dict[str, Any], t: float, tstep: int
 ) -> Path:
-    """Append one PCF multiplane record using the shearpy-compatible layout."""
+    """Append or replace one profile record while keeping tsteps monotonic."""
 
     import h5py
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "a") as handle:
+        count = _validate_record_layout(handle)
         meta = handle.require_group("meta")
         group = handle.require_group("multiplane_profiles")
         channels = tuple(profiles["channels"])
@@ -183,10 +223,18 @@ def write_pcf_multiplane_h5(
         meta.attrs["coordinate_frame"] = "wall_bounded_cartesian"
         meta.attrs["velocity_convention"] = "perturbation_about_Uy=-S*x"
         meta.attrs["magnetic_convention"] = "total_represented_field"
+        meta.attrs["emf_convention"] = "total_velocity_cross_total_represented_field"
 
         for axis in ("x", "y", "z"):
             _axis(group, axis, profiles[axis])
-        for plane in ("z_profile", "xy", "xz", "yz"):
+
+        if count:
+            steps = np.asarray(handle["tstep"][...], dtype=np.int64)
+            insertion = int(np.searchsorted(steps, int(tstep), side="left"))
+            if insertion < count:
+                _resize_records(handle, insertion)
+
+        for plane in _PROFILE_RECORDS:
             _append_row(group, plane, profiles[plane])
         _append_row(handle, "time", np.asarray(float(t)))
         _append_row(handle, "tstep", np.asarray(int(tstep), dtype=np.int64))

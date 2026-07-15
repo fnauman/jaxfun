@@ -46,6 +46,8 @@ The PCF `multiplane_v2` file is written to
 `z_profile`, `xy`, `xz`, and `yz` products. PCF wall-normal means use Galerkin
 quadrature; periodic means are arithmetic. Velocity channels are perturbations
 about `U_y=-S x`, while magnetic channels contain the represented total field.
+EMF channels use total velocity crossed with total represented magnetic field,
+matching the induction equation and retaining the base-shear contribution.
 
 ## Contract and comparator smoke
 

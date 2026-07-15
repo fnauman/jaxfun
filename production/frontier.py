@@ -334,25 +334,29 @@ def execute_frontier_sweep(
     if axis in fixed:
         raise FrontierRefinementError("frontier axis cannot also be a fixed override")
     base_spec = load_spec(base_spec_path)
-    request_hash = _payload_hash(
-        {
-            "schema_version": FRONTIER_SCHEMA_VERSION,
-            "base_spec_hash": base_spec["spec_hash"],
-            "axis": axis,
-            "bounds": [low, high],
-            "fixed_overrides": fixed,
-            "abs_tolerance": float(abs_tolerance),
-            "rel_tolerance": float(rel_tolerance),
-            "confidence_z": float(confidence_z),
-            "max_refinements": int(max_refinements),
-            "resolution_tier": resolution_tier,
-            "steps": steps,
-            "checkpoint_every": checkpoint_every,
-            "snapshot_every": snapshot_every,
-            "profiles_every": profiles_every,
-            "diagnostics_every": diagnostics_every,
-        }
+    request_payload = {
+        "schema_version": FRONTIER_SCHEMA_VERSION,
+        "base_spec_hash": base_spec["spec_hash"],
+        "axis": axis,
+        "bounds": [low, high],
+        "fixed_overrides": fixed,
+        "abs_tolerance": float(abs_tolerance),
+        "rel_tolerance": float(rel_tolerance),
+        "confidence_z": float(confidence_z),
+        "max_refinements": int(max_refinements),
+        "resolution_tier": resolution_tier,
+        "steps": steps,
+    }
+    optional_cadences = {
+        "checkpoint_every": checkpoint_every,
+        "snapshot_every": snapshot_every,
+        "profiles_every": profiles_every,
+        "diagnostics_every": diagnostics_every,
+    }
+    request_payload.update(
+        {key: value for key, value in optional_cadences.items() if value is not None}
     )
+    request_hash = _payload_hash(request_payload)
 
     expected_override_keys = {axis, *fixed}
 

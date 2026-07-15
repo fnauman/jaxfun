@@ -1664,6 +1664,7 @@ def _curl_solver_from_spec(spec: dict[str, Any]):
                 else "ax_yz",
             )
         ),
+        solenoidal_velocity_seed=bool(initial.get("solenoidal_velocity_seed", False)),
     )
 
 
@@ -2841,6 +2842,10 @@ def _solve_with_optional_checkpoints(
         diagnostics_path = out_path / "diagnostics.jsonl"
         snapshot_path = out_path / "snapshots" / "snapshots.h5"
         profiles_path = out_path / "profiles" / "multiplane_v2.h5"
+        if profiles_every is not None and profiles_path.exists():
+            from .profiles import truncate_pcf_multiplane_h5
+
+            truncate_pcf_multiplane_h5(profiles_path, after_tstep=int(tstep0))
 
     health_cache: dict[int, dict[str, float]] = {}
     diagnostics_cache: dict[int, Any] = {}
@@ -2956,16 +2961,20 @@ def _solve_with_optional_checkpoints(
             )
 
     def on_output(t: float, tstep: int, output_state: Any) -> None:
+        write_snapshot = (
+            snapshot_every is not None and int(tstep) % int(snapshot_every) == 0
+        )
+        write_profiles = (
+            profiles_every is not None and int(tstep) % int(profiles_every) == 0
+        )
+        if not (write_snapshot or write_profiles):
+            return
         write_outputs(
             t,
             tstep,
             output_state,
-            write_snapshot=(
-                snapshot_every is not None and int(tstep) % int(snapshot_every) == 0
-            ),
-            write_profiles=(
-                profiles_every is not None and int(tstep) % int(profiles_every) == 0
-            ),
+            write_snapshot=write_snapshot,
+            write_profiles=write_profiles,
         )
 
     def on_diagnostics(t: float, tstep: int, diag: Any) -> None:

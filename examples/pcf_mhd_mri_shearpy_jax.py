@@ -52,11 +52,13 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         perturbation_amplitude: float = 0.05,
         magnetic_amplitude: float = 0.0,
         magnetic_seed: str = "ax_yz",
+        solenoidal_velocity_seed: bool = False,
     ) -> None:
         self.omega = float(omega)
         self.shear_rate = float(shear_rate)
         self.background_b = tuple(float(v) for v in background_b)
         self.magnetic_seed = str(magnetic_seed)
+        self.solenoidal_velocity_seed = bool(solenoidal_velocity_seed)
         if self.magnetic_seed not in {"ax_yz", "sinusoidal_bz_x"}:
             raise ValueError("magnetic_seed must be one of {ax_yz, sinusoidal_bz_x}")
         self.x_bounds = (float(domain[0][0]), float(domain[0][1]))
@@ -99,12 +101,26 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         u1 = jnp.zeros_like(u0)
         u2 = jnp.zeros_like(u0)
         if amp != 0.0:
-            for harmonic in (1, 2, 3):
-                u0 = u0 + amp * wall * jnp.cos(harmonic * kz * z)
-                u1 = u1 + amp * wall * jnp.sin(harmonic * kz * z)
-            u0 = u0 + 0.1 * amp * wall * jnp.sin(ky * y) * jnp.cos(kz * z)
-            u1 = u1 + 0.1 * amp * wall * jnp.cos(ky * y) * jnp.sin(kz * z)
-            u2 = u2 + 0.1 * amp * wall * jnp.sin(2.0 * ky * y) * jnp.cos(2.0 * kz * z)
+            if self.solenoidal_velocity_seed:
+                xi = (x - self.x_center) / self.x_half_width
+                solenoidal_wall = wall**2
+                wall_gradient = -4.0 * xi * (1.0 - xi**2) / self.x_half_width
+                for harmonic in (1, 2, 3):
+                    vertical_wavenumber = harmonic * kz
+                    u0 = u0 + amp * solenoidal_wall * jnp.cos(vertical_wavenumber * z)
+                    u1 = u1 + amp * solenoidal_wall * jnp.sin(vertical_wavenumber * z)
+                    u2 = u2 - (amp * wall_gradient / vertical_wavenumber) * (
+                        jnp.sin(vertical_wavenumber * z)
+                    )
+            else:
+                for harmonic in (1, 2, 3):
+                    u0 = u0 + amp * wall * jnp.cos(harmonic * kz * z)
+                    u1 = u1 + amp * wall * jnp.sin(harmonic * kz * z)
+                u0 = u0 + 0.1 * amp * wall * jnp.sin(ky * y) * jnp.cos(kz * z)
+                u1 = u1 + 0.1 * amp * wall * jnp.cos(ky * y) * jnp.sin(kz * z)
+                u2 = u2 + 0.1 * amp * wall * jnp.sin(2.0 * ky * y) * jnp.cos(
+                    2.0 * kz * z
+                )
         flow = self.state_from_physical((u0, u1, u2))
 
         mag_amp = self.magnetic_amplitude

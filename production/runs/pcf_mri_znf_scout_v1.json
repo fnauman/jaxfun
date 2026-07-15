@@ -73,6 +73,7 @@
   "initial_condition": {
     "type": "mri_znf_sinusoidal_bz",
     "magnetic_seed": "sinusoidal_bz_x",
+    "solenoidal_velocity_seed": true,
     "velocity_amplitude": 0.001,
     "magnetic_amplitude": 0.1,
     "reference": "shearpy h100 ZNF scout: Bz=0.1*sin(pi*x/h)"
