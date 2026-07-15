@@ -383,6 +383,7 @@ def run_supported_spec(
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
     snapshot_every: int | None = None,
+    profiles_every: int | None = None,
     diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
@@ -435,19 +436,33 @@ def run_supported_spec(
     if (
         spec.get("representation") == "vector_potential"
         and adaptive_cfl_from_spec(spec) is not None
-        and (checkpoint_every is not None or snapshot_every is not None)
+        and (
+            checkpoint_every is not None
+            or snapshot_every is not None
+            or profiles_every is not None
+        )
     ):
         requested = ", ".join(
             name
             for name, value in (
                 ("checkpoint_every", checkpoint_every),
                 ("snapshot_every", snapshot_every),
+                ("profiles_every", profiles_every),
             )
             if value is not None
         )
         raise ProductionOracleNotImplementedError(
-            "adaptive_cfl does not yet support intermediate checkpoint/snapshot "
+            "adaptive_cfl does not yet support intermediate "
+            "checkpoint/snapshot/profile "
             f"cadence ({requested}); remove those options or use fixed dt"
+        )
+
+    if profiles_every is not None and not (
+        spec["geometry"] == "pcf" and spec.get("representation") == "vector_potential"
+    ):
+        raise ProductionOracleNotImplementedError(
+            "multiplane_v2 profile cadence is currently supported only by "
+            "the PCF vector-potential family"
         )
 
     if (
@@ -589,6 +604,7 @@ def run_supported_spec(
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
+            profiles_every=profiles_every,
             diagnostics_every=diagnostics_every,
             device_record=device_record,
             resume_checkpoint=resume_checkpoint,
@@ -1640,6 +1656,14 @@ def _curl_solver_from_spec(spec: dict[str, Any]):
         ),
         perturbation_amplitude=float(initial.get("velocity_amplitude", 0.05)),
         magnetic_amplitude=float(initial.get("magnetic_amplitude", 0.0)),
+        magnetic_seed=str(
+            initial.get(
+                "magnetic_seed",
+                "sinusoidal_bz_x"
+                if initial.get("type") == "mri_znf_sinusoidal_bz"
+                else "ax_yz",
+            )
+        ),
     )
 
 
@@ -1672,6 +1696,9 @@ def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
         "reynolds_stress": float(diag["reynolds_stress"]),
         "total_stress": float(diag["total_stress"]),
         "alpha_Sh": float(diag["alpha_Sh"]),
+        "channel_kz1_velocity_rms": float(diag["channel_kz1_velocity_rms"]),
+        "channel_kz1_magnetic_rms": float(diag["channel_kz1_magnetic_rms"]),
+        "channel_kz1_total_rms": float(diag["channel_kz1_total_rms"]),
         # FJ-04 mean-flux / mean-fluctuating split (mean-flux contamination monitor)
         "mean_bx": float(diag["mean_bx"]),
         "mean_by": float(diag["mean_by"]),
@@ -1694,6 +1721,7 @@ def _run_pcf_vector_potential_mhd_saturation(
     out_dir: str | Path | None = None,
     checkpoint_every: int | None = None,
     snapshot_every: int | None = None,
+    profiles_every: int | None = None,
     diagnostics_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
@@ -1763,6 +1791,9 @@ def _run_pcf_vector_potential_mhd_saturation(
             "maxwell_stress_xy": float(diag["maxwell_stress"]),
             "total_stress": float(diag["total_stress"]),
             "alpha_Sh": float(diag["alpha_Sh"]),
+            "channel_kz1_velocity_rms": float(diag["channel_kz1_velocity_rms"]),
+            "channel_kz1_magnetic_rms": float(diag["channel_kz1_magnetic_rms"]),
+            "channel_kz1_total_rms": float(diag["channel_kz1_total_rms"]),
             "mean_bx": float(diag["mean_bx"]),
             "mean_by": float(diag["mean_by"]),
             "mean_bz": float(diag["mean_bz"]),
@@ -1821,6 +1852,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             out_dir=out_dir,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
+            profiles_every=profiles_every,
             diagnostics_every=diagnostics_every,
             state_kind="pcf_vector_potential_mhd_saturation",
             device_record=device_record,
@@ -2752,6 +2784,7 @@ def _solve_with_optional_checkpoints(
     snapshot_every: int | None,
     diagnostics_every: int | None,
     state_kind: str,
+    profiles_every: int | None = None,
     device_record: dict[str, Any] | None = None,
     on_diagnostics_row: Any | None = None,
     t0: float = 0.0,
@@ -2767,23 +2800,32 @@ def _solve_with_optional_checkpoints(
         raise ValueError("checkpoint_every must be positive")
     if snapshot_every is not None and snapshot_every <= 0:
         raise ValueError("snapshot_every must be positive")
+    if profiles_every is not None and profiles_every <= 0:
+        raise ValueError("profiles_every must be positive")
     if diagnostics_every is not None and diagnostics_every <= 0:
         raise ValueError("diagnostics_every must be positive")
-    if (checkpoint_every is not None or snapshot_every is not None) and out_dir is None:
+    if (
+        checkpoint_every is not None
+        or snapshot_every is not None
+        or profiles_every is not None
+    ) and out_dir is None:
         raise ValueError(
-            "out_dir is required when checkpoint or snapshot output is set"
+            "out_dir is required when checkpoint, snapshot, or profile output is set"
         )
 
     monitor_every = _monitor_every(
         steps,
         checkpoint_every=checkpoint_every,
         snapshot_every=snapshot_every,
+        profiles_every=profiles_every,
         diagnostics_every=diagnostics_every,
     )
     if (
         monitor_every is None
         and health_block is None
-        and not (checkpoint_every or snapshot_every or diagnostics_every)
+        and not (
+            checkpoint_every or snapshot_every or profiles_every or diagnostics_every
+        )
     ):
         return solver.solve(state, steps)
 
@@ -2793,10 +2835,12 @@ def _solve_with_optional_checkpoints(
     checkpoint_path = None
     diagnostics_path = None
     snapshot_path = None
+    profiles_path = None
     if out_path is not None:
         checkpoint_path = out_path / "checkpoints" / "checkpoints.h5"
         diagnostics_path = out_path / "diagnostics.jsonl"
         snapshot_path = out_path / "snapshots" / "snapshots.h5"
+        profiles_path = out_path / "profiles" / "multiplane_v2.h5"
 
     health_cache: dict[int, dict[str, float]] = {}
     diagnostics_cache: dict[int, Any] = {}
@@ -2866,32 +2910,62 @@ def _solve_with_optional_checkpoints(
                 ),
             )
 
-    def on_snapshot(t: float, tstep: int, snapshot_state: Any) -> None:
-        assert snapshot_path is not None
-        # Snapshot callbacks run before should_stop. Guard the candidate state
-        # before creating output so a rejected state cannot leave a shard or
-        # enter the promotable snapshot index.
+    def write_outputs(
+        t: float,
+        tstep: int,
+        output_state: Any,
+        *,
+        write_snapshot: bool,
+        write_profiles: bool,
+    ) -> None:
+        # Output callbacks run before should_stop. Guard the candidate state
+        # before creating any artifact so a rejected state cannot persist.
         _raise_on_divergence_drift(
             solver,
-            snapshot_state,
+            output_state,
             t=t,
             tstep=tstep,
             diagnostics=diagnostics_cache.get(int(tstep)),
             magnetic_limit=magnetic_divergence_limit,
         )
-        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        snapshot_payload, snapshot_spaces = _snapshot_payload(solver, snapshot_state)
-        _write_atomic_uniform_snapshot(
-            snapshot_path,
-            snapshot_payload,
-            t=t,
-            tstep=tstep,
-            spaces=snapshot_spaces,
-            attrs={
-                "problem_id": spec["problem_id"],
-                "spec_hash": spec["spec_hash"],
-                "state_kind": state_kind,
-            },
+        if write_snapshot:
+            assert snapshot_path is not None
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_payload, snapshot_spaces = _snapshot_payload(solver, output_state)
+            _write_atomic_uniform_snapshot(
+                snapshot_path,
+                snapshot_payload,
+                t=t,
+                tstep=tstep,
+                spaces=snapshot_spaces,
+                attrs={
+                    "problem_id": spec["problem_id"],
+                    "spec_hash": spec["spec_hash"],
+                    "state_kind": state_kind,
+                },
+            )
+        if write_profiles:
+            assert profiles_path is not None
+            from .profiles import pcf_multiplane_profiles, write_pcf_multiplane_h5
+
+            write_pcf_multiplane_h5(
+                profiles_path,
+                profiles=pcf_multiplane_profiles(solver, output_state),
+                t=t,
+                tstep=tstep,
+            )
+
+    def on_output(t: float, tstep: int, output_state: Any) -> None:
+        write_outputs(
+            t,
+            tstep,
+            output_state,
+            write_snapshot=(
+                snapshot_every is not None and int(tstep) % int(snapshot_every) == 0
+            ),
+            write_profiles=(
+                profiles_every is not None and int(tstep) % int(profiles_every) == 0
+            ),
         )
 
     def on_diagnostics(t: float, tstep: int, diag: Any) -> None:
@@ -2927,9 +3001,17 @@ def _solve_with_optional_checkpoints(
         evaluate_health(t, tstep, candidate_state)
         return False
 
+    output_cadences = [
+        int(value) for value in (snapshot_every, profiles_every) if value is not None
+    ]
+    output_every = (
+        math.gcd(*output_cadences)
+        if len(output_cadences) == 2
+        else (output_cadences[0] if output_cadences else None)
+    )
     cadence = Cadence(
         diagnostics_every=diagnostics_every,
-        snapshot_every=snapshot_every,
+        snapshot_every=output_every,
         checkpoint_every=checkpoint_every,
     )
     block_size = monitor_every or max(1, int(steps))
@@ -2943,7 +3025,7 @@ def _solve_with_optional_checkpoints(
         on_diagnostics=on_diagnostics
         if diagnostics_every is not None and on_diagnostics_row is not None
         else None,
-        on_snapshot=on_snapshot if snapshot_every is not None else None,
+        on_snapshot=on_output if output_every is not None else None,
         on_checkpoint=on_checkpoint if checkpoint_every is not None else None,
         should_stop=should_stop,
         t0=float(t0),
@@ -2958,7 +3040,15 @@ def _solve_with_optional_checkpoints(
     if snapshot_every is not None and (
         steps == 0 or final_tstep % int(snapshot_every) != 0
     ):
-        on_snapshot(final_t, final_tstep, out)
+        write_outputs(
+            final_t, final_tstep, out, write_snapshot=True, write_profiles=False
+        )
+    if profiles_every is not None and (
+        steps == 0 or final_tstep % int(profiles_every) != 0
+    ):
+        write_outputs(
+            final_t, final_tstep, out, write_snapshot=False, write_profiles=True
+        )
     if snapshot_path is not None and snapshot_path.exists():
         xdmf_path = generate_xdmf(snapshot_path)
         _write_snapshot_manifest(
@@ -3044,10 +3134,16 @@ def _monitor_every(
     checkpoint_every: int | None,
     snapshot_every: int | None,
     diagnostics_every: int | None,
+    profiles_every: int | None = None,
 ) -> int | None:
     candidates = [
         value
-        for value in (checkpoint_every, snapshot_every, diagnostics_every)
+        for value in (
+            checkpoint_every,
+            snapshot_every,
+            profiles_every,
+            diagnostics_every,
+        )
         if value is not None and value > 0
     ]
     if candidates:

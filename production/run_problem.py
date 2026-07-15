@@ -121,6 +121,7 @@ def run_problem(
     additional_steps: int | None = None,
     checkpoint_every: int | None = None,
     snapshot_every: int | None = None,
+    profiles_every: int | None = None,
     diagnostics_every: int | None = None,
     resolution_tier: str | None = None,
     validate_only: bool = False,
@@ -227,6 +228,7 @@ def run_problem(
             additional_steps=additional_steps,
             checkpoint_every=checkpoint_every,
             snapshot_every=snapshot_every,
+            profiles_every=profiles_every,
             diagnostics_every=effective_diagnostics_every,
             resolution_tier=resolution_tier,
             validate_only=validate_only,
@@ -284,6 +286,7 @@ def run_problem(
                 out_dir=out_dir,
                 checkpoint_every=checkpoint_every,
                 snapshot_every=snapshot_every,
+                profiles_every=profiles_every,
                 diagnostics_every=effective_diagnostics_every,
                 device_record=device_record,
                 resume_checkpoint=resume_record,
@@ -404,6 +407,9 @@ def run_problem(
             xdmf_path = snapshot_path.with_suffix(".xdmf")
             if xdmf_path.exists():
                 metadata["snapshot_xdmf_path"] = str(xdmf_path)
+        profiles_path = out_dir / "profiles" / "multiplane_v2.h5"
+        if profiles_path.exists():
+            metadata["profiles_path"] = str(profiles_path)
 
         if compare_golden:
             result = _compare_diagnostics(
@@ -462,6 +468,7 @@ def build_metadata(
     additional_steps: int | None,
     checkpoint_every: int | None,
     snapshot_every: int | None,
+    profiles_every: int | None,
     diagnostics_every: int | None,
     resolution_tier: str | None,
     validate_only: bool,
@@ -505,6 +512,7 @@ def build_metadata(
             "additional_steps": additional_steps,
             "checkpoint_every": checkpoint_every,
             "snapshot_every": snapshot_every,
+            "profiles_every": profiles_every,
             "diagnostics_every": diagnostics_every,
             "resolution_tier": resolution_tier,
             "resume": None if resume is None else str(resume),
@@ -1639,6 +1647,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--checkpoint-every", type=int)
     parser.add_argument("--snapshot-every", type=int)
+    parser.add_argument(
+        "--profiles-every",
+        type=int,
+        help="Write PCF multiplane_v2 profiles at this fixed-step cadence.",
+    )
     parser.add_argument("--diagnostics-every", type=int)
     parser.add_argument(
         "--resolution-tier",
@@ -1810,6 +1823,7 @@ def main(argv: list[str] | None = None) -> int:
                 additional_steps=args.additional_steps,
                 checkpoint_every=args.checkpoint_every,
                 snapshot_every=args.snapshot_every,
+                profiles_every=args.profiles_every,
                 diagnostics_every=args.diagnostics_every,
                 resolution_tier=args.resolution_tier,
                 validate_only=args.validate_only,

@@ -311,6 +311,10 @@ def execute_frontier_sweep(
     runner: Any | None = None,
     resolution_tier: str | None = None,
     steps: int | None = None,
+    checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    profiles_every: int | None = None,
+    diagnostics_every: int | None = None,
     wandb: bool = False,
 ) -> dict[str, Any]:
     """Execute/resume a one-axis bisection until a safe terminal decision."""
@@ -343,6 +347,10 @@ def execute_frontier_sweep(
             "max_refinements": int(max_refinements),
             "resolution_tier": resolution_tier,
             "steps": steps,
+            "checkpoint_every": checkpoint_every,
+            "snapshot_every": snapshot_every,
+            "profiles_every": profiles_every,
+            "diagnostics_every": diagnostics_every,
         }
     )
 
@@ -419,6 +427,10 @@ def execute_frontier_sweep(
             runner=runner,
             resolution_tier=resolution_tier,
             steps=steps,
+            checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            profiles_every=profiles_every,
+            diagnostics_every=diagnostics_every,
             wandb=wandb,
         )
         entries = requested_entries(

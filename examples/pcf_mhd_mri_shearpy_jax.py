@@ -51,10 +51,14 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         perturbation_amplitude: float = 0.05,
         magnetic_amplitude: float = 0.0,
+        magnetic_seed: str = "ax_yz",
     ) -> None:
         self.omega = float(omega)
         self.shear_rate = float(shear_rate)
         self.background_b = tuple(float(v) for v in background_b)
+        self.magnetic_seed = str(magnetic_seed)
+        if self.magnetic_seed not in {"ax_yz", "sinusoidal_bz_x"}:
+            raise ValueError("magnetic_seed must be one of {ax_yz, sinusoidal_bz_x}")
         self.x_bounds = (float(domain[0][0]), float(domain[0][1]))
         self.x_center = 0.5 * (self.x_bounds[0] + self.x_bounds[1])
         self.x_half_width = 0.5 * (self.x_bounds[1] - self.x_bounds[0])
@@ -107,8 +111,15 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         ax = jnp.zeros(self.TD.num_quad_points)
         ay = jnp.zeros_like(ax)
         az = jnp.zeros_like(ax)
-        if mag_amp != 0.0:
+        if mag_amp != 0.0 and self.magnetic_seed == "ax_yz":
             ax = mag_amp * wall * (1.0 / kz) * jnp.sin(ky * y) * jnp.sin(kz * z)
+        elif mag_amp != 0.0:
+            # Standard zero-net-flux vertical field: Bz = d_x Ay =
+            # mag_amp*sin(pi*x/h). Ay vanishes at both conducting walls.
+            xi = (x - self.x_center) / self.x_half_width
+            ay = ay - (mag_amp * self.x_half_width / jnp.pi) * (
+                jnp.cos(jnp.pi * xi) + 1.0
+            )
         return MHDState(flow=flow, A=self._A_state_from_physical((ax, ay, az)))
 
     def _total_B_physical(self, B, padded: bool = False):
@@ -169,6 +180,21 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
                 )
         return self.nu * diss_kinetic, self.eta * diss_magnetic
 
+    def _kz1_rms(self, fields) -> jnp.ndarray:
+        """RMS amplitude of the axisymmetric fundamental vertical mode."""
+
+        nz = int(fields[0].shape[2])
+        if nz < 2:
+            return jnp.asarray(0.0)
+        wall_weights = jnp.asarray(self.TD.basespaces[0].integration_weights())
+        wall_weights = wall_weights / jnp.sum(wall_weights)
+        power = jnp.asarray(0.0, dtype=jnp.real(fields[0]).dtype)
+        for field in fields:
+            profile = jnp.mean(jnp.real(field), axis=1)
+            coefficient = jnp.fft.fft(profile, axis=1)[:, 1] / nz
+            power = power + 2.0 * jnp.sum(wall_weights * jnp.abs(coefficient) ** 2)
+        return jnp.sqrt(power)
+
     def diagnostics(self, state: MHDState) -> dict[str, jnp.ndarray]:
         diag = super().diagnostics(state)
         up = self._backward_velocity(state.flow.u)
@@ -190,6 +216,8 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         for bi, space in zip(bp, self.b_coeff_spaces, strict=True):
             emag_total = emag_total + jnp.real(integrate(jnp.conj(bi) * bi, space))
         b_fluct = self._backward_B(B, padded=False)
+        channel_kz1_velocity_rms = self._kz1_rms(up)
+        channel_kz1_magnetic_rms = self._kz1_rms(b_fluct)
         diss_kinetic, diss_magnetic = self._dissipation_parts(state, B)
         bmax = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in b_fluct]))
         bmax_total = jnp.max(jnp.asarray([jnp.max(jnp.abs(bi)) for bi in bp]))
@@ -237,6 +265,11 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             "dissipation_magnetic": diss_magnetic,
             "q_shear": jnp.asarray(self.q_shear),
             "kappa2": jnp.asarray(self.kappa2),
+            "channel_kz1_velocity_rms": channel_kz1_velocity_rms,
+            "channel_kz1_magnetic_rms": channel_kz1_magnetic_rms,
+            "channel_kz1_total_rms": jnp.sqrt(
+                channel_kz1_velocity_rms**2 + channel_kz1_magnetic_rms**2
+            ),
         }
         if vA2 > 0.0:
             alpha = transport / vA2

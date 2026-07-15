@@ -365,7 +365,13 @@ class KMM:
         u1 = self.TD.mask_nyquist(self.TD.forward(u_phys[1]))
         u2 = self.TD.mask_nyquist(self.TD.forward(u_phys[2]))
         g = self.TD.mask_nyquist(1j * self.K[1] * u2 - 1j * self.K[2] * u1)
-        return KMMState(u=(u0, u1, u2), g=g)
+        # KMM evolves wall-normal velocity and wall-normal vorticity. Rebuild
+        # the transverse components immediately so the initial state satisfies
+        # continuity, instead of waiting for the first time step to project it.
+        u = self._reconstruct_velocity(
+            u0, g, jnp.real(u1[:, 0, 0]), jnp.real(u2[:, 0, 0])
+        )
+        return KMMState(u=u, g=g)
 
     def _backward_velocity(self, u: Velocity, padded: bool = False) -> Velocity:
         counts = self.padding_counts if padded else None

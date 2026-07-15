@@ -50,6 +50,7 @@ JAXFUN_IMPLEMENTED_ORACLES = {
     "pcf_mhd_conducting_v1": {"pcf_mhd_linear_conducting"},
     "pcf_mhd_divfree": {"gpu_generated_saturated_dns"},
     "pcf_mri_primitive_dns_v1": {"pcf_mri_dns_growth"},
+    "pcf_mri_znf_scout_v1": {"mri_saturation_ladder"},
     "pcf_mri_shearbox_v1": {"local_ideal_mri"},
     "pipe_hagen_poiseuille_v1": {"hagen_poiseuille"},
     "pipe_womersley_v1": {"pipe_womersley"},
