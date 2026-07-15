@@ -1,4 +1,6 @@
+import jax
 import jax.numpy as jnp
+import pytest
 
 from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
 
@@ -28,3 +30,31 @@ def test_pcf_mhd_mri_shearpy_defaults_match_reference():
 
     assert solver.background_b == (0.0, 0.0, 0.025)
     assert solver.magnetic_amplitude == 0.0
+
+
+@pytest.mark.gpu
+def test_pcf_mhd_mri_step_has_bounded_gpu_temporary_memory() -> None:
+    solver = PlaneCouetteMRIShearpyJax(
+        N=(17, 16, 16),
+        domain=((-1.0, 1.0), (0.0, 4.0), (0.0, 1.0)),
+        Re=2000.0,
+        Rm=6000.0,
+        omega=2.0 / 3.0,
+        shear_rate=1.0,
+        background_b=(0.0, 0.0, 0.0),
+        dt=1.0e-3,
+        family="L",
+        padding_factor=(1.0, 1.5, 1.5),
+        perturbation_amplitude=1.0e-3,
+        magnetic_amplitude=0.1,
+        magnetic_seed="sinusoidal_bz_x",
+        solenoidal_velocity_seed=True,
+    )
+    state = solver.initial_state()
+    compiled = jax.jit(solver.step).lower(state).compile()
+    analysis = compiled.memory_analysis()
+
+    assert analysis is not None
+    assert analysis.temp_size_in_bytes < 64 * 1024**2
+    out = compiled(state)
+    assert all(bool(jnp.isfinite(leaf).all()) for leaf in jax.tree.leaves(out))
