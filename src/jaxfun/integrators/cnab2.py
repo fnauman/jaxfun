@@ -45,6 +45,7 @@ class ScanRolloutCache[T]:
         if max_entries <= 0:
             raise ValueError("max_entries must be positive")
         self._step = step
+        self._scan_step = jax.checkpoint(step)
         self._max_entries = int(max_entries)
         self._rollouts: OrderedDict[int, Callable[[T], T]] = OrderedDict()
         self._generation = 0
@@ -53,7 +54,7 @@ class ScanRolloutCache[T]:
         self._evictions = 0
 
     def _compile_for_steps(self, steps: int) -> Callable[[T], T]:
-        step = self._step
+        step = self._scan_step
 
         @jax.jit
         def rollout(state: T) -> T:
@@ -95,6 +96,7 @@ class ScanRolloutCache[T]:
             self._clear_compiled(rollout)
         self._rollouts.clear()
         self._step = step
+        self._scan_step = jax.checkpoint(step)
         self._generation += 1
 
     def info(self) -> ScanRolloutCacheInfo:

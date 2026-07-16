@@ -295,10 +295,12 @@ Current implemented entry points:
   `solver_steps`, `ms_per_step`, and `steps_per_second` for DNS paths.
 - PCF KMM and vector-potential rollouts keep a persistent, eight-entry LRU of
   compiled static-length `lax.scan` blocks. Repeated cadence blocks at fixed
-  `dt` reuse those callables instead of constructing a new checkpoint/scan
-  closure. `set_dt()` clears all live variants before rebinding the rebuilt
-  implicit factors, so adaptive runs retain only the current timestep
-  generation. Cache counters are available from `rollout_cache_info()`.
+  `dt` reuse those callables and one persistent checkpointed step instead of
+  constructing a new checkpoint/scan closure. This retains reverse-mode
+  rematerialization without per-block executable growth. `set_dt()` clears all
+  live variants before rebinding the rebuilt implicit factors, so adaptive runs
+  retain only the current timestep generation. Cache counters are available
+  from `rollout_cache_info()`.
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses, compares final numeric diagnostics for CPU/GPU agreement checks, and records left/right wall times plus speedup; production run specs can pass `--resolution-tier smoke|start|production` plus `--steps` for bounded agreement evidence. Same-backend comparisons fail by default; pass `--allow-same-backend` only for intentional CPU/CPU smoke checks.
 - `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, fallback rung fields, and failed comparison details. `production/validate_gpu.sh` writes this report before exiting nonzero when an executed run fails.
