@@ -36,8 +36,8 @@ except Exception:
     # Older shenfun releases may not expose cleanup in utilities.
     shenfun_cleanup = None
 
-# Prefer Numba if available; otherwise fall back to Python kernels and
-# switch to Legendre if Chebyshev biharmonic is unavailable.
+# Prefer Numba if available; otherwise use Python kernels. The requested
+# basis family is never changed implicitly.
 PREFER_NUMBA = True
 
 
@@ -51,8 +51,6 @@ def _select_backend_and_family(family):
         else:
             config["optimization"]["mode"] = "python"
             mode = "python"
-    if family.upper().startswith("C") and mode not in ("cython", "numba"):
-        family = "L"
     return family, original_mode, mode
 
 

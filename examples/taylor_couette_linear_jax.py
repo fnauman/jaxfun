@@ -95,7 +95,7 @@ class TaylorCouetteLinearJax:
     Reference: couette/taylor_couette_linear.py:145-252.
     """
 
-    def __init__(self, base: CircularCouette, nu=1.0e-3, N=48, family="L"):
+    def __init__(self, base: CircularCouette, nu=1.0e-3, N=48, family="C"):
         self.base = base
         self.nu = float(nu)
         self.N = int(N)
@@ -365,7 +365,7 @@ def main(argv=None):
     parser.add_argument("--Omega2", type=float, default=0.0)
     parser.add_argument("--nu", type=float, default=2.0e-3)
     parser.add_argument("--N", type=int, default=48)
-    parser.add_argument("--family", choices=["L", "C"], default="L")
+    parser.add_argument("--family", choices=["L", "C"], default="C")
     parser.add_argument("--m", type=int, default=0)
     parser.add_argument("--kz", type=float, default=None)
     parser.add_argument("--kz-min", type=float, default=0.5)

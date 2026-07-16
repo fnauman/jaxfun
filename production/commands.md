@@ -185,10 +185,10 @@ production runner and a 30-minute timeout per run. Use `parity-dns-pcf` or
 make -C production parity-saturation
 ```
 
-This compares current code against the three retained non-quarantined saturation
-goldens (`pcf_fluct_re400`, `tc_supercritical_saturation`,
-`tc_mri_nonlinear_saturation`); the quarantined `exp_pcf_mri_shearbox_growth`
-artifact is excluded so the batch does not error on the quarantine guard. These
+This compares current code against the two retained non-quarantined saturation
+goldens (`tc_supercritical_saturation`, `tc_mri_nonlinear_saturation`). The
+primitive MRI artifact and historical Legendre `pcf_fluct_re400` artifact are
+excluded so the batch does not error on the quarantine guard. These
 remain qualified-candidate / finite-divergence legacy goldens (see
 `production/README.md`), so a green run is a regression pass, not a
 campaign-release certification. It uses the full checked-in saturation specs and

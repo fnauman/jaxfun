@@ -72,7 +72,7 @@ class TaylorCouetteMRIJax:
         nu=1e-3,
         eta_mag=1e-3,
         N=48,
-        family="L",
+        family="C",
         magnetic_bc="conducting",
     ):
         if magnetic_bc not in ("conducting", "insulating"):
@@ -603,7 +603,7 @@ def main(argv=None):
     parser.add_argument("--nu", type=float, default=1e-3)
     parser.add_argument("--eta-mag", type=float, default=1e-3)
     parser.add_argument("--N", type=int, default=48)
-    parser.add_argument("--family", choices=["L", "C"], default="L")
+    parser.add_argument("--family", choices=["L", "C"], default="C")
     parser.add_argument(
         "--magnetic-bc", choices=["conducting", "insulating"], default="conducting"
     )

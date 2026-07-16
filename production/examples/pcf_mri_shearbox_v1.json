@@ -91,7 +91,7 @@
   "problem_id": "pcf_mri_shearbox_v1",
   "random_seed": null,
   "resolution": {
-    "family": "L",
+    "family": "C",
     "nx": 32,
     "ny": 8,
     "nz": 16

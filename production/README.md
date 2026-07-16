@@ -4,10 +4,11 @@ This package is the jaxfun side of the shared shenfun production contract. It
 vendors the neutral problem-spec schema, example specs, 13 committed shenfun
 goldens, and five generated jaxfun saturation artifacts so parity checks do not
 import or require a live shenfun process. None of the five committed saturation
-artifacts is release-ready as-is: one is quarantined (non-solenoidal primitive-`b`
-MRI), one is a failed candidate (decayed below the growth gate), two are
-qualified candidates pending regeneration under the current contract, and one is
-finite-divergence only (saturated but not roundoff-solenoidal). The per-artifact
+artifacts is release-ready as-is: two are quarantined (the non-solenoidal
+primitive-`b` MRI artifact and the historical Legendre PCF artifact), one is a
+failed candidate (decayed below the growth gate), one is a qualified candidate
+pending regeneration under the current contract, and one is finite-divergence
+only (saturated but not roundoff-solenoidal). The per-artifact
 status is in the inventory below.
 
 The intended rotating-MHD campaign compares the Jaxfun plane-Couette and
@@ -47,11 +48,15 @@ conversion multipliers, including the factor-of-two PCF vector-potential energy
 convention and the annular Taylor-Couette volume. See
 [`commands.md`](commands.md) for invocation examples.
 
+## Polynomial-basis default
+
+All implemented wall-bounded production flows default to Chebyshev (`resolution.family="C"`) in the wall-normal or radial direction. Omitting `resolution.family` materializes `C` into the authenticated spec. Legendre remains available only through an explicit `family="L"` request; production drivers never switch basis families silently.
+
 ## Production-run inventory
 
 | problem_id | geometry | physics | solver file | status | fallback rung |
 |---|---|---|---|---|---|
-| `pcf_fluct_re400` | pcf | hydro | `examples/pcf_fluctuations_jax.py` | qualified candidate: runner, smoke coverage, and a legacy full-resolution GPU saturation artifact exist; regenerate under the current contract before release | rung 3 |
+| `pcf_fluct_re400` | pcf | hydro | `examples/pcf_fluctuations_jax.py` | runner and smoke coverage exist; historical full-resolution family=L artifact is quarantined after the Chebyshev-default migration and must be regenerated with family=C | rung 3 |
 | `pcf_mhd_divfree` | pcf | mhd | `examples/pcf_mri_primitive_jax.py` | failed candidate: the direct/primitive-`b` full `N=(32,64,32)` run completed with small finite `div B`, but decayed and failed the saturation growth gate (not a divergence failure) | rung 3 |
 | `exp_pcf_mri_shearbox_growth` | pcf | mri | `examples/pcf_mri_primitive_jax.py` | quarantined: direct/primitive-`b` MRI reached `div B=1.34e-2` by `t=30`; its old saturated artifact is regression-only and forbidden from production seeding | rung 1/2/3 |
 | `exp_pcf_mri_vector_potential` | pcf | mri | `examples/pcf_mhd_mri_shearpy_jax.py` | selected workhorse pending full run: `B=B0+curl(A)`, 300-step CPU qualification and start-tier GPU smoke pass with roundoff `div B`; full-resolution GPU golden still required | rung 1/2/3 |
@@ -235,7 +240,7 @@ committed goldens' semantics; tests: `tests/production/test_adaptive_cfl.py`.
 
 | Geometry | Physics path | Support state | Internal formulation | jaxfun source files | Axis mapping | Boundary/sign conventions | Golden / fallback | Divergence keys | Tests |
 |---|---|---|---|---|---|---|---|---|---|
-| pcf | hydro | qualified_candidate | cheap and linear-window DNS parity, wired nonlinear runner, smoke coverage, and a legacy full GPU saturation artifact; regenerate under the current contract before release | `examples/pcf_fluctuations_jax.py`, `examples/pcf_linear_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip moving walls, `U_b=U_wall*x e_y` | `pcf_hydro_laminar_v1`; DNS `pcf_hydro_primitive_dns_v1`; heavy `pcf_fluct_re400` | `divergence_l2`; DNS `divergence_u` | cheap/DNS parity, smoke, and legacy saturation regressions |
+| pcf | hydro | qualified_candidate | cheap and linear-window DNS parity plus the nonlinear runner and Chebyshev smoke coverage are wired; the old full family=L artifact is quarantined and a full family=C run is required | `examples/pcf_fluctuations_jax.py`, `examples/pcf_linear_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip moving walls, `U_b=U_wall*x e_y` | `pcf_hydro_laminar_v1`; DNS `pcf_hydro_primitive_dns_v1`; heavy `pcf_fluct_re400` | `divergence_l2`; DNS `divergence_u` | cheap/DNS parity, smoke, and legacy saturation regressions |
 | channel | hydro | production_ready_limited_scope | driven KMM pressure-gradient steady state with golden-normalized Poiseuille observables | `examples/channelflow_kmm.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | no-slip walls, pressure-gradient drive | `channel_poiseuille_hydro_v1` | `divergence_l2` | KMM steady-profile regression and CLI golden comparison |
 | pcf | plain mhd, primitive `b` | finite_divergence_only | direct magnetic components; cheap linear parity and low-amplitude/decaying nonlinear execution work, but the full candidate decayed and was not promoted | `examples/pcf_mhd_jax.py`, `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting walls; `B0=0.05`; `Omega=0` | `pcf_mhd_conducting_v1`; failed `pcf_mhd_divfree` candidate | `divergence_u_l2`, `divergence_b_l2` | finite-divergence smoke and failed-candidate regression |
 | pcf | mri, primitive `b` | quarantined | direct magnetic components do not preserve the solenoidal constraint at finite MRI amplitude; linear and short DNS parity remain diagnostic-only | `examples/pcf_mri_primitive_jax.py`, `production/oracles.py` | `axis_0=x`, `axis_1=y`, `axis_2=z` | conducting or pseudo-vacuum walls, Coriolis/shear, imposed `B0 e_z` | cheap `pcf_mri_shearbox_v1`; DNS `pcf_mri_primitive_dns_v1`; quarantined `exp_pcf_mri_shearbox_growth` | `divergence_u_l2`, `divergence_b_l2`; DNS `divergence_u`, `divergence_b` | quarantine and divergence-guard regressions |
@@ -261,11 +266,11 @@ Current implemented entry points:
   the resumed step.
 - `make -C production parity-cheap` runs the nine cheap golden comparisons, including the two pipe hydro goldens, and writes `runs/_report/results.json`.
 - `make -C production parity-dns` runs the four committed non-pipe linear-window DNS golden comparisons and writes `runs/_report/results.json`; `parity-dns-pcf` and `parity-dns-tc` run geometry-specific subsets.
-- `make -C production parity-saturation` runs the three retained non-quarantined
-  saturation regressions (`pcf_fluct_re400`, `tc_supercritical_saturation`,
+- `make -C production parity-saturation` runs the two retained non-quarantined
+  saturation regressions (`tc_supercritical_saturation` and
   `tc_mri_nonlinear_saturation`) against their committed goldens. The quarantined
-  primitive-`b` PCF MRI artifact (`exp_pcf_mri_shearbox_growth`) is excluded so
-  the batch does not error on the quarantine guard. These three remain
+  primitive MRI artifact and historical family=L `pcf_fluct_re400` artifact are
+  excluded so the batch does not error on the quarantine guard. These remain
   qualified-candidate / finite-divergence legacy goldens (not roundoff-solenoidal,
   pending regeneration under the current contract), so a green run is a regression
   pass, not a campaign-release certification; the curl workhorse golden is still

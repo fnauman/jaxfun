@@ -67,6 +67,13 @@
   "generated_at_utc": "2026-06-10T02:23:21+00:00",
   "git": {},
   "problem_id": "pcf_fluct_re400",
+  "quarantined": {
+    "basis_family": "L",
+    "forbidden_from_seeding_production": true,
+    "reason": "Historical full-resolution saturation artifact used family=L. Production now defaults to family=C, so this trajectory is not a valid comparison reference or parent for the Chebyshev run spec. Regenerate the full horizon explicitly with Chebyshev before release.",
+    "regression_only": true,
+    "replacement_family": "C"
+  },
   "schema_version": 1,
   "source_anchors": [],
   "spec_hash": "395c95913ed2d52498e4ef2bed56a93302256691b798917caadf0e47ed4cff24",
@@ -74,9 +81,9 @@
     "kind": "dns-production",
     "scalars": {
       "divergence_l2": 1e-06,
+      "energy_growth_factor": 3.618966868220214e-05,
       "growth_rate": 0.002,
       "kinetic_energy": 0.0001,
-      "energy_growth_factor": 3.618966868220214e-05,
       "mean_shear": 1.6385924816131591e-06,
       "roll_rms": 1e-06,
       "streak_rms": 1e-06,

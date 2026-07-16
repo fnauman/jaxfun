@@ -181,7 +181,7 @@ class TaylorCouetteVPMRIDNSJax:
         Nz: int = 16,
         Lz: float | None = None,
         dt: float = 2.0e-3,
-        family: str = "L",
+        family: str = "C",
         dealias: float = 1.5,
         magnetic_bc: str = "conducting",
     ) -> None:
@@ -1210,7 +1210,7 @@ def main() -> None:
     parser.add_argument("--nu", type=float, default=1.0e-3)
     parser.add_argument("--eta-mag", type=float, default=1.0e-3)
     parser.add_argument("--B0", type=float, default=0.1)
-    parser.add_argument("--family", choices=("L", "C"), default="L")
+    parser.add_argument("--family", choices=("L", "C"), default="C")
     parser.add_argument("--dealias", type=float, default=1.5)
     parser.add_argument(
         "--magnetic-bc", choices=("conducting", "insulating"), default="conducting"

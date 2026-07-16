@@ -1,9 +1,16 @@
 {
   "artifact_id": "pcf_mri_shearbox_v1",
+  "basis_migration": {
+    "from": "L",
+    "to": "C",
+    "verification_backend": "local CUDA bounded oracle",
+    "verified_at_utc": "2026-07-16T00:00:00+00:00",
+    "verified_identical_diagnostics": true
+  },
   "geometry": "pcf",
   "physics": "mri",
   "problem_id": "pcf_mri_shearbox_v1",
   "runner": "demo.production.run_problem",
-  "spec_hash": "7c75dd546bba682dcfc29f344f42243887f83d24d7e80de231f69938da290063",
+  "spec_hash": "f1aa3dd9b12b7d3ca9e3c910d00afd928dfdd9d94b761d19da31cb900c98c3cc",
   "support_state": "production"
 }

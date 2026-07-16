@@ -5,6 +5,7 @@
   "physics": "mri",
   "support_state": "experimental",
   "numerics_contract_version": 2,
+  "precision": "float64",
   "representation": "vector_potential",
   "formulation": {
     "internal": "full 3D (theta,z,r) vector-potential resistive-MHD Taylor-Couette CNAB2 DNS with insulating cylinders: B = B0 e_z + curl A",
@@ -86,7 +87,7 @@
       "Nz": 48
     },
     "dealias": 1.5,
-    "family": "L"
+    "family": "C"
   },
   "time": {
     "integrator": "CNAB2",

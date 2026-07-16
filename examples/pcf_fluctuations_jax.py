@@ -43,7 +43,7 @@ class PlaneCouetteFluctuationJax(KMM):
         Re: float = 600.0,
         U_wall: float = 1.0,
         dt: float = 0.01,
-        family: str = "L",
+        family: str = "C",
         padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         perturbation_amplitude: float = 0.05,
         timestepper: type = IMEXRK222,
@@ -128,7 +128,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--dt", type=float, default=0.01)
     parser.add_argument("--Re", type=float, default=600.0)
-    parser.add_argument("--family", choices=("L", "C"), default="L")
+    parser.add_argument("--family", choices=("L", "C"), default="C")
     parser.add_argument("--moderror", type=int, default=0)
     parser.add_argument("--block-size", type=int, default=1)
     args = parser.parse_args()

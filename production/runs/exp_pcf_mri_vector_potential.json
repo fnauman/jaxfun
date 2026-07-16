@@ -51,7 +51,7 @@
     "start": {"Nx": 17, "Ny": 16, "Nz": 16},
     "production": {"Nx": 33, "Ny": 32, "Nz": 32},
     "dealias": {"x": 1.0, "y": 1.5, "z": 1.5},
-    "family": "L"
+    "family": "C"
   },
   "time": {
     "integrator": "IMEXRK222",

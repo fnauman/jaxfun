@@ -186,6 +186,21 @@ def test_quarantined_mri_golden_is_guard_violating_and_blocked():
         assert_golden_not_quarantined(golden, "exp_pcf_mri_shearbox_growth")
 
 
+def test_legacy_legendre_pcf_saturation_golden_is_quarantined():
+    from production.compare_goldens import (
+        QuarantinedGoldenError,
+        assert_golden_not_quarantined,
+    )
+
+    golden = load_golden(GOLDENS / "pcf_fluct_re400" / "golden" / "golden.json")
+    quarantine = golden.get("quarantined")
+    assert quarantine["basis_family"] == "L"
+    assert quarantine["replacement_family"] == "C"
+    assert quarantine["forbidden_from_seeding_production"] is True
+    with pytest.raises(QuarantinedGoldenError):
+        assert_golden_not_quarantined(golden, "pcf_fluct_re400")
+
+
 def test_decaying_pcf_mhd_divfree_candidate_is_not_promoted():
     root = GOLDENS / "pcf_mhd_divfree"
     spec = json.loads((root / "spec.json").read_text())

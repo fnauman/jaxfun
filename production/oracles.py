@@ -15,6 +15,7 @@ import numpy as np
 from . import health, observables
 from .adaptive import adaptive_cfl_from_spec, run_adaptive_cfl
 from .checkpoint import write_production_checkpoint
+from .problem_spec import DEFAULT_FLOW_BASIS_FAMILY
 from .quench import (
     QuenchError,
     adaptive_quench_step_bound,
@@ -1301,7 +1302,7 @@ def _run_pcf_fluctuation_saturation(
         Re=float(groups["Re"]),
         U_wall=float(groups.get("U_wall", 1.0)),
         dt=float(spec["time"]["dt"]),
-        family=resolution.get("family", "L"),
+        family=resolution.get("family", DEFAULT_FLOW_BASIS_FAMILY),
         padding_factor=_padding_factor(resolution, solver_family="pcf_kmm"),
         perturbation_amplitude=float(spec["initial_condition"].get("amplitude", 0.1)),
     )
@@ -1637,7 +1638,7 @@ def _primitive_solver_from_spec(spec: dict[str, Any]):
         Ly=float(spec["domain"]["y_period"]),
         Lz=float(spec["domain"]["z_period"]),
         dt=float(spec["time"]["dt"]),
-        family=resolution.get("family", "L"),
+        family=resolution.get("family", DEFAULT_FLOW_BASIS_FAMILY),
         dealias=_padding_factor(resolution, solver_family="pcf_primitive"),
         magnetic_bc=_magnetic_bc(spec),
     )
@@ -1677,7 +1678,7 @@ def _curl_solver_from_spec(spec: dict[str, Any]):
         shear_rate=physics.S,
         background_b=(0.0, 0.0, physics.B0),
         dt=float(spec["time"]["dt"]),
-        family=resolution.get("family", "L"),
+        family=resolution.get("family", DEFAULT_FLOW_BASIS_FAMILY),
         padding_factor=_padding_factor(
             resolution, solver_family="pcf_vector_potential"
         ),
@@ -2414,7 +2415,9 @@ def _tc_vp_solver_from_spec(spec: dict[str, Any]):
         Nz=int(resolution.get("Nz", 16)),
         Lz=float(spec["domain"]["z_period"]),
         dt=float(spec["time"]["dt"]),
-        family=spec["resolution"].get("family", resolution.get("family", "L")),
+        family=spec["resolution"].get(
+            "family", resolution.get("family", DEFAULT_FLOW_BASIS_FAMILY)
+        ),
         dealias=float(spec["resolution"].get("dealias", 1.5)),
         magnetic_bc=_magnetic_bc(spec),
     )

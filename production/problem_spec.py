@@ -35,6 +35,7 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "problem_spec.schema
 # checkpoints and goldens. Version 2 is the post-FJ-01 semantic named-axis contract;
 # artifacts without the field (or at a lower version) are pre-FJ-01.
 NUMERICS_CONTRACT_VERSION = 2
+DEFAULT_FLOW_BASIS_FAMILY = "C"
 
 JAXFUN_IMPLEMENTED_ORACLES = {
     "channel_poiseuille_hydro_v1": {"plane_poiseuille_laminar"},
@@ -121,6 +122,11 @@ def validate_spec(
     if not isinstance(spec, dict):
         raise ProblemSpecError("problem spec must be a JSON object")
     data = copy.deepcopy(spec)
+    resolution = data.get("resolution")
+    if isinstance(resolution, dict):
+        # Wall-bounded flow solvers use Chebyshev unless the spec explicitly
+        # requests another supported polynomial family.
+        resolution.setdefault("family", DEFAULT_FLOW_BASIS_FAMILY)
 
     _require_keys(
         data,
@@ -176,6 +182,7 @@ def validate_spec(
     _validate_domain(data)
     _validate_nondimensional_groups(data)
     _validate_b0_amplitudes(data)
+    _validate_basis_families(data)
     _validate_numerics_contract(data)
     _validate_resolved_physics(data)
     _validate_boundary_conditions(data)
@@ -386,6 +393,21 @@ def _validate_b0_amplitudes(data: dict[str, Any]) -> None:
                 f"{label} is a field amplitude and must be nonnegative; "
                 "use an explicit component vector for signed direction"
             )
+
+
+def _validate_basis_families(data: dict[str, Any]) -> None:
+    resolution = data.get("resolution")
+    if not isinstance(resolution, dict):
+        return
+    for block_name, block in _iter_resolution_blocks(resolution):
+        family = block.get("family")
+        if family is None:
+            continue
+        if not isinstance(family, str) or family.upper() not in {"C", "L"}:
+            raise ProblemSpecError(
+                f"{block_name}.family must be C (Chebyshev) or L (Legendre)"
+            )
+        block["family"] = family.upper()
 
 
 def _validate_numerics_contract(data: dict[str, Any]) -> None:

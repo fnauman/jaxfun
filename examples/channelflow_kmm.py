@@ -70,7 +70,7 @@ class KMM:
         ),
         nu: float = 1.0 / 600.0,
         dt: float = 0.01,
-        family: str = "L",
+        family: str = "C",
         padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         dpdy: float = 0.0,
         timestepper: type[PDEIMEXRK] = IMEXRK222,

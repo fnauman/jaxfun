@@ -10,12 +10,10 @@ conda activate shenfun
 export PYTHONPATH="$PWD/demo:${PYTHONPATH}"
 ```
 
-The Taylor-Couette solvers default to the Legendre radial family
-(`family="L"`), which requires shenfun's compiled extensions (`fastgl` and
-`Leg2Cheb`).  The examples below pass `family="C"` (Chebyshev) so they run
-without those extensions; pass `family="L"` when shenfun is built (or installed)
-with them.  See the "Legendre `fastgl` note" near the end for the partial
-source-only fallback.
+The Taylor-Couette solvers default to the Chebyshev radial family
+(`family="C"`). Legendre is available only as an explicit `family="L"`
+opt-in and requires shenfun's compiled `fastgl`/`Leg2Cheb` extensions.
+See the "Legendre `fastgl` note" near the end for that optional path.
 
 ## Summary
 
@@ -379,15 +377,15 @@ conda run -n shenfun pytest -q demo/test_couette_linear.py
 # Apples-to-apples thin-gap comparison (eigenvalues, non-modal, DNS-style)
 conda run -n shenfun pytest -q demo/test_thin_gap_comparison.py
 
-# Cylindrical-solver modal benchmarks (Legendre family="L" by default)
+# Cylindrical-solver modal benchmarks (Chebyshev family="C" by default)
 conda run -n shenfun pytest -q demo/test_taylor_couette.py
 ```
 
 Verified results: `py_compile` clean; `test_couette_linear.py` `10 passed`;
 `test_thin_gap_comparison.py` `30 passed`; `test_taylor_couette.py` `25 passed`.
 
-> **Legendre `fastgl` note (partial source-only fix).**  The cylindrical solvers
-> default to `family="L"`, which relies on shenfun's compiled extensions.  When
+> **Legendre `fastgl` note (partial source-only fix).** Explicit
+> `family="L"` relies on shenfun's compiled extensions. When
 > the `fastgl` wrapper is absent the bare `from . import fastgl_wrap` raises a
 > plain `ImportError` ("partially initialized module ... circular import"), not
 > `ModuleNotFoundError`.  The fallback in `shenfun/legendre/fastgl/__init__.py`

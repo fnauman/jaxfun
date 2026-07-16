@@ -22,7 +22,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--dt", type=float, default=0.01)
     parser.add_argument("--Re", type=float, default=600.0)
-    parser.add_argument("--family", choices=("L", "C"), default="L")
+    parser.add_argument("--family", choices=("L", "C"), default="C")
     parser.add_argument("--amp", type=float, default=0.05)
     args = parser.parse_args()
 

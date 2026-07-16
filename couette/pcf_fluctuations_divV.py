@@ -37,8 +37,6 @@ def _select_backend_and_family(family):
         else:
             config["optimization"]["mode"] = "python"
             mode = "python"
-    if family.upper().startswith("C") and mode not in ("cython", "numba"):
-        family = "L"
     return family, original_mode, mode
 
 

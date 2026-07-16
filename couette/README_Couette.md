@@ -357,8 +357,9 @@ See `couette_linear_benchmarks.md` for the literature references, expected
 growth rates, and reproducible benchmark commands used to validate the linear
 and non-modal additions.
 
-> **Environment note.**  The Taylor-Couette modal solvers default to the Legendre
-> family (`family="L"`), which relies on shenfun's compiled extensions.
+> **Environment note.** The Taylor-Couette modal solvers default to Chebyshev
+> (`family="C"`). Explicit `family="L"` opts into Legendre and relies on
+> shenfun's compiled extensions.
 > `shenfun.legendre.fastgl` now falls back to a NumPy Gauss-Legendre rule when the
 > compiled `fastgl_wrap` is missing (it catches the bare `ImportError: cannot
 > import name 'fastgl_wrap' ... circular import`, not only `ModuleNotFoundError`),
@@ -369,6 +370,5 @@ and non-modal additions.
 > at `Leg2Cheb`).  Use a built/installed shenfun for Legendre, or `family="C"`
 > (Chebyshev), which needs no compiled extension.  The dense linear/non-modal
 > comparison layer and `thin_gap_compare.py` pin `family="C"` so the PCF and TC
-> operators use an identical radial basis; the three PCF DNS scripts also default
-> to `"C"`, while the TC DNS keeps its natural Galerkin `"L"` basis (pass
-> `--family` to match when cross-comparing).
+> operators use an identical radial basis. PCF and Taylor-Couette DNS scripts
+> both default to `"C"`; pass `--family L` only for an intentional Legendre run.

@@ -27,13 +27,9 @@ TC_DNS_PARITY_IDS := \
 
 DNS_PARITY_IDS := $(PCF_DNS_PARITY_IDS) $(TC_DNS_PARITY_IDS)
 
-# Retained (non-quarantined) saturation artifacts only. The primitive-`b`
-# exp_pcf_mri_shearbox_growth golden is quarantined (non-solenoidal, forbidden
-# from production seeding) and is deliberately excluded so this batch does not
-# error on assert_golden_not_quarantined; it is covered by the quarantine
-# regression in tests/production/test_compare_goldens.py instead.
+# Retained non-quarantined saturation artifacts only. The primitive MRI
+# artifact and the historical family=L PCF artifact are regression-only.
 SATURATION_PARITY_IDS := \
-	pcf_fluct_re400 \
 	tc_supercritical_saturation \
 	tc_mri_nonlinear_saturation
 

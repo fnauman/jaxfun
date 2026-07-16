@@ -148,7 +148,7 @@ class TaylorCouetteLinear:
         Legendre or Chebyshev radial basis.
     """
 
-    def __init__(self, base: CircularCouette, nu=1.0e-3, N=48, family="L"):
+    def __init__(self, base: CircularCouette, nu=1.0e-3, N=48, family="C"):
         self.base = base
         self.nu = float(nu)
         self.N = int(N)
@@ -429,7 +429,7 @@ def main(argv=None):
     p.add_argument("--Omega2", type=float, default=0.0)
     p.add_argument("--nu", type=float, default=2.0e-3)
     p.add_argument("--N", type=int, default=48)
-    p.add_argument("--family", choices=["L", "C"], default="L")
+    p.add_argument("--family", choices=["L", "C"], default="C")
     p.add_argument("--m", type=int, default=0)
     p.add_argument(
         "--kz", type=float, default=None, help="axial wavenumber; if unset, scan"

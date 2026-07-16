@@ -66,7 +66,7 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
         Rm: float | None = None,
         U_wall: float = 1.0,
         dt: float = 0.01,
-        family: str = "L",
+        family: str = "C",
         padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         perturbation_amplitude: float = 0.1,
         magnetic_amplitude: float = 0.05,

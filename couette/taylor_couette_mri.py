@@ -154,7 +154,7 @@ class TaylorCouetteMRI:
         nu=1e-3,
         eta_mag=1e-3,
         N=48,
-        family="L",
+        family="C",
         magnetic_bc="conducting",
     ):
         self.base = base
@@ -759,7 +759,7 @@ def main(argv=None):
     p.add_argument("--nu", type=float, default=1e-3)
     p.add_argument("--eta-mag", type=float, default=1e-3)
     p.add_argument("--N", type=int, default=48)
-    p.add_argument("--family", choices=["L", "C"], default="L")
+    p.add_argument("--family", choices=["L", "C"], default="C")
     p.add_argument(
         "--magnetic-bc",
         choices=["conducting", "insulating"],

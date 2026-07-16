@@ -10,6 +10,7 @@ GOLDENS = ROOT / "production" / "goldens"
 EXECUTABLE_RUNS = {
     "pcf_fluct_re400": [3],
     "pcf_mhd_divfree": [3],
+    "pcf_mri_znf_scout_v1": [1, 2, 3],
     "exp_pcf_mri_shearbox_growth": [1, 2, 3],
     "exp_pcf_mri_pseudo_vacuum": [1, 2, 3],
     "exp_pcf_mri_vector_potential": [1, 2, 3],
@@ -55,6 +56,18 @@ def test_pcf_vector_potential_specs_pin_float64_divergence_guard():
         assert raw["expected_oracle"]["divergence_b_guard_l2"] == 1.0e-12
 
 
+def test_vector_potential_campaign_specs_require_float64():
+    for problem_id in (
+        "exp_pcf_mri_vector_potential",
+        "exp_pcf_mri_vp_insulating",
+        "exp_tc_mri_vector_potential",
+        "exp_tc_mri_vp_insulating",
+    ):
+        raw = json.loads((RUNS / f"{problem_id}.json").read_text())
+        assert raw["precision"] == "float64"
+        assert raw["resolution"]["family"] == "C"
+
+
 def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
     raw = json.loads((RUNS / "pcf_mhd_divfree.json").read_text())
 
@@ -63,11 +76,8 @@ def test_pcf_mhd_production_resolution_matches_phase_j5_inventory():
 
 
 def test_retained_saturation_goldens_track_run_spec_hashes():
-    # pcf_mhd_divfree and exp_pcf_mri_shearbox_growth were migrated to the FJ-01
-    # numerics contract (v2) and their pre-fix goldens are quarantined, so their
-    # run-spec hash intentionally no longer matches the (stale) golden.
+    # Current non-quarantined saturation artifacts remain hash-bound.
     for problem_id in [
-        "pcf_fluct_re400",
         "tc_supercritical_saturation",
         "tc_mri_nonlinear_saturation",
     ]:
@@ -80,11 +90,16 @@ def test_retained_saturation_goldens_track_run_spec_hashes():
         assert golden["spec_hash"] == spec["spec_hash"]
 
 
-def test_migrated_primitive_goldens_are_quarantined_pending_regeneration():
-    """FJ-01/FJ-03: pre-fix primitive goldens must be quarantined and not tracked."""
-    for problem_id in ["pcf_mhd_divfree", "exp_pcf_mri_shearbox_growth"]:
+def test_stale_saturation_goldens_are_quarantined_pending_regeneration():
+    """Old numerics/basis artifacts must be quarantined and not tracked."""
+    for problem_id in [
+        "pcf_fluct_re400",
+        "pcf_mhd_divfree",
+        "exp_pcf_mri_shearbox_growth",
+    ]:
         spec = load_spec(RUNS / f"{problem_id}.json")
-        assert spec["numerics_contract_version"] == 2
+        if problem_id != "pcf_fluct_re400":
+            assert spec["numerics_contract_version"] == 2
         golden = json.loads(
             (GOLDENS / problem_id / "golden" / "golden.json").read_text()
         )

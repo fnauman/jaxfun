@@ -131,7 +131,7 @@ class AxisymmetricTCDNS:
         Nz=32,
         Lz=None,
         dt=2.0e-3,
-        family="L",
+        family="C",
         dealias=1.5,
     ):
         self.base = base
@@ -595,7 +595,7 @@ class TaylorCouetteDNS:
         Nz=32,
         Lz=None,
         dt=2.0e-3,
-        family="L",
+        family="C",
         dealias=1.5,
     ):
         self.base = base
@@ -942,7 +942,7 @@ class AxisymmetricMRIDNS:
         Nz=32,
         Lz=None,
         dt=2.0e-3,
-        family="L",
+        family="C",
         dealias=1.5,
     ):
         self.base = base
@@ -1453,7 +1453,7 @@ class TaylorCouetteMRIDNS:
         Nz=32,
         Lz=None,
         dt=2.0e-3,
-        family="L",
+        family="C",
         dealias=1.5,
     ):
         self.base = base
@@ -2024,7 +2024,7 @@ def main(argv=None):
     p.add_argument("--Lz", type=float, default=None)
     p.add_argument("--dt", type=float, default=2.0e-3)
     p.add_argument("--end-time", type=float, default=2.0)
-    p.add_argument("--family", choices=["L", "C"], default="L")
+    p.add_argument("--family", choices=["L", "C"], default="C")
     p.add_argument("--dealias", type=float, default=1.5)
     p.add_argument("--amp", type=float, default=1.0e-3)
     p.add_argument(

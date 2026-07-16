@@ -1272,7 +1272,7 @@ def test_exp_pcf_mri_shearbox_growth_smoke_runs_from_phase_j5_spec(tmp_path):
         **spec["resolution"],
         "start": {"Nx": 8, "Ny": 4, "Nz": 6},
         "dealias": 1.0,
-        "family": "L",
+        "family": "C",
     }
     spec["initial_condition"] = {
         **spec["initial_condition"],
