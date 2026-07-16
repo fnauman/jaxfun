@@ -34,6 +34,7 @@ def test_pcf_mhd_mri_shearpy_defaults_match_reference():
 
 @pytest.mark.gpu
 def test_pcf_mhd_mri_step_has_bounded_gpu_temporary_memory() -> None:
+    assert jax.default_backend() == "gpu"
     solver = PlaneCouetteMRIShearpyJax(
         N=(17, 16, 16),
         domain=((-1.0, 1.0), (0.0, 4.0), (0.0, 1.0)),
