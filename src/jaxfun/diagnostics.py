@@ -94,8 +94,15 @@ def coefficient_wall_linf(
     for component, space in zip(coefficients, spaces, strict=True):
         radial = space.basespaces[-1]
         bounds = jnp.asarray(radial.domain, dtype=jnp.real(component).dtype)
-        reference_bounds = radial.map_reference_domain(bounds)
-        rows = radial.evaluate_basis_derivative(reference_bounds, 0)
-        wall_values = jnp.einsum("wi,...i->w...", rows, component)
+        wall_shape = tuple(int(n) for n in space.num_quad_points[:-1]) + (2,)
+        mesh = space.mesh()
+        coordinates = []
+        for axis, coordinate in enumerate(mesh):
+            if axis == len(space) - 1:
+                shape = (1,) * (len(space) - 1) + (2,)
+                coordinate = bounds.reshape(shape)
+            coordinates.append(jnp.broadcast_to(coordinate, wall_shape).ravel())
+        points = jnp.stack(coordinates, axis=1)
+        wall_values = space.evaluate(points, component).reshape(wall_shape)
         maxima.append(jnp.max(jnp.abs(wall_values)))
     return jnp.max(jnp.asarray(maxima))

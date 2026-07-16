@@ -665,9 +665,7 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         assert np.allclose(
             p_layout,
             _axial_half_period_shift(
-                _tc_axisymmetric_reference_layout(
-                    ref_coeffs["p"], axial_n=solver.Nz
-                )
+                _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz)
             ),
             rtol=1.0e-8,
             atol=1.0e-10,

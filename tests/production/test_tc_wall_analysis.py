@@ -13,9 +13,7 @@ def test_tc_inner_torque_uses_exact_chebyshev_wall_trace() -> None:
     )
     amplitude = 0.2
     perturbation = jnp.broadcast_to(
-        amplitude
-        * (solver.R - solver.base.R1)
-        * (solver.base.R2 - solver.R),
+        amplitude * (solver.R - solver.base.R1) * (solver.base.R2 - solver.R),
         solver.T0.num_quad_points,
     )
     zero = jnp.zeros_like(perturbation)

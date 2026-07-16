@@ -98,9 +98,7 @@ def test_tc_hydro_rollout_caches_and_chebyshev_volumes() -> None:
         CircularCouette(), Nr=8, Nz=4, Lz=1.5, dt=1.0e-3, family="C", dealias=1.0
     )
     expected_axisymmetric = (
-        axisymmetric.Lz
-        * 0.5
-        * (axisymmetric.base.R2**2 - axisymmetric.base.R1**2)
+        axisymmetric.Lz * 0.5 * (axisymmetric.base.R2**2 - axisymmetric.base.R1**2)
     )
     assert float(integrate(axisymmetric.R, axisymmetric.T0)) == pytest.approx(
         expected_axisymmetric
@@ -409,9 +407,7 @@ def test_tc_diagnostics_helpers_match_solver_outputs() -> None:
     assert jnp.allclose(
         hdiag["Eth"], cylindrical_component_energy(velocity[1], hydro.R, hydro.T0)
     )
-    assert jnp.allclose(
-        hdiag["wall"], coefficient_wall_linf(hstate.u, (hydro.TD,) * 3)
-    )
+    assert jnp.allclose(hdiag["wall"], coefficient_wall_linf(hstate.u, (hydro.TD,) * 3))
     assert float(hdiag["wall"]) < 1.0e-18
 
     mri = AxisymmetricMRIDNSJax(
