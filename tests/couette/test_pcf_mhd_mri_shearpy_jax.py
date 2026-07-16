@@ -32,6 +32,37 @@ def test_pcf_mhd_mri_shearpy_defaults_match_reference():
     assert solver.magnetic_amplitude == 0.0
 
 
+@pytest.mark.integration
+def test_pcf_mhd_rollout_cache_reuses_blocks_and_rebinds_on_dt_change() -> None:
+    solver = PlaneCouetteMRIShearpyJax(
+        N=(9, 8, 8),
+        family="L",
+        dt=1.0e-3,
+        perturbation_amplitude=0.01,
+        magnetic_amplitude=0.01,
+        background_b=(0.0, 0.0, 0.1),
+    )
+    state = solver.initial_state()
+    for _ in range(3):
+        state = solver.solve(state, 1)
+    jax.block_until_ready(state)
+
+    info = solver.rollout_cache_info()
+    assert info.live_entries == 1
+    assert info.step_counts == (1,)
+    assert info.misses == 1
+    assert info.hits == 2
+
+    solver.set_dt(5.0e-4)
+    rebound = solver.rollout_cache_info()
+    assert rebound.generation == 1
+    assert rebound.live_entries == 0
+    state = solver.solve(state, 1)
+    jax.block_until_ready(state)
+    assert solver.rollout_cache_info().live_entries == 1
+    assert all(bool(jnp.isfinite(leaf).all()) for leaf in jax.tree.leaves(state))
+
+
 @pytest.mark.gpu
 def test_pcf_mhd_mri_step_has_bounded_gpu_temporary_memory() -> None:
     assert jax.default_backend() == "gpu"
