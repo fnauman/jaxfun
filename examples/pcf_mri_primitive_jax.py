@@ -26,7 +26,7 @@ from jax import Array
 from examples.pcf_linear_jax import PlaneCouetteLinear
 from examples.taylor_couette_dns_jax import _positive_pivot_phase
 from jaxfun import Domain, Dx
-from jaxfun.diagnostics import quadratic_energy
+from jaxfun.diagnostics import coefficient_wall_linf, quadratic_energy
 from jaxfun.galerkin import (
     CoupledSpace,
     FunctionSpace,
@@ -40,7 +40,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators.cnab2 import cnab2_rhs, scan_steps
+from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo, cnab2_rhs
 from jaxfun.io import Cadence, run_with_cadence
 from jaxfun.la import TPMatrices, TPMatrix
 
@@ -200,6 +200,7 @@ class AxisymmetricPCFMRIDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
+        self._rollout_cache = ScanRolloutCache(self.step)
 
     @staticmethod
     def _family_class(family: str):
@@ -462,9 +463,22 @@ class AxisymmetricPCFMRIDNSJax:
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
         return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
 
+    def set_dt(self, dt: float) -> None:
+        """Adopt a new timestep and retire obsolete compiled rollouts."""
+        self.dt = float(dt)
+        self.Limp, self.Lexp = self._build_operators()
+        self.Limp_modes = self._extract_mode_matrices(self.Limp, self.VQ_mode_indices)
+        self.Lexp_modes = self._extract_mode_matrices(self.Lexp, self.VE_mode_indices)
+        self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
+            self._pin_pressure_modes(self.Limp_modes)
+        )
+        self._rollout_cache.rebind(self.step)
+
     def solve(self, state: AxisymmetricPCFState, steps: int) -> AxisymmetricPCFState:
-        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
-        return scan_steps(step, state, int(steps))
+        return self._rollout_cache(state, int(steps))
+
+    def rollout_cache_info(self) -> ScanRolloutCacheInfo:
+        return self._rollout_cache.info()
 
     def solve_with_cadence(
         self,
@@ -613,6 +627,7 @@ class AxisymmetricPCFMRIDNSJax:
             "E": ek + em,
             "divu": self._l2(self.velocity_divergence(state)),
             "divb": self._l2(self.magnetic_divergence(state)),
+            "wall_u": coefficient_wall_linf(state.x[:3], (self.TD,) * 3),
         }
 
     def growth_rate(
@@ -727,6 +742,7 @@ class PCFMRIDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
+        self._rollout_cache = ScanRolloutCache(self.step)
 
     @staticmethod
     def _operator_dtype() -> jnp.dtype:
@@ -1058,9 +1074,20 @@ class PCFMRIDNSJax:
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
         return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
 
+    def set_dt(self, dt: float) -> None:
+        """Adopt a new timestep and retire obsolete compiled rollouts."""
+        self.dt = float(dt)
+        self.Limp_modes, self.Lexp_modes = self._build_operator_modes()
+        self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
+            self._pin_pressure_modes(self.Limp_modes)
+        )
+        self._rollout_cache.rebind(self.step)
+
     def solve(self, state: AxisymmetricPCFState, steps: int) -> AxisymmetricPCFState:
-        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
-        return scan_steps(step, state, int(steps))
+        return self._rollout_cache(state, int(steps))
+
+    def rollout_cache_info(self) -> ScanRolloutCacheInfo:
+        return self._rollout_cache.info()
 
     def solve_with_cadence(
         self,
@@ -1263,6 +1290,7 @@ class PCFMRIDNSJax:
             "mean_by": mby,
             "mean_bz": mbz,
             "E_nonaxisymmetric": e_nonaxi,
+            "wall_u": coefficient_wall_linf(state.x[:3], (self.TD,) * 3),
             "E_total": e_total,
             "nonaxisymmetric_fraction": e_nonaxi / (e_total + 1.0e-300),
         }

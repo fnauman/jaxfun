@@ -5,6 +5,25 @@ import pytest
 from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax, PCFMRIDNSJax
 from jaxfun import Dx
 from jaxfun.galerkin import InnerKind, TestFunction, TrialFunction, inner
+from jaxfun.galerkin.inner import integrate
+
+
+def _assert_rollout_lifecycle(solver, state) -> None:
+    for _ in range(3):
+        state = solver.solve(state, 1)
+    jax.block_until_ready(state)
+    info = solver.rollout_cache_info()
+    assert info.live_entries == 1
+    assert info.misses == 1
+    assert info.hits == 2
+
+    solver.set_dt(0.5 * solver.dt)
+    rebound = solver.rollout_cache_info()
+    assert rebound.generation == 1
+    assert rebound.live_entries == 0
+    state = solver.solve(state, 1)
+    jax.block_until_ready(state)
+    assert solver.rollout_cache_info().live_entries == 1
 
 
 def test_pcf_primitive_dns_zero_state_stays_zero() -> None:
@@ -17,6 +36,15 @@ def test_pcf_primitive_dns_zero_state_stays_zero() -> None:
     assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
     assert float(diag["divu"]) < 1.0e-12
     assert float(diag["divb"]) < 1.0e-12
+    assert float(diag["wall_u"]) < 1.0e-18
+
+
+def test_pcf_primitive_axisymmetric_rollout_cache_and_chebyshev_volume() -> None:
+    solver = AxisymmetricPCFMRIDNSJax(
+        Nx=8, Nz=4, Lz=1.5, dt=1.0e-3, family="C", dealias=1.0
+    )
+    assert float(integrate(jnp.ones_like(solver.X), solver.T0)) == pytest.approx(3.0)
+    _assert_rollout_lifecycle(solver, solver.zero_state())
 
 
 def test_pcf_primitive_3d_mode_blocks_match_dense_extraction() -> None:
@@ -57,6 +85,22 @@ def test_pcf_primitive_3d_zero_state_stays_zero() -> None:
     assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
     assert float(diag["divu"]) < 1.0e-12
     assert float(diag["divb"]) < 1.0e-12
+    assert float(diag["wall_u"]) < 1.0e-18
+
+
+def test_pcf_primitive_3d_rollout_cache_and_chebyshev_volume() -> None:
+    solver = PCFMRIDNSJax(
+        Nx=8,
+        Ny=4,
+        Nz=4,
+        Ly=2.0,
+        Lz=1.5,
+        dt=1.0e-3,
+        family="C",
+        dealias=1.0,
+    )
+    assert float(integrate(jnp.ones_like(solver.X), solver.T0)) == pytest.approx(6.0)
+    _assert_rollout_lifecycle(solver, solver.zero_state())
 
 
 @pytest.mark.parametrize("dealias", [1.0, (1.0, 1.5, 1.5)])

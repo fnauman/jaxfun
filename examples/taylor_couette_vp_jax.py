@@ -88,7 +88,7 @@ except ModuleNotFoundError:  # direct script execution from examples/
     from taylor_couette_mri_jax import TaylorCouetteMRIJax
 
 from jaxfun import Domain, Dx
-from jaxfun.diagnostics import cylindrical_energy_parts, wall_linf
+from jaxfun.diagnostics import coefficient_wall_linf, cylindrical_energy_parts
 from jaxfun.galerkin import (
     CoupledSpace,
     FunctionSpace,
@@ -100,7 +100,7 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators.cnab2 import cnab2_rhs, scan_steps
+from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo, cnab2_rhs
 from jaxfun.io import Cadence, run_with_cadence
 
 type Velocity = tuple[Array, Array, Array]
@@ -278,6 +278,7 @@ class TaylorCouetteVPMRIDNSJax:
         self._mass_e_modes = extract(mass_e, self.VE_mode_indices)
         self._phys_e_modes = extract(phys_e, self.VE_mode_indices)
         self._refresh_dt_operators()
+        self._rollout_cache = ScanRolloutCache(self.step)
 
     def _refresh_dt_operators(self) -> None:
         """(Re)combine the dt-independent operator parts and refactorize.
@@ -301,6 +302,7 @@ class TaylorCouetteVPMRIDNSJax:
         """Adopt a new time step (adaptive-CFL support) and refactorize."""
         self.dt = float(dt)
         self._refresh_dt_operators()
+        self._rollout_cache.rebind(self.step)
 
     # ------------------------------------------------------------------
     # assembly helpers (mirroring the primitive TC DNS class)
@@ -827,8 +829,10 @@ class TaylorCouetteVPMRIDNSJax:
         )
 
     def solve(self, state: TCVPState, steps: int) -> TCVPState:
-        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
-        return scan_steps(step, state, int(steps))
+        return self._rollout_cache(state, int(steps))
+
+    def rollout_cache_info(self) -> ScanRolloutCacheInfo:
+        return self._rollout_cache.info()
 
     def solve_with_cadence(
         self,
@@ -989,7 +993,7 @@ class TaylorCouetteVPMRIDNSJax:
             "maxwell_rt": maxwell,
             "total_stress": reynolds + maxwell,
             "mean_bz": self.mean_bz_total(state, bz=magnetic[2]),
-            "wall_u": wall_linf(velocity),
+            "wall_u": coefficient_wall_linf(state.u, (self.TD,) * 3),
         }
         if self.magnetic_bc == "insulating":
             out["insulating_bc_residual"] = self.insulating_bc_residual(state)

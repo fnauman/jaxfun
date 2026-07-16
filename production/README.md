@@ -52,6 +52,12 @@ convention and the annular Taylor-Couette volume. See
 
 All implemented wall-bounded production flows default to Chebyshev (`resolution.family="C"`) in the wall-normal or radial direction. Omitting `resolution.family` materializes `C` into the authenticated spec. Legendre remains available only through an explicit `family="L"` request; production drivers never switch basis families silently.
 
+Physical diagnostics use unweighted integration weights rather than the
+polynomial orthogonality measure. Taylor-Couette diagnostics additionally carry
+the cylindrical `r` Jacobian. Wall values, wall shear, and inner-cylinder torque
+are evaluated from exact spectral endpoint traces; open Gauss nodes are never
+treated as the physical wall.
+
 ## Production-run inventory
 
 | problem_id | geometry | physics | solver file | status | fallback rung |
@@ -293,14 +299,15 @@ Current implemented entry points:
   host-side diagnostic rows and mid-run finite/divergence monitoring cadence.
 - Runner metadata records `compilation_cache` plus timing fields such as
   `solver_steps`, `ms_per_step`, and `steps_per_second` for DNS paths.
-- PCF KMM and vector-potential rollouts keep a persistent, eight-entry LRU of
-  compiled static-length `lax.scan` blocks. Repeated cadence blocks at fixed
-  `dt` reuse those callables and one persistent checkpointed step instead of
-  constructing a new checkpoint/scan closure. This retains reverse-mode
-  rematerialization without per-block executable growth. `set_dt()` clears all
-  live variants before rebinding the rebuilt implicit factors, so adaptive runs
-  retain only the current timestep generation. Cache counters are available
-  from `rollout_cache_info()`.
+- Every nonlinear PCF and Taylor-Couette rollout (hydrodynamic, primitive MHD,
+  and vector-potential MHD/MRI) keeps a persistent, eight-entry LRU of compiled
+  static-length `lax.scan` blocks. Repeated cadence blocks at fixed `dt` reuse
+  those callables and one persistent checkpointed step instead of constructing
+  a new checkpoint/scan closure. This retains reverse-mode rematerialization
+  without per-block executable growth. `set_dt()` clears all live variants
+  before rebinding rebuilt implicit factors, so adaptive runs retain only the
+  current timestep generation. Cache counters are available from
+  `rollout_cache_info()`.
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses, compares final numeric diagnostics for CPU/GPU agreement checks, and records left/right wall times plus speedup; production run specs can pass `--resolution-tier smoke|start|production` plus `--steps` for bounded agreement evidence. Same-backend comparisons fail by default; pass `--allow-same-backend` only for intentional CPU/CPU smoke checks.
 - `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, fallback rung fields, and failed comparison details. `production/validate_gpu.sh` writes this report before exiting nonzero when an executed run fails.

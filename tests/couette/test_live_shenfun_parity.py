@@ -92,6 +92,13 @@ def _tc_axisymmetric_reference_layout(rows, *, axial_n: int):
     return out
 
 
+def _axial_half_period_shift(coeff):
+    """Apply the physically equivalent z -> z + Lz/2 eigenmode phase."""
+    coeff = np.asarray(coeff)
+    signs = (-1.0) ** np.arange(coeff.shape[0])
+    return coeff * signs[:, None]
+
+
 def _tc_3d_reference_layout(rows, *, axial_n: int, azimuthal_n: int):
     out = np.array(_nested_complex(rows), copy=True)
     if axial_n % 2 == 0:
@@ -156,10 +163,15 @@ def test_pcf_fluctuation_matches_live_shenfun_diagnostics_velocity_and_coeffs():
     for reference in references:
         state = solver.solve(state0, reference["steps"])
         diag = solver.diagnostics(state)
-        for key in ("Epert", "Etot", "u_top", "u_bot", "mean_shear"):
+        for key in ("Epert", "Etot"):
             assert float(diag[key]) == pytest.approx(
                 reference[key], rel=1.0e-10, abs=1.0e-12
             )
+        # Shenfun reports its nearest open Gauss node here; jaxfun diagnostics
+        # deliberately evaluate the exact physical wall trace.
+        assert float(diag["u_top"]) == pytest.approx(1.0, abs=1.0e-14)
+        assert float(diag["u_bot"]) == pytest.approx(-1.0, abs=1.0e-14)
+        assert float(diag["mean_shear"]) == pytest.approx(1.0, abs=1.0e-14)
         assert float(diag["divL2"]) == pytest.approx(
             reference["divL2"], rel=0.0, abs=5.0e-15
         )
@@ -229,9 +241,6 @@ def test_pcf_mhd_matches_live_shenfun_diagnostics_and_coeffs():
         "Emag": "Emag",
         "divu_l2": "divL2",
         "divb_l2": "divB_L2",
-        "top_wall_streamwise": "u_top",
-        "bottom_wall_streamwise": "u_bot",
-        "mean_shear": "mean_shear",
     }
 
     for reference in references:
@@ -242,6 +251,9 @@ def test_pcf_mhd_matches_live_shenfun_diagnostics_and_coeffs():
             assert float(diag[jax_key]) == pytest.approx(
                 reference[ref_key], rel=1.0e-10, abs=atol
             )
+        assert float(diag["u_top"]) == pytest.approx(1.0, abs=1.0e-14)
+        assert float(diag["u_bot"]) == pytest.approx(-1.0, abs=1.0e-14)
+        assert float(diag["mean_shear"]) == pytest.approx(1.0, abs=1.0e-14)
 
         B = solver.update_B_from_A(state.A)
         bmax = max(float(np.max(np.abs(np.asarray(b)))) for b in solver._backward_B(B))
@@ -302,9 +314,6 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
         "Emag_total": "Emag_total",
         "divu_l2": "divL2",
         "divb_l2": "divB_L2",
-        "top_wall_streamwise": "u_top",
-        "bottom_wall_streamwise": "u_bot",
-        "mean_shear": "mean_shear",
         "bmax": "bmax",
         "bmax_total": "bmax_total",
         "reynolds_stress": "reynolds_stress",
@@ -322,6 +331,10 @@ def test_pcf_mhd_shearpy_matches_live_shenfun_diagnostics_and_coeffs():
             assert float(diag[jax_key]) == pytest.approx(
                 reference[ref_key], rel=1.0e-10, abs=atol
             )
+        # Shearpy uses U_b = -S*x rather than the +U_wall*x PCF convention.
+        assert float(diag["u_top"]) == pytest.approx(-1.0, abs=1.0e-14)
+        assert float(diag["u_bot"]) == pytest.approx(1.0, abs=1.0e-14)
+        assert float(diag["mean_shear"]) == pytest.approx(-1.0, abs=1.0e-14)
 
         ref_coeffs = reference["coefficients"]
         for got, expected in zip(state.flow.u, ref_coeffs["u"], strict=True):
@@ -506,16 +519,17 @@ def test_tc_axisymmetric_dns_matches_live_shenfun_diagnostics_and_coeffs():
     )
     state0 = solver.initial_state(amp=1.0e-4)
     references = tc_axisymmetric_dns_reference(
-        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+        steps=TC_DNS_PARITY_STEPS, include_coefficients=True, family="C"
     )
 
     for reference in references:
         state = solver.solve(state0, reference["steps"])
         diag = solver.diagnostics(state)
-        for key in ("E", "div_linf", "wall", "Eth"):
+        for key in ("E", "div_linf", "Eth"):
             assert float(diag[key]) == pytest.approx(
                 reference[key], rel=1.0e-10, abs=1.0e-12
             )
+        assert float(diag["wall"]) < 1.0e-14
 
         ref_coeffs = reference["coefficients"]
         for got, expected in zip(state.u, ref_coeffs["u"], strict=True):
@@ -562,7 +576,7 @@ def test_tc_3d_dns_matches_live_shenfun_diagnostics_and_coeffs():
     )
     state0 = solver.initial_state(amp=1.0e-4, m=1, kz_mode=1)
     references = tc_3d_dns_reference(
-        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+        steps=TC_DNS_PARITY_STEPS, include_coefficients=True, family="C"
     )
 
     for reference in references:
@@ -617,6 +631,7 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         steps=TC_DNS_PARITY_STEPS,
         amp=1.0e-8 * TC_AXISYM_MRI_REFERENCE_AMP_SCALE,
         include_coefficients=True,
+        family="C",
     )
 
     for reference in references:
@@ -638,7 +653,9 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
             )
             assert np.allclose(
                 got_layout,
-                _tc_axisymmetric_reference_layout(expected, axial_n=solver.Nz),
+                _axial_half_period_shift(
+                    _tc_axisymmetric_reference_layout(expected, axial_n=solver.Nz)
+                ),
                 rtol=1.0e-8,
                 atol=1.0e-10,
             )
@@ -647,7 +664,9 @@ def test_tc_axisymmetric_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
         )
         assert np.allclose(
             p_layout,
-            _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz),
+            _axial_half_period_shift(
+                _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz)
+            ),
             rtol=1.0e-8,
             atol=1.0e-10,
         )
@@ -669,6 +688,7 @@ def test_tc_axisymmetric_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
         steps=TC_MHD_NONLINEAR_PARITY_STEPS,
         amp=TC_MHD_NONLINEAR_PARITY_AMP * TC_AXISYM_MRI_REFERENCE_AMP_SCALE,
         include_coefficients=True,
+        family="C",
     )[0]
 
     state = solver.solve(state0, reference["steps"])
@@ -683,13 +703,19 @@ def test_tc_axisymmetric_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
             got, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
         )
         _assert_active_coefficients_close(
-            got_layout, _tc_axisymmetric_reference_layout(expected, axial_n=solver.Nz)
+            got_layout,
+            _axial_half_period_shift(
+                _tc_axisymmetric_reference_layout(expected, axial_n=solver.Nz)
+            ),
         )
     p_layout = _shenfun_tc_rfft_coeff_layout(
         state.p, radial_n=solver.Nr, axial_n=solver.Nz, mask_nyquist=True
     )
     _assert_active_coefficients_close(
-        p_layout, _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz)
+        p_layout,
+        _axial_half_period_shift(
+            _tc_axisymmetric_reference_layout(ref_coeffs["p"], axial_n=solver.Nz)
+        ),
     )
 
 
@@ -707,7 +733,7 @@ def test_tc_3d_mri_dns_matches_live_shenfun_diagnostics_and_coeffs():
     )
     state0, _ = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=1.0e-8)
     references = tc_3d_mri_dns_reference(
-        steps=TC_DNS_PARITY_STEPS, include_coefficients=True
+        steps=TC_DNS_PARITY_STEPS, include_coefficients=True, family="C"
     )
 
     for reference in references:
@@ -767,6 +793,7 @@ def test_tc_3d_mri_dns_finite_amplitude_coeffs_match_live_shenfun():
         steps=TC_MHD_NONLINEAR_PARITY_STEPS,
         amp=TC_MHD_NONLINEAR_PARITY_AMP,
         include_coefficients=True,
+        family="C",
     )[0]
 
     state = solver.solve(state0, reference["steps"])
