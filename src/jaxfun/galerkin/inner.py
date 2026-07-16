@@ -204,8 +204,7 @@ def inner(
 
 
 def _axis_integration_weights(space: OrthogonalSpace, N: int | None = None) -> Array:
-    _, weights = space.quad_points_and_weights(N)
-    return weights / float(space.domain_factor)
+    return space.integration_weights(N)
 
 
 def _single_device_reduction_input(values: Array) -> Array:

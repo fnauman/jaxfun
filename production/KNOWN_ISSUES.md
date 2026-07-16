@@ -89,9 +89,14 @@ gates. Additional stated conventions to keep in mind:
 - The PCF vector-potential *conducting* convention (`A = 0`) enforces
   `b_x = 0` exactly but carries an `O(eta)` tangential-electric-field gauge
   residual; it intentionally matches the shenfun reference rather than the
-  primitive conducting set. (The TC conducting rows do impose `E_tang = 0`
-  exactly.) A PCF eigensolver anchor therefore exists only for the insulating
-  wall type, where linear and nonlinear conventions coincide.
+  primitive conducting set. The Dirichlet traces nevertheless pin all three
+  global mean-flux components exactly. The residual is local; its periodic wall
+  integral vanished at roundoff in the bounded probe but is dynamics-dependent
+  and is monitored by the Faraday mean-field tendencies. Issue #39 tracks a
+  later exact `E_tang = 0` PCF gauge row/pin implementation. (The TC conducting
+  rows already impose `E_tang = 0` exactly.) A PCF eigensolver anchor currently
+  exists only for the insulating wall type, where linear and nonlinear
+  conventions coincide.
 - Adaptive-CFL runs are fresh-start only: resume, quench, checkpoint banks,
   and snapshot cadences under adaptive dt are not wired.
 - Stress-free velocity walls and a vector-potential pseudo-vacuum variant are

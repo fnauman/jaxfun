@@ -192,6 +192,11 @@ class Composite(OrthogonalSpace):
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Delegate physical-measure weights to the underlying basis."""
+        return self.orthogonal.integration_weights(N)
+
     @jax.jit(static_argnums=0)
     def _evaluate(self, X: Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""
@@ -568,6 +573,11 @@ class DirectSum:
     ) -> Array:
         """Return mesh from homogeneous Composite summand."""
         return self[0].mesh(kind=kind, N=N)
+
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Return physical weights from the homogeneous summand's basis."""
+        return self[0].integration_weights(N)
 
     def bnd_vals(self) -> Array:
         """Return boundary lifting values (from BCGeneric)."""

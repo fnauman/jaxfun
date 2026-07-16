@@ -9,6 +9,7 @@ import pytest
 from production.adapters import load_config
 from production.compare_goldens import validate_golden
 from production.oracles import (
+    _PCF_ELECTROMAGNETIC_KEYS,
     _channel_poiseuille_kmm_state,
     _saturation_passed,
     run_supported_spec,
@@ -638,6 +639,64 @@ def test_write_golden_hashes_sanitized_scalars(tmp_path):
     golden = validate_golden(golden_path)
 
     assert golden["diagnostics"]["scalars"]["flow_rate"] is None
+
+
+@pytest.mark.parametrize(
+    "spec_name",
+    [
+        "exp_pcf_mri_vector_potential.json",
+        "exp_pcf_mri_vp_insulating.json",
+        "pcf_mri_znf_scout_v1.json",
+    ],
+)
+def test_pcf_vector_potential_specs_cover_generated_numeric_tolerances(
+    tmp_path, spec_name
+):
+    config = load_config(ROOT / "production" / "runs" / spec_name)
+    required = {
+        "box_volume",
+        "kinetic_energy",
+        "magnetic_energy",
+        "magnetic_energy_total",
+        "total_energy",
+        "divergence_u_l2",
+        "divergence_b_l2",
+        "maxwell_stress_xy",
+        "reynolds_stress",
+        "total_stress",
+        "alpha_Sh",
+        "channel_kz1_velocity_rms",
+        "channel_kz1_magnetic_rms",
+        "channel_kz1_total_rms",
+        "mean_bx",
+        "mean_by",
+        "mean_bz",
+        "mag_energy_mean",
+        "mag_energy_fluct",
+        "flux_drift_bx",
+        "flux_drift_by",
+        "flux_drift_bz",
+        "growth_rate",
+        "magnetic_energy_growth_factor",
+        "divergence_b_guard_l2",
+        *_PCF_ELECTROMAGNETIC_KEYS,
+    }
+    if "insulating" in spec_name:
+        required.add("insulating_bc_residual")
+    if float(config.spec["nondimensional_groups"].get("B0", 0.0)) != 0.0:
+        required.update(("transport_alpha", "alpha_B0"))
+
+    tolerances = config.spec["tolerance_model"]["scalars"]
+    assert required <= tolerances.keys()
+
+    diagnostics = {"scalars": {key: 0.0 for key in required}, "time_series": []}
+    golden_path = _write_golden(
+        tmp_path / spec_name / "golden.json",
+        config,
+        diagnostics,
+        {"capture_skipped": True},
+    )
+    assert validate_golden(golden_path)["diagnostics"]["scalars"].keys() == required
 
 
 def test_validate_only_writes_metadata_without_claiming_solver_execution(tmp_path):

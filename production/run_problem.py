@@ -1241,6 +1241,10 @@ def _write_golden(
         },
     }
     _write_json(path, data)
+    # A generated reference must satisfy the same contract as a consumed one.
+    # Catch newly emitted numeric diagnostics without declared tolerances at
+    # generation time instead of silently leaving an unusable golden on disk.
+    validate_golden(path, spec=config.spec)
     return path
 
 

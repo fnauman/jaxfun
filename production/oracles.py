@@ -1709,6 +1709,37 @@ def _box_volume(solver: Any) -> float:
     )
 
 
+_PCF_ELECTROMAGNETIC_KEYS = (
+    "electric_ideal_l2",
+    "electric_resistive_l2",
+    "electric_total_l2",
+    "divergence_e_l2",
+    "divergence_e_ideal_l2",
+    "divergence_e_resistive_l2",
+    "divergence_a_l2",
+    "divergence_a_wall_linf",
+    "electric_ideal_wall_tangential_linf",
+    "electric_resistive_wall_tangential_linf",
+    "electric_wall_tangential_linf",
+    "faraday_mean_bx_tendency",
+    "faraday_mean_by_tendency",
+    "faraday_mean_bz_tendency",
+    "mean_bx_trace",
+    "mean_by_trace",
+    "mean_bz_trace",
+    "mean_b_trace_mismatch_linf",
+    "mean_ex_ideal",
+    "mean_ey_ideal",
+    "mean_ez_ideal",
+    "mean_ex_resistive",
+    "mean_ey_resistive",
+    "mean_ez_resistive",
+    "mean_ex_total",
+    "mean_ey_total",
+    "mean_ez_total",
+)
+
+
 def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
     """Canonical scalars from the curl/vector-potential MRI solver (FJ-03)."""
 
@@ -1735,6 +1766,7 @@ def _pcf_curl_scalars(solver: Any, state: Any) -> dict[str, float]:
         "mag_energy_mean": float(diag["mag_energy_mean"]),
         "mag_energy_fluct": float(diag["mag_energy_fluct"]),
     }
+    scalars.update({key: float(diag[key]) for key in _PCF_ELECTROMAGNETIC_KEYS})
     if "alpha" in diag:  # net-flux alpha only when B0 != 0 (ZNF-safe)
         scalars["transport_alpha"] = float(diag["alpha"])
         scalars["alpha_B0"] = float(diag["alpha_B0"])
@@ -1846,6 +1878,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             ),
             **({"cfl_total": float(diag["cfl_total"])} if "cfl_total" in diag else {}),
         }
+        row.update({key: float(diag[key]) for key in _PCF_ELECTROMAGNETIC_KEYS})
         rows.append(row)
         if on_row is not None:
             on_row(row)
@@ -4280,19 +4313,29 @@ def _pcf_primitive_3d_scalars(solver: Any, state: Any) -> dict[str, float]:
 def _pcf_fluctuation_scalars(solver: Any, state: Any) -> dict[str, float]:
     import jax.numpy as jnp
 
+    from jaxfun.galerkin.inner import integrate
+
     diag = solver.diagnostics(state)
     up = solver._backward_velocity(state.u)
-    total_dv_dx = solver.TD.backward_primitive(state.u[1], (1, 0, 0)) + solver.dUb_dx
-    streak = jnp.sqrt(jnp.mean(jnp.real(up[1] * jnp.conj(up[1]))))
+    volume = (
+        (solver.domain[0][1] - solver.domain[0][0])
+        * (solver.domain[1][1] - solver.domain[1][0])
+        * (solver.domain[2][1] - solver.domain[2][0])
+    )
+    streak = jnp.sqrt(jnp.real(integrate(up[1] * jnp.conj(up[1]), solver.TD)) / volume)
     roll = jnp.sqrt(
-        jnp.mean(jnp.real(up[0] * jnp.conj(up[0]) + up[2] * jnp.conj(up[2])))
+        (
+            jnp.real(integrate(up[0] * jnp.conj(up[0]), solver.TB))
+            + jnp.real(integrate(up[2] * jnp.conj(up[2]), solver.TD))
+        )
+        / volume
     )
     return {
         "kinetic_energy": float(diag["Epert"]),
         "total_kinetic_energy": float(diag["Etot"]),
         "divergence_l2": float(diag["divL2"]),
-        "wall_shear_lower": float(jnp.mean(jnp.real(total_dv_dx[0, :, :]))),
-        "wall_shear_upper": float(jnp.mean(jnp.real(total_dv_dx[-1, :, :]))),
+        "wall_shear_lower": float(diag["wall_shear_bot"]),
+        "wall_shear_upper": float(diag["wall_shear_top"]),
         "wall_velocity_lower": float(diag["u_bot"]),
         "wall_velocity_upper": float(diag["u_top"]),
         "mean_shear": float(diag["mean_shear"]),
