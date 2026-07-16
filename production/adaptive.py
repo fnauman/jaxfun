@@ -436,7 +436,18 @@ def run_adaptive_cfl(
             health, cfl_total = measure(state)
             require_finite_cfl(cfl_total, done=done, t=t)
             cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
+            restored_dt = float(solver.dt)
             state = maybe_adapt(state, cfl_total, done, t)
+            if not math.isclose(
+                float(solver.dt), restored_dt, rel_tol=1.0e-12, abs_tol=0.0
+            ):
+                # Callback health must describe the committed post-decision
+                # timestep, not the rejected restored timestep.
+                health, cfl_total = measure(state)
+                require_finite_cfl(cfl_total, done=done, t=t)
+                cfl_max = (
+                    max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
+                )
             steps_until_check = int(config.check_every)
 
         controller_check = steps_until_check == 0

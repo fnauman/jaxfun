@@ -576,6 +576,7 @@ def test_endpoint_restore_forces_committed_dt_cfl_check_on_resume():
         target=0.5, safety=0.9, dt_min=0.1, dt_max=2.0, check_every=4
     )
     first_solver = Solver()
+    callback_health = []
     state, first = run_adaptive_cfl(
         first_solver,
         0.4,
@@ -584,9 +585,12 @@ def test_endpoint_restore_forces_committed_dt_cfl_check_on_resume():
         health_scalars_fn=lambda current_solver, value: {
             "cfl_total": float(value) * current_solver.dt
         },
+        on_block=lambda _t, _done, _state, values: callback_health.append(values),
     )
     assert first["controller_state"]["dt"] == pytest.approx(0.5625)
     assert first["controller_state"]["steps_until_check"] == 4
+    assert callback_health[-1]["cfl_total"] == pytest.approx(0.45)
+    assert callback_health[-1]["_adaptive_controller_dt"] == pytest.approx(0.5625)
 
     resumed_solver = Solver()
     run_adaptive_cfl(
