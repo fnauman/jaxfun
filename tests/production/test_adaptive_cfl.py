@@ -9,6 +9,8 @@ time is accounted exactly, and every adaptation is recorded.
 
 from __future__ import annotations
 
+import copy
+
 import jax
 import numpy as np
 import pytest
@@ -19,7 +21,12 @@ from production.adaptive import (
     adaptive_cfl_from_spec,
     run_adaptive_cfl,
 )
-from production.oracles import _adaptive_elapsed_target, run_supported_spec
+from production.oracles import (
+    _adaptive_elapsed_target,
+    load_checkpoint_bank_index,
+    load_resume_checkpoint,
+    run_supported_spec,
+)
 
 SOLENOIDAL_CEIL = 1.0e-12
 
@@ -98,6 +105,7 @@ def test_adaptive_horizon_uses_final_time_without_initial_dt_quantization():
     assert _adaptive_elapsed_target(spec, steps=None, t0=0.0) == pytest.approx(1.0)
     assert _adaptive_elapsed_target(spec, steps=None, t0=0.4) == pytest.approx(0.6)
     assert _adaptive_elapsed_target(spec, steps=2, t0=0.0) == pytest.approx(0.6)
+    assert _adaptive_elapsed_target(spec, steps=2, t0=0.4) == pytest.approx(0.2)
 
 
 def test_adaptive_driver_aborts_after_a_newly_unsafe_state():
@@ -284,18 +292,168 @@ def test_exact_horizon_shorter_than_dt_min_is_rejected_before_solving():
         )
 
 
-@pytest.mark.parametrize("cadence", ["checkpoint_every", "snapshot_every"])
-def test_adaptive_cadence_flags_are_rejected_explicitly(tmp_path, cadence):
+@pytest.mark.integration
+def test_adaptive_cadences_checkpoint_controller_and_resume(tmp_path):
+    import h5py
+
     spec = _vp_spec(
         {
             "integrator": "IMEXRK222",
             "dt": 1.0e-3,
             "final_time": 0.01,
-            "adaptive_cfl": {},
+            "adaptive_cfl": {
+                "check_every": 3,
+                "dt_min": 1.0e-5,
+                "dt_max": 1.0e-3,
+            },
         }
     )
-    with pytest.raises(NotImplementedError, match="does not yet support"):
-        run_supported_spec(spec, steps=1, out_dir=tmp_path, **{cadence: 1})
+    run_supported_spec(
+        spec,
+        steps=2,
+        out_dir=tmp_path,
+        checkpoint_every=1,
+        snapshot_every=1,
+        profiles_every=1,
+        diagnostics_every=1,
+    )
+    checkpoint = load_resume_checkpoint(tmp_path)
+    assert checkpoint.tstep == 2
+    assert set(checkpoint.fields["adaptive_controller"]) == {
+        "dt",
+        "steps_until_check",
+    }
+    assert (
+        int(np.asarray(checkpoint.fields["adaptive_controller"]["steps_until_check"]))
+        == 1
+    )
+
+    out = run_supported_spec(
+        spec,
+        steps=4,
+        out_dir=tmp_path,
+        checkpoint_every=1,
+        snapshot_every=1,
+        profiles_every=1,
+        diagnostics_every=1,
+        resume_checkpoint=checkpoint,
+    )
+    assert out["time_series"][-1]["t"] == pytest.approx(4.0e-3)
+    resumed = load_resume_checkpoint(tmp_path)
+    assert resumed.tstep == 4
+    with h5py.File(tmp_path / "profiles" / "multiplane_v2.h5", "r") as handle:
+        tsteps = np.asarray(handle["tstep"])
+        assert tsteps.tolist() == [1, 2, 3, 4]
+        assert np.all(np.diff(tsteps) > 0)
+    with h5py.File(tmp_path / "snapshots" / "snapshots.h5", "r") as handle:
+        assert sorted(map(int, handle["snapshots"].keys())) == [1, 2, 3, 4]
+
+
+@pytest.mark.integration
+def test_adaptive_quench_uses_physical_time_and_actual_step_horizon(tmp_path):
+    spec = _vp_spec(
+        {
+            "integrator": "IMEXRK222",
+            "dt": 1.0e-3,
+            "final_time": 0.01,
+            "adaptive_cfl": {
+                "check_every": 2,
+                "dt_min": 1.0e-5,
+                "dt_max": 1.0e-3,
+            },
+        }
+    )
+    run_supported_spec(
+        spec,
+        steps=2,
+        out_dir=tmp_path,
+        checkpoint_every=1,
+        checkpoint_bank=True,
+    )
+    assert [entry["tstep"] for entry in load_checkpoint_bank_index(tmp_path)] == [1, 2]
+    parent = load_resume_checkpoint(tmp_path, step=2)
+    child = copy.deepcopy(spec)
+    child["spec_hash"] = "vp-adaptive-child-hash"
+    child["nondimensional_groups"]["eta_mag"] = 2.5e-2
+    out = run_supported_spec(
+        child,
+        additional_time=2.0e-3,
+        out_dir=tmp_path / "child",
+        checkpoint_every=1,
+        diagnostics_every=1,
+        resume_checkpoint=parent,
+        quench=True,
+    )
+    assert out["run_horizon"]["final_time"] == pytest.approx(4.0e-3)
+    assert out["run_horizon"]["final_step"] > parent.tstep
+    assert out["time_series"][-1]["t"] == pytest.approx(4.0e-3)
+    assert all("tstep" in row for row in out["time_series"][1:-1])
+
+
+def test_output_splits_do_not_change_controller_decision_schedule():
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+            self.solve_calls = []
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, state, steps):
+            self.solve_calls.append((self.dt, steps))
+            return state
+
+    solver = Solver()
+    _, record = run_adaptive_cfl(
+        solver,
+        None,
+        elapsed_target=4.0,
+        config=AdaptiveCFLConfig(
+            target=0.5, dt_min=0.1, dt_max=2.0, check_every=4, growth_cap=2.0
+        ),
+        health_scalars_fn=lambda current_solver, _state: {
+            "cfl_total": 0.1 * current_solver.dt
+        },
+        block_steps_fn=lambda _done: 1,
+    )
+    # The fresh preflight grows dt once; cadence splits then divide the same
+    # two-step controller interval into output blocks without another decision.
+    assert solver.solve_calls == [(2.0, 1)] * 2
+    assert record["n_dt_changes"] == 1
+    assert record["controller_state"]["dt"] == pytest.approx(2.0)
+    assert record["controller_state"]["steps_until_check"] == 2
+
+
+def test_endpoint_redistribution_survives_output_splits_at_controller_boundary():
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+            self.solve_calls = []
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, state, steps):
+            self.solve_calls.append((self.dt, steps))
+            return state
+
+    solver = Solver()
+    _, record = run_adaptive_cfl(
+        solver,
+        None,
+        elapsed_target=2.1,
+        config=AdaptiveCFLConfig(target=0.5, dt_min=0.4, dt_max=2.0, check_every=2),
+        health_scalars_fn=lambda current_solver, _state: {
+            "cfl_total": 0.3 * current_solver.dt
+        },
+        block_steps_fn=lambda _done: 1,
+    )
+    assert solver.solve_calls == [(pytest.approx(0.7), 1)] * 3
+    assert record["elapsed_time"] == pytest.approx(2.1)
+    assert record["controller_state"] == {
+        "dt": pytest.approx(1.0),
+        "steps_until_check": 0,
+    }
 
 
 def test_adaptive_driver_refuses_an_unsafe_dt_min_before_solving():

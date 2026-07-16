@@ -119,7 +119,7 @@ def test_cli_rejects_final_time_only_quench_before_output(tmp_path, capsys):
     assert not out.exists()
 
 
-def test_adaptive_quench_stays_rejected_before_bank_or_output(tmp_path):
+def test_adaptive_quench_reaches_parent_bank_validation(tmp_path):
     data = json.loads(
         (ROOT / "production" / "runs" / "exp_pcf_mri_vector_potential.json").read_text(
             encoding="utf-8"
@@ -130,7 +130,7 @@ def test_adaptive_quench_stays_rejected_before_bank_or_output(tmp_path):
     child.write_text(json.dumps(data), encoding="utf-8")
     out = tmp_path / "must-not-exist"
 
-    with pytest.raises(QuenchError, match="adaptive_cfl quenching is not supported"):
+    with pytest.raises(QuenchError, match="checkpoint bank"):
         run_problem(
             config_path=child,
             out=out,

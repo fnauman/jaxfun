@@ -48,7 +48,9 @@ try:
     from .quench import (
         QuenchError,
         burn_in_horizon,
+        finalize_adaptive_quench_duration,
         finalize_fixed_quench_duration,
+        resolve_adaptive_quench_duration,
         resolve_fixed_quench_duration,
         validate_bank_checkpoint_record,
         validate_burn_in_request,
@@ -92,7 +94,9 @@ except ImportError:  # pragma: no cover - direct script mode
     from production.quench import (  # type: ignore
         QuenchError,
         burn_in_horizon,
+        finalize_adaptive_quench_duration,
         finalize_fixed_quench_duration,
+        resolve_adaptive_quench_duration,
         resolve_fixed_quench_duration,
         validate_bank_checkpoint_record,
         validate_burn_in_request,
@@ -158,11 +162,6 @@ def run_problem(
     )
     config = load_config(config_path, resolution_tier=resolution_tier)
     validate_quench_runner_preflight(config.spec, quench=quench_requested)
-    if quench_requested and adaptive_cfl_from_spec(config.spec) is not None:
-        raise QuenchError(
-            "adaptive_cfl quenching is not supported by the fixed-step additional-"
-            "duration contract; use a fixed child dt"
-        )
     resume_record, quench_metadata = _resolve_resume_or_quench(
         config,
         resume=resume,
@@ -178,9 +177,22 @@ def run_problem(
     )
     quench_additional_steps = None
     if quench_duration is not None:
-        quench_additional_steps = int(quench_duration["absolute_target"]["step"]) - int(
-            quench_duration["parent_checkpoint"]["step"]
-        )
+        target_step = quench_duration["absolute_target"].get("step")
+        if target_step is not None:
+            quench_additional_steps = int(target_step) - int(
+                quench_duration["parent_checkpoint"]["step"]
+            )
+        else:
+            requested_steps = quench_duration["requested"].get("additional_steps")
+            if requested_steps is not None:
+                quench_additional_steps = int(requested_steps)
+            else:
+                elapsed = float(quench_duration["absolute_target"]["time"]) - float(
+                    quench_duration["parent_checkpoint"]["time"]
+                )
+                quench_additional_steps = max(
+                    1, int(math.ceil(elapsed / float(config.spec["time"]["dt"])))
+                )
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     release_gate = _enforce_release_gate(
@@ -324,16 +336,31 @@ def run_problem(
                         "quench runner endpoint disagrees with its final "
                         "time-series row"
                     )
-                finalized_duration = finalize_fixed_quench_duration(
+                finalizer = (
+                    finalize_adaptive_quench_duration
+                    if duration_metadata.get("stepping") == "adaptive"
+                    else finalize_fixed_quench_duration
+                )
+                finalized_duration = finalizer(
                     duration_metadata,
                     final_time=horizon_time,
                     final_step=horizon["final_step"],
                 )
                 if not finalized_duration["attained"]["target_reached"]:
                     raise QuenchError(
-                        "fixed-step quench did not attain its requested additional "
-                        "duration"
+                        f"{duration_metadata.get('stepping', 'fixed')}-step quench "
+                        "did not attain its requested additional duration"
                     )
+                validate_burn_in_request(
+                    quench=True,
+                    burn_in_steps=burn_in_steps,
+                    resolved_additional_steps=int(
+                        finalized_duration["attained"]["additional_steps"]
+                    ),
+                )
+                quench_additional_steps = int(
+                    finalized_duration["attained"]["additional_steps"]
+                )
                 finalized_duration["endpoint_validated"] = True
                 quench_metadata["duration"] = finalized_duration
         except ProductionOracleNotImplementedError as exc:
@@ -590,7 +617,7 @@ def _validation_scope_metadata(
             **common,
             "kind": "quench_continuation",
             "reason": (
-                "executed an explicit fixed-step quench horizon; finite/divergence "
+                "executed an explicit quench horizon; finite/divergence "
                 "health is required, but growth/saturation is a scientific outcome"
             ),
         }
@@ -927,6 +954,8 @@ def _executed_solver_steps(
     if quench_duration is not None:
         parent = quench_duration["parent_checkpoint"]
         target = quench_duration["absolute_target"]
+        if target.get("step") is None:
+            return None
         return int(target["step"]) - int(parent["step"])
     target_steps = _steps_from_spec_metadata(spec, steps=steps)
     start_step = (
@@ -1247,18 +1276,27 @@ def _resolve_resume_or_quench(
         )
         diff = validate_quench(parent_spec, config.spec)  # raises on illegal change
         tstep0 = int(getattr(record, "tstep", 0))
-        duration = resolve_fixed_quench_duration(
-            additional_time=additional_time,
-            additional_steps=additional_steps,
-            child_dt=float(config.spec["time"]["dt"]),
-            parent_time=float(record.t),
-            parent_step=tstep0,
-        )
-        validate_burn_in_request(
-            quench=True,
-            burn_in_steps=burn_in_steps,
-            resolved_additional_steps=duration.additional_steps,
-        )
+        if adaptive_cfl_from_spec(config.spec) is not None:
+            duration = resolve_adaptive_quench_duration(
+                additional_time=additional_time,
+                additional_steps=additional_steps,
+                child_initial_dt=float(config.spec["time"]["dt"]),
+                parent_time=float(record.t),
+                parent_step=tstep0,
+            )
+        else:
+            duration = resolve_fixed_quench_duration(
+                additional_time=additional_time,
+                additional_steps=additional_steps,
+                child_dt=float(config.spec["time"]["dt"]),
+                parent_time=float(record.t),
+                parent_step=tstep0,
+            )
+            validate_burn_in_request(
+                quench=True,
+                burn_in_steps=burn_in_steps,
+                resolved_additional_steps=duration.additional_steps,
+            )
         meta = {
             "mode": "quench",
             "parent_run_dir": str(source),
@@ -1637,13 +1675,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--additional-time",
         type=float,
-        help="Fixed-step quench horizon measured from the selected parent time; "
-        "must be an integer multiple of the child dt.",
+        help="Quench horizon measured from the selected parent time. Fixed-step "
+        "runs require an integer multiple of child dt; adaptive runs land on the "
+        "requested physical time.",
     )
     parser.add_argument(
         "--additional-steps",
         type=int,
-        help="Fixed-step quench horizon measured from the selected parent step.",
+        help="Quench horizon in child steps. For adaptive runs this is nominal "
+        "shorthand for N times the configured initial dt.",
     )
     parser.add_argument("--checkpoint-every", type=int)
     parser.add_argument("--snapshot-every", type=int)

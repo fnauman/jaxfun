@@ -206,12 +206,13 @@ redistributed over the final steps (subject to `dt_max` and projected CFL),
 and an impossible sub-floor horizon is rejected before solving. `dt_final`
 is restored to the controller value after an endpoint adjustment, while
 `dt_last_used` records the actual final step.
-The solenoidal gates run every block. Adaptive runs are currently wired
-for fresh starts (no resume/quench/checkpoint-bank) and write a final
-checkpoint only. Passing `checkpoint_every` or `snapshot_every` is rejected
-explicitly rather than silently dropping output; tests:
-`tests/production/test_adaptive_cfl.py`. Fixed-`dt`
-remains the default and the committed goldens' semantics.
+The solenoidal gates run every block. Adaptive checkpoints persist the field
+state, exact physical time, controller `dt`, and remaining steps to the next
+CFL decision. Resume-exact, adaptive quench continuations, checkpoint banks,
+snapshots, and PCF `multiplane_v2` profiles use the same step-cadence contract
+as fixed stepping. Output-only block splits do not alter the controller's
+`check_every` decision schedule. Fixed-`dt` remains the default and the
+committed goldens' semantics; tests: `tests/production/test_adaptive_cfl.py`.
 
 ### Magnetic wall-condition menu (what exists, what does not)
 
