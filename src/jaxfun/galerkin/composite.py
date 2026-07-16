@@ -574,6 +574,11 @@ class DirectSum:
         """Return mesh from homogeneous Composite summand."""
         return self[0].mesh(kind=kind, N=N)
 
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Return physical weights from the homogeneous summand's basis."""
+        return self[0].integration_weights(N)
+
     def bnd_vals(self) -> Array:
         """Return boundary lifting values (from BCGeneric)."""
         return self[1].bnd_vals()

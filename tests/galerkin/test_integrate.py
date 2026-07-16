@@ -82,6 +82,15 @@ def test_integrate_chebyshev_tensor_product_is_physical_volume() -> None:
     assert jnp.allclose(integrate(1.0 + 0.0 * x + 0.0 * y, T), 8.0, atol=2e-13)
 
 
+def test_integrate_tensor_product_with_inhomogeneous_direct_sum_axis() -> None:
+    X = FunctionSpace(17, Chebyshev, bc=(1, 0), domain=Domain(-1.0, 1.0))
+    Y = FunctionSpace(16, FourierSpace, domain=Domain(0.0, 4.0))
+    T = TensorProduct(X, Y)
+    x, y = T.mesh()
+
+    assert jnp.allclose(integrate(1.0 + 0.0 * x + 0.0 * y, T), 8.0, atol=2e-13)
+
+
 @pytest.mark.parametrize(
     ("space_type", "kwargs"),
     [
