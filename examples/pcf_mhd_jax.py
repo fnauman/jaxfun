@@ -26,7 +26,6 @@ except ModuleNotFoundError:  # direct script execution from examples/
 
 from jaxfun.galerkin import TestFunction, TrialFunction, inner
 from jaxfun.galerkin.inner import integrate
-from jaxfun.integrators.cnab2 import scan_steps
 from jaxfun.integrators.nonlinear import physical_cross
 
 
@@ -311,8 +310,7 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
         self._build_A_operators()
 
     def solve(self, state: MHDState, steps: int) -> MHDState:
-        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
-        return scan_steps(step, state, int(steps))
+        return self._rollout_cache(state, int(steps))
 
     def magnetic_divergence_l2(self, state: MHDState) -> Array:
         B = self.update_B_from_A(state.A)

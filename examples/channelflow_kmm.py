@@ -29,7 +29,7 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.integrators import IMEXRK3, IMEXRK222, PDEIMEXRK, ars_stage_rhs
-from jaxfun.integrators.cnab2 import scan_steps
+from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo
 from jaxfun.io import Cadence, run_with_cadence
 from jaxfun.la.solvers import Biharmonic, Helmholtz
 
@@ -124,6 +124,7 @@ class KMM:
         self.Xp = self.TDp.mesh()
 
         self._build_operators()
+        self._rollout_cache = ScanRolloutCache(self.step)
         self._pressure_cache = None
 
     @staticmethod
@@ -562,10 +563,14 @@ class KMM:
         """
         self.dt = float(dt)
         self._build_operators()
+        self._rollout_cache.rebind(self.step)
 
     def solve(self, state: KMMState, steps: int) -> KMMState:
-        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
-        return scan_steps(step, state, int(steps))
+        return self._rollout_cache(state, int(steps))
+
+    def rollout_cache_info(self) -> ScanRolloutCacheInfo:
+        """Return bounded executable-cache lifecycle counters."""
+        return self._rollout_cache.info()
 
     def solve_with_cadence(
         self,

@@ -8,13 +8,108 @@ the nonlinear term uses Adams-Bashforth-2 with an IMEX-Euler first step.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TypeVar
 
 import jax
 import jax.numpy as jnp
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class ScanRolloutCacheInfo:
+    """Operational counters for a bounded persistent scan cache."""
+
+    generation: int
+    max_entries: int
+    live_entries: int
+    step_counts: tuple[int, ...]
+    hits: int
+    misses: int
+    evictions: int
+
+
+class ScanRolloutCache[T]:
+    """Reuse compiled scan rollouts without retaining unbounded executables.
+
+    Each distinct block length needs a static lax.scan executable for
+    reverse-mode compatibility. The small LRU bounds those variants, while
+    rebind clears every compiled executable when a solver rebuilds
+    timestep-dependent factors.
+    """
+
+    def __init__(self, step: Callable[[T], T], *, max_entries: int = 8) -> None:
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
+        self._step = step
+        self._scan_step = jax.checkpoint(step)
+        self._max_entries = int(max_entries)
+        self._rollouts: OrderedDict[int, Callable[[T], T]] = OrderedDict()
+        self._generation = 0
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
+
+    def _compile_for_steps(self, steps: int) -> Callable[[T], T]:
+        step = self._scan_step
+
+        @jax.jit
+        def rollout(state: T) -> T:
+            return scan_steps(step, state, steps)
+
+        return rollout
+
+    @staticmethod
+    def _clear_compiled(rollout: Callable[[T], T]) -> None:
+        clear_cache = getattr(rollout, "clear_cache", None)
+        if clear_cache is not None:
+            clear_cache()
+
+    def __call__(self, state: T, steps: int) -> T:
+        steps = int(steps)
+        if steps < 0:
+            raise ValueError("steps must be non-negative")
+        if steps == 0:
+            return state
+        if jax.device_count() > 1 or _has_concrete_multi_device_leaf(state):
+            return scan_steps(self._step, state, steps)
+
+        rollout = self._rollouts.pop(steps, None)
+        if rollout is None:
+            self._misses += 1
+            rollout = self._compile_for_steps(steps)
+            if len(self._rollouts) >= self._max_entries:
+                _old_steps, old_rollout = self._rollouts.popitem(last=False)
+                self._clear_compiled(old_rollout)
+                self._evictions += 1
+        else:
+            self._hits += 1
+        self._rollouts[steps] = rollout
+        return rollout(state)
+
+    def rebind(self, step: Callable[[T], T]) -> None:
+        """Drop obsolete executables and bind a rebuilt solver step."""
+        for rollout in self._rollouts.values():
+            self._clear_compiled(rollout)
+        self._rollouts.clear()
+        self._step = step
+        self._scan_step = jax.checkpoint(step)
+        self._generation += 1
+
+    def info(self) -> ScanRolloutCacheInfo:
+        """Return stable counters without exposing JAX cache internals."""
+        return ScanRolloutCacheInfo(
+            generation=self._generation,
+            max_entries=self._max_entries,
+            live_entries=len(self._rollouts),
+            step_counts=tuple(self._rollouts),
+            hits=self._hits,
+            misses=self._misses,
+            evictions=self._evictions,
+        )
 
 
 def _has_concrete_multi_device_leaf(tree: object) -> bool:
