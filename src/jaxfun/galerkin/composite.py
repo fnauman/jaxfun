@@ -192,6 +192,11 @@ class Composite(OrthogonalSpace):
         """Return quadrature nodes/weights (delegated to underlying basis)."""
         return self.orthogonal.quad_points_and_weights(N)
 
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Delegate physical-measure weights to the underlying basis."""
+        return self.orthogonal.integration_weights(N)
+
     @jax.jit(static_argnums=0)
     def _evaluate(self, X: Array, c: Array) -> Array:
         """Evaluate constrained expansion at X with composite coeffs c."""

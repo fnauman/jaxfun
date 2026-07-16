@@ -44,6 +44,11 @@ def test_integrate_chebyshev_uses_physical_not_orthogonality_measure() -> None:
     x = V.mesh()
 
     assert jnp.allclose(integrate(jnp.ones_like(x), V), 2.0, atol=1e-14)
+    D = FunctionSpace(17, Chebyshev, bc=(0, 0), domain=Domain(-1.0, 1.0))
+    assert jnp.allclose(jnp.sum(D.integration_weights()), 2.0, atol=1e-14)
+    assert jnp.allclose(jnp.sum(D.quadrature_weights()), jnp.pi, atol=1e-14)
+    assert jnp.allclose(integrate(jnp.ones(D.num_quad_points), D), 2.0, atol=1e-14)
+
     assert jnp.allclose(integrate(x**2, V), 2.0 / 3.0, atol=1e-14)
     assert jnp.allclose(jnp.sum(V.quadrature_weights()), jnp.pi, atol=1e-14)
 
@@ -61,7 +66,7 @@ def test_integrate_chebyshev_derivative_obeys_fundamental_theorem() -> None:
 
 
 def test_integrate_chebyshev_tensor_product_is_physical_volume() -> None:
-    X = FunctionSpace(19, Chebyshev, domain=Domain(-1.0, 1.0))
+    X = FunctionSpace(19, Chebyshev, bc=(0, 0), domain=Domain(-1.0, 1.0))
     Y = FunctionSpace(16, FourierSpace, domain=Domain(0.0, 4.0))
     T = TensorProduct(X, Y)
     x, y = T.mesh()

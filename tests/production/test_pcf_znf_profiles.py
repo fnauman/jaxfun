@@ -24,10 +24,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SCOUT = ROOT / "production" / "runs" / "pcf_mri_znf_scout_v1.json"
 
 
-def _solver() -> PlaneCouetteMRIShearpyJax:
+def _solver(family: str = "L") -> PlaneCouetteMRIShearpyJax:
     return PlaneCouetteMRIShearpyJax(
         N=(9, 8, 8),
-        family="L",
+        family=family,
         dt=1.0e-3,
         background_b=(0.0, 0.0, 0.0),
         perturbation_amplitude=1.0e-3,
@@ -53,6 +53,44 @@ def test_znf_seed_is_solenoidal_and_has_zero_mean_vertical_flux() -> None:
         0.1 * np.sin(np.pi * x), abs=5.0e-5
     )
     assert bool(jnp.isfinite(diagnostics["channel_kz1_total_rms"]))
+
+
+def test_chebyshev_weighted_seed_can_hide_zero_physical_flux() -> None:
+    """The ZNF sine seed cannot distinguish physical and Chebyshev measures.
+
+    Use an asymmetric-in-measure represented field with exact zero physical
+    flux: Ay=(x^3-x)/3, hence Bz=x^2-1/3 and integral Bz dx=0. The obsolete
+    Gauss-Chebyshev diagnostic reports pi/12 instead.
+    """
+    solver = _solver(family="C")
+    initial = solver.initial_state()
+    x, y, z = solver.X
+    ay = (x**3 - x) / 3.0 + 0.0 * y + 0.0 * z
+    zeros = jnp.zeros_like(ay)
+    state = type(initial)(
+        flow=initial.flow,
+        A=solver._A_state_from_physical((zeros, ay, zeros)),
+    )
+
+    diagnostics = solver.diagnostics(state)
+    B = solver.update_B_from_A(state.A)
+    bz = jnp.real(solver._backward_B(B, padded=False)[2])
+    wx = solver.TC.basespaces[0].quadrature_weights()
+    wy = solver.TC.basespaces[1].integration_weights()
+    wz = solver.TC.basespaces[2].integration_weights()
+    volume = (
+        (solver.domain[0][1] - solver.domain[0][0])
+        * (solver.domain[1][1] - solver.domain[1][0])
+        * (solver.domain[2][1] - solver.domain[2][0])
+    )
+    obsolete_weighted_mean = (
+        jnp.sum(bz * wx[:, None, None] * wy[None, :, None] * wz[None, None, :]) / volume
+    )
+
+    assert float(obsolete_weighted_mean) == pytest.approx(np.pi / 12.0, abs=1e-12)
+    assert abs(float(diagnostics["mean_bz"])) < 1.0e-14
+    assert abs(float(diagnostics["mean_bz_trace"])) < 1.0e-14
+    assert float(diagnostics["mean_b_trace_mismatch_linf"]) < 1.0e-14
 
 
 def test_znf_flux_and_electric_health_diagnostics() -> None:
@@ -91,6 +129,11 @@ def test_znf_flux_and_electric_health_diagnostics() -> None:
     assert float(diagnostics["mean_bz_trace"]) == pytest.approx(0.0, abs=1.0e-14)
     assert float(diagnostics["mean_b_trace_mismatch_linf"]) < 1.0e-13
     assert float(diagnostics["electric_ideal_wall_tangential_linf"]) < 1.0e-13
+    assert float(diagnostics["electric_resistive_wall_tangential_linf"]) > 1.0e-6
+    assert float(diagnostics["electric_wall_tangential_linf"]) == pytest.approx(
+        float(diagnostics["electric_resistive_wall_tangential_linf"]),
+        rel=1.0e-10,
+    )
     assert abs(float(diagnostics["faraday_mean_by_tendency"])) < 1.0e-13
     assert abs(float(diagnostics["faraday_mean_bz_tendency"])) < 1.0e-13
 

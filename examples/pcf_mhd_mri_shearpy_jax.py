@@ -239,6 +239,14 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         wall_modes = jnp.einsum("wi,ijk->wjk", rows, coefficients)
         return jax.vmap(self.TYZ.backward)(wall_modes)
 
+    @staticmethod
+    def _tangential_derivative_coefficients(
+        coefficients, space, *, dy: int = 0, dz: int = 0
+    ):
+        """Differentiate with wavenumbers owned by the coefficient space."""
+        wavenumbers = space.local_wavenumbers(scaled=True)
+        return coefficients * (1j * wavenumbers[1]) ** dy * (1j * wavenumbers[2]) ** dz
+
     def _a_divergence(self, state: MHDState):
         spaces = self.a_coeff_spaces
         return (
@@ -265,12 +273,53 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         velocity = self.total_velocity_physical(state.flow)
         B = self.update_B_from_A(state.A)
         magnetic = self._total_B_physical(B, padded=False)
-        current = self._backward_J(self.update_J_from_B(B), padded=False)
+        current = self._current_physical(B)
         emf = physical_cross(velocity, magnetic)
         ideal = tuple(-component for component in emf)
         resistive = tuple(self.eta * component for component in current)
         total = tuple(ei + er for ei, er in zip(ideal, resistive, strict=True))
         return ideal, resistive, total
+
+    def _current_physical(self, B):
+        """Return the unprojected physical curl of represented ``B``.
+
+        Projecting tangential current into ``TD`` forces its wall trace to zero
+        and would hide the conducting-wall gauge residual. Health diagnostics
+        therefore differentiate represented ``B`` before current projection.
+        """
+        spaces = self.b_coeff_spaces
+        return (
+            spaces[2].backward_primitive(B[2], (0, 1, 0))
+            - spaces[1].backward_primitive(B[1], (0, 0, 1)),
+            spaces[0].backward_primitive(B[0], (0, 0, 1))
+            - spaces[2].backward_primitive(B[2], (1, 0, 0)),
+            spaces[1].backward_primitive(B[1], (1, 0, 0))
+            - spaces[0].backward_primitive(B[0], (0, 1, 0)),
+        )
+
+    def _current_wall_values(self, B):
+        """Return curl(B) evaluated directly at both x walls."""
+        spaces = self.b_coeff_spaces
+        return (
+            self._wall_values(
+                self._tangential_derivative_coefficients(B[2], spaces[2], dy=1),
+                spaces[2],
+            )
+            - self._wall_values(
+                self._tangential_derivative_coefficients(B[1], spaces[1], dz=1),
+                spaces[1],
+            ),
+            self._wall_values(
+                self._tangential_derivative_coefficients(B[0], spaces[0], dz=1),
+                spaces[0],
+            )
+            - self._wall_values(B[2], spaces[2], derivative=1),
+            self._wall_values(B[1], spaces[1], derivative=1)
+            - self._wall_values(
+                self._tangential_derivative_coefficients(B[0], spaces[0], dy=1),
+                spaces[0],
+            ),
+        )
 
     def _electric_wall_parts(self, state: MHDState):
         """Evaluate both electric-field terms directly at the x walls."""
@@ -293,11 +342,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
                 zip(B, self.b_coeff_spaces, strict=True)
             )
         )
-        J = self.update_J_from_B(B)
-        current = tuple(
-            self._wall_values(coeff, space)
-            for coeff, space in zip(J, self.j_coeff_spaces, strict=True)
-        )
+        current = self._current_wall_values(B)
         emf = physical_cross(velocity, magnetic)
         ideal = tuple(-component for component in emf)
         resistive = tuple(self.eta * component for component in current)
@@ -314,8 +359,18 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         div_a = self._a_divergence(state)
         div_a_wall = (
             self._wall_values(state.A[0], self.a_coeff_spaces[0], derivative=1)
-            + self._wall_values(1j * self.K[1] * state.A[1], self.a_coeff_spaces[1])
-            + self._wall_values(1j * self.K[2] * state.A[2], self.a_coeff_spaces[2])
+            + self._wall_values(
+                self._tangential_derivative_coefficients(
+                    state.A[1], self.a_coeff_spaces[1], dy=1
+                ),
+                self.a_coeff_spaces[1],
+            )
+            + self._wall_values(
+                self._tangential_derivative_coefficients(
+                    state.A[2], self.a_coeff_spaces[2], dz=1
+                ),
+                self.a_coeff_spaces[2],
+            )
         )
         ideal_wall, resistive_wall, electric_wall = self._electric_wall_parts(state)
 
