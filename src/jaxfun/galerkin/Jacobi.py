@@ -100,15 +100,16 @@ class Jacobi(OrthogonalSpace):
             return c[0] * x0 + c[1] * x1
 
         def inner_loop(
-            carry: tuple[Array, Array], i: int
-        ) -> tuple[tuple[Array, Array], Array]:
-            x0, x1 = carry
+            i: int, carry: tuple[Array, Array, Array]
+        ) -> tuple[Array, Array, Array]:
+            x0, x1, total = carry
             x2 = ((X - aa[i - 1]) * x1 - ap[i - 2] * x0) / am[i - 1]
-            return (x1, x2), x2 * c[i]
+            return x1, x2, total + x2 * c[i]
 
-        _, xs = jax.lax.scan(inner_loop, (x0, x1), jnp.arange(2, N))
-
-        return jnp.sum(xs, axis=0) + c[0] + c[1] * x1
+        # Carry the accumulated series value instead of materializing every
+        # modal contribution for each vmapped tensor-product transform line.
+        initial = (x0, x1, c[0] * x0 + c[1] * x1)
+        return jax.lax.fori_loop(2, N, inner_loop, initial)[2]
 
     @jax.jit(static_argnums=(0, 1))
     def quad_points_and_weights(self, N: int | None = None) -> tuple[Array, Array]:

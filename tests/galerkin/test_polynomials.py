@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import pytest
 
 from jaxfun.galerkin import Chebyshev, Jacobi, Legendre
 from jaxfun.utils.common import Domain, ulp
@@ -39,3 +40,15 @@ def test_jacobi_general_parameters():
     M = J.mass_matrix().todense()
     expected = J.norm_squared() / J.domain_factor
     assert jnp.allclose(M.diagonal(), expected, atol=ulp(1.0))
+
+
+@pytest.mark.parametrize("alpha,beta", ((0.0, 0.0), (0.5, 1.25), (2.0, 1.0)))
+def test_jacobi_evaluate_matches_explicit_complex_basis_sum(alpha, beta):
+    J = Jacobi.Jacobi(12, alpha=alpha, beta=beta)
+    x = jnp.linspace(-0.95, 0.95, 17)
+    c = jnp.linspace(-0.5, 1.0, 9) + 1j * jnp.linspace(0.75, -0.25, 9)
+
+    actual = J.evaluate(x, c)
+    expected = J.eval_basis_functions(x)[..., : c.size] @ c
+
+    assert jnp.allclose(actual, expected, rtol=2.0e-13, atol=2.0e-13)
