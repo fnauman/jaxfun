@@ -10,6 +10,7 @@ from examples.channelflow_kmm import KMM
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from examples.pcf_mhd_jax import PlaneCouetteMHDJax
 from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
+from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax, PCFMRIDNSJax
 from examples.taylor_couette_dns_jax import (
     AxisymmetricMRIDNSJax,
     AxisymmetricTCDNSJax,
@@ -61,6 +62,8 @@ def test_primary_jax_flow_constructors_default_to_chebyshev():
         PlaneCouetteFluctuationJax,
         PlaneCouetteMHDJax,
         PlaneCouetteMRIShearpyJax,
+        AxisymmetricPCFMRIDNSJax,
+        PCFMRIDNSJax,
         TaylorCouetteLinearJax,
         AxisymmetricTCDNSJax,
         TaylorCouetteDNSJax,
@@ -80,6 +83,7 @@ def test_flow_sources_have_no_implicit_legendre_default_or_cli_default():
         "examples/pcf_fluctuations_divv_jax.py",
         "examples/pcf_mhd_jax.py",
         "examples/pcf_mhd_mri_shearpy_jax.py",
+        "examples/pcf_mri_primitive_jax.py",
         "examples/taylor_couette_dns_jax.py",
         "examples/taylor_couette_linear_jax.py",
         "examples/taylor_couette_mri_jax.py",

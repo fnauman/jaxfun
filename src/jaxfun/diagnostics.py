@@ -61,11 +61,41 @@ def cylindrical_energy_parts(
 
 
 def wall_linf(components: Sequence[Array], *, radial_axis: int = -1) -> Array:
-    """Return the largest absolute boundary value on the radial walls."""
+    """Return the largest sampled endpoint value on the radial grid.
+
+    This helper is appropriate only for grids that contain their endpoints.
+    Gauss-Chebyshev, Gauss-Legendre, and Gauss-Jacobi grids are open; spectral
+    solvers on those grids must use :func:`coefficient_wall_linf` instead.
+    """
     if not components:
         raise ValueError("at least one component is required")
     maxima = []
     for component in components:
         maxima.append(jnp.max(jnp.abs(jnp.take(component, 0, axis=radial_axis))))
         maxima.append(jnp.max(jnp.abs(jnp.take(component, -1, axis=radial_axis))))
+    return jnp.max(jnp.asarray(maxima))
+
+
+def coefficient_wall_linf(
+    coefficients: Sequence[Array], spaces: Sequence[Any]
+) -> Array:
+    """Return the exact radial-wall trace norm from spectral coefficients.
+
+    Couette tensor spaces keep the wall-normal/radial basis last in coefficient
+    order. Evaluating that basis at the mapped endpoints avoids treating the
+    nearest open Gauss node as the physical wall.
+    """
+    if not coefficients:
+        raise ValueError("at least one component is required")
+    if len(coefficients) != len(spaces):
+        raise ValueError("coefficients and spaces must have the same length")
+
+    maxima = []
+    for component, space in zip(coefficients, spaces, strict=True):
+        radial = space.basespaces[-1]
+        bounds = jnp.asarray(radial.domain, dtype=jnp.real(component).dtype)
+        reference_bounds = radial.map_reference_domain(bounds)
+        rows = radial.evaluate_basis_derivative(reference_bounds, 0)
+        wall_values = jnp.einsum("wi,...i->w...", rows, component)
+        maxima.append(jnp.max(jnp.abs(wall_values)))
     return jnp.max(jnp.asarray(maxima))

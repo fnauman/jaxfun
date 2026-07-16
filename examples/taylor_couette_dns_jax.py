@@ -35,10 +35,10 @@ except ModuleNotFoundError:  # direct script execution from examples/
 
 from jaxfun import Domain, Dx
 from jaxfun.diagnostics import (
+    coefficient_wall_linf,
     cylindrical_component_energy,
     cylindrical_energy_parts,
     cylindrical_kinetic_energy,
-    wall_linf,
 )
 from jaxfun.galerkin import (
     CoupledSpace,
@@ -52,7 +52,7 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators.cnab2 import cnab2_rhs, scan_steps
+from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo, cnab2_rhs
 from jaxfun.io import Cadence, run_with_cadence
 
 type Velocity = tuple[Array, Array, Array]
@@ -216,6 +216,7 @@ class AxisymmetricTCDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
+        self._rollout_cache = ScanRolloutCache(self.step)
 
     @staticmethod
     def _family_class(family: str):
@@ -507,9 +508,27 @@ class AxisymmetricTCDNSJax:
             have_old=True,
         )
 
+    def set_dt(self, dt: float) -> None:
+        """Adopt a new timestep and retire obsolete compiled rollouts."""
+        self.dt = float(dt)
+        self.Limp, self.Lexp = self._build_operators()
+        self.Limp_modes = self._extract_mode_matrices(self.Limp, self.VQ_mode_indices)
+        explicit_indices = (
+            self.VE_mode_indices
+            if hasattr(self, "VE_mode_indices")
+            else self.VV_mode_indices
+        )
+        self.Lexp_modes = self._extract_mode_matrices(self.Lexp, explicit_indices)
+        self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
+            self._pin_pressure_modes(self.Limp_modes)
+        )
+        self._rollout_cache.rebind(self.step)
+
     def solve(self, state: AxisymmetricTCState, steps: int) -> AxisymmetricTCState:
-        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
-        return scan_steps(step, state, int(steps))
+        return self._rollout_cache(state, int(steps))
+
+    def rollout_cache_info(self) -> ScanRolloutCacheInfo:
+        return self._rollout_cache.info()
 
     def solve_with_cadence(
         self,
@@ -574,7 +593,7 @@ class AxisymmetricTCDNSJax:
             "E": cylindrical_kinetic_energy(velocity, self.R, self.T0),
             "div_linf": self.divergence_linf(state),
             "continuity_l2": self.continuity_residual_l2(state),
-            "wall": wall_linf(velocity),
+            "wall": coefficient_wall_linf(state.u, (self.TD,) * 3),
             "Eth": cylindrical_component_energy(velocity[1], self.R, self.T0),
         }
 
@@ -661,6 +680,7 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
+        self._rollout_cache = ScanRolloutCache(self.step)
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
         return _cylindrical_laplacian_3d(u, self.r)
@@ -853,7 +873,7 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
             "E": cylindrical_kinetic_energy(velocity, self.R, self.T0),
             "div_linf": self.divergence_linf(state),
             "continuity_l2": self.continuity_residual_l2(state),
-            "wall": wall_linf(velocity),
+            "wall": coefficient_wall_linf(state.u, (self.TD,) * 3),
             "Eth": cylindrical_component_energy(velocity[1], self.R, self.T0),
         }
 
@@ -957,6 +977,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
+        self._rollout_cache = ScanRolloutCache(self.step)
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
         return _cylindrical_laplacian_axisymmetric(u, self.r)
@@ -1160,8 +1181,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         return AxisymmetricMRIState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
 
     def solve(self, state: AxisymmetricMRIState, steps: int) -> AxisymmetricMRIState:
-        step = self.step if jax.device_count() > 1 else jax.checkpoint(self.step)
-        return scan_steps(step, state, int(steps))
+        return self._rollout_cache(state, int(steps))
 
     def seed_linear_eigenmode(
         self, kz_mode: int = 1, amp: float = 1.0e-6, which: int = 0
@@ -1233,7 +1253,14 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
     def diagnostics(self, state: AxisymmetricMRIState) -> dict[str, Array]:
         ek, em = self.energy_parts(state)
         divu, divb = self.divergence_linf(state)
-        return {"Ekin": ek, "Emag": em, "E": ek + em, "divu": divu, "divb": divb}
+        return {
+            "Ekin": ek,
+            "Emag": em,
+            "E": ek + em,
+            "divu": divu,
+            "divb": divb,
+            "wall_u": coefficient_wall_linf(state.x[:3], (self.TD,) * 3),
+        }
 
     def growth_rate(
         self, state: AxisymmetricMRIState, steps: int
@@ -1350,6 +1377,7 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
+        self._rollout_cache = ScanRolloutCache(self.step)
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
         return _cylindrical_laplacian_3d(u, self.r)

@@ -11,12 +11,28 @@ from examples.taylor_couette_dns_jax import (
     _require_resolved_m,
 )
 from jaxfun.diagnostics import (
+    coefficient_wall_linf,
     cylindrical_component_energy,
     cylindrical_energy_parts,
     cylindrical_kinetic_energy,
-    wall_linf,
 )
+from jaxfun.galerkin.inner import integrate
 from jaxfun.io import Cadence
+
+
+def _assert_rollout_lifecycle(solver, state) -> None:
+    for _ in range(2):
+        state = solver.solve(state, 1)
+    jax.block_until_ready(state)
+    info = solver.rollout_cache_info()
+    assert info.live_entries == 1
+    assert info.misses == 1
+    assert info.hits == 1
+
+    solver.set_dt(0.5 * solver.dt)
+    rebound = solver.rollout_cache_info()
+    assert rebound.generation == 1
+    assert rebound.live_entries == 0
 
 
 def test_tc_dns_zero_state_stays_zero() -> None:
@@ -75,6 +91,35 @@ def test_tc_dns_3d_zero_state_stays_zero() -> None:
     assert all(jnp.allclose(component, 0.0, atol=1.0e-12) for component in state.u)
     assert jnp.allclose(state.p, 0.0, atol=1.0e-12)
     assert float(solver.continuity_residual_l2(state)) < 1.0e-12
+
+
+def test_tc_hydro_rollout_caches_and_chebyshev_volumes() -> None:
+    axisymmetric = AxisymmetricTCDNSJax(
+        CircularCouette(), Nr=8, Nz=4, Lz=1.5, dt=1.0e-3, family="C", dealias=1.0
+    )
+    expected_axisymmetric = (
+        axisymmetric.Lz
+        * 0.5
+        * (axisymmetric.base.R2**2 - axisymmetric.base.R1**2)
+    )
+    assert float(integrate(axisymmetric.R, axisymmetric.T0)) == pytest.approx(
+        expected_axisymmetric
+    )
+    _assert_rollout_lifecycle(axisymmetric, axisymmetric.zero_state())
+
+    full = TaylorCouetteDNSJax(
+        CircularCouette(),
+        Nr=8,
+        Ntheta=4,
+        Nz=4,
+        Lz=1.5,
+        dt=1.0e-3,
+        family="C",
+        dealias=1.0,
+    )
+    expected_full = 2.0 * jnp.pi * full.Lz * 0.5 * (full.base.R2**2 - full.base.R1**2)
+    assert float(integrate(full.R, full.T0)) == pytest.approx(float(expected_full))
+    _assert_rollout_lifecycle(full, full.zero_state())
 
 
 @pytest.mark.skipif(
@@ -218,7 +263,9 @@ def test_tc_dns_3d_eigenmode_growth_matches_linear_solver_x64() -> None:
     rate, out = solver.growth_rate(state, steps=100)
 
     assert jnp.allclose(rate, eig.real, rtol=1.0e-6, atol=1.0e-6)
-    assert float(solver.continuity_residual_l2(out)) < 1.0e-18
+    # The pinned 3-D saddle-point solve satisfies continuity at float64
+    # roundoff; its reduction floor is a few 1e-17 on current XLA backends.
+    assert float(solver.continuity_residual_l2(out)) < 1.0e-15
     assert abs(complex(out.p[0, 0, 0])) < 1.0e-18
 
 
@@ -246,6 +293,7 @@ def test_tc_mri_dns_zero_state_stays_zero() -> None:
     assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
     assert float(diag["divu"]) < 1.0e-12
     assert float(diag["divb"]) < 1.0e-12
+    assert float(diag["wall_u"]) < 1.0e-18
 
 
 @pytest.mark.skipif(
@@ -293,6 +341,32 @@ def test_tc_mri_dns_3d_zero_state_stays_zero() -> None:
     assert float(diag["E"]) == pytest.approx(0.0, abs=1.0e-12)
     assert float(diag["divu"]) < 1.0e-12
     assert float(diag["divb"]) < 1.0e-12
+    assert float(diag["wall_u"]) < 1.0e-18
+
+
+def test_tc_mhd_rollout_caches_rebind_for_axisymmetric_and_3d() -> None:
+    axisymmetric = AxisymmetricMRIDNSJax(
+        _keplerian_tc_base(),
+        Nr=8,
+        Nz=4,
+        Lz=1.5,
+        dt=1.0e-3,
+        family="C",
+        dealias=1.0,
+    )
+    _assert_rollout_lifecycle(axisymmetric, axisymmetric.zero_state())
+
+    full = TaylorCouetteMRIDNSJax(
+        _keplerian_tc_base(),
+        Nr=8,
+        Ntheta=4,
+        Nz=4,
+        Lz=1.5,
+        dt=1.0e-3,
+        family="C",
+        dealias=1.0,
+    )
+    _assert_rollout_lifecycle(full, full.zero_state())
 
 
 @pytest.mark.skipif(
@@ -335,7 +409,10 @@ def test_tc_diagnostics_helpers_match_solver_outputs() -> None:
     assert jnp.allclose(
         hdiag["Eth"], cylindrical_component_energy(velocity[1], hydro.R, hydro.T0)
     )
-    assert jnp.allclose(hdiag["wall"], wall_linf(velocity))
+    assert jnp.allclose(
+        hdiag["wall"], coefficient_wall_linf(hstate.u, (hydro.TD,) * 3)
+    )
+    assert float(hdiag["wall"]) < 1.0e-18
 
     mri = AxisymmetricMRIDNSJax(
         _keplerian_tc_base(),
@@ -364,6 +441,7 @@ def test_tc_diagnostics_helpers_match_solver_outputs() -> None:
 
     assert jnp.allclose(mdiag["Ekin"], ek)
     assert jnp.allclose(mdiag["Emag"], em)
+    assert float(mdiag["wall_u"]) < 1.0e-18
     assert jnp.allclose(mdiag["E"], ek + em)
 
 
