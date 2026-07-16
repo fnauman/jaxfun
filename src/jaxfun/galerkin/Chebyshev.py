@@ -10,7 +10,7 @@ from jaxfun.coordinates import CoordSys
 from jaxfun.galerkin.composite import Composite, PGComposite
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TestSpaceKind
-from jaxfun.utils.common import Domain, jit_vmap
+from jaxfun.utils.common import Domain, jit_vmap, lambdify
 
 from .Jacobi import Jacobi
 from .orthogonal import OrthogonalSpace
@@ -178,6 +178,34 @@ class Chebyshev(Jacobi):
             jnp.cos(jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)),
             jnp.ones(N) * jnp.pi / N,
         )
+
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Return Fejer-I weights for the unweighted physical measure.
+
+        ``quad_points_and_weights`` returns Gauss-Chebyshev weights for
+        ``dX/sqrt(1-X**2)`` because those are required by Chebyshev Galerkin
+        transforms. Physical diagnostics instead need ``dX``. Fejer's first
+        rule uses the same open Chebyshev-Gauss nodes.
+        """
+        N = self.num_quad_points if N is None else N
+        theta = jnp.pi + (2 * jnp.arange(N) + 1) * jnp.pi / (2 * N)
+        modes = jnp.arange(1, N // 2 + 1)
+        correction = jnp.sum(
+            2.0
+            * jnp.cos(2.0 * theta[:, None] * modes[None, :])
+            / (4.0 * modes[None, :] ** 2 - 1.0),
+            axis=1,
+        )
+        weights = (2.0 / N) * (1.0 - correction)
+        weights = weights / float(self.domain_factor)
+        sg = self.system.sg
+        if sp.sympify(sg).is_number:
+            return weights * float(sg)
+        x = self.system.base_scalars()[0]
+        nodes = self.quad_points_and_weights(N)[0]
+        sg_values = lambdify(x, self.map_expr_true_domain(sg))(nodes)
+        return weights * sg_values
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
     def eval_basis_function(self, X: float | Array, i: int) -> Array:

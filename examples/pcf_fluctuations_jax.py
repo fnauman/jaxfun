@@ -12,6 +12,7 @@ import os
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
+import jax
 import jax.numpy as jnp
 import sympy as sp
 from jax import Array
@@ -101,6 +102,19 @@ class PlaneCouetteFluctuationJax(KMM):
         up = self._backward_velocity(state.u)
         return up[0], up[1] + self.Ub, up[2]
 
+    def _wall_trace(self, coefficients, space, derivative: int = 0):
+        radial = space.basespaces[0]
+        bounds = jnp.asarray(
+            [self.domain[0][0], self.domain[0][1]],
+            dtype=jnp.real(coefficients).dtype,
+        )
+        rows = radial.evaluate_basis_derivative(
+            radial.map_reference_domain(bounds), derivative
+        )
+        rows = rows * float(radial.domain_factor) ** derivative
+        wall_modes = jnp.einsum("wi,ijk->wjk", rows, coefficients)
+        return jax.vmap(self.TYZ.backward)(wall_modes)
+
     def diagnostics(self, state: KMMState) -> dict[str, Array]:
         """Return the core PCF diagnostics used by the reference script."""
         up = self._backward_velocity(state.u)
@@ -112,13 +126,25 @@ class PlaneCouetteFluctuationJax(KMM):
             epert = epert + jnp.real(integrate(jnp.conj(ui) * ui, space))
             etot = etot + jnp.real(integrate(jnp.conj(uti) * uti, space))
         dv_dx = self.TD.backward_primitive(state.u[1], (1, 0, 0))
+        volume = (
+            (self.domain[0][1] - self.domain[0][0])
+            * (self.domain[1][1] - self.domain[1][0])
+            * (self.domain[2][1] - self.domain[2][0])
+        )
+        bounds = jnp.asarray([self.domain[0][0], self.domain[0][1]])
+        uy_wall = self._wall_trace(state.u[1], self.TD) + (
+            self.dUb_dx * bounds[:, None, None]
+        )
+        shear_wall = self._wall_trace(state.u[1], self.TD, derivative=1) + self.dUb_dx
         return {
             "Epert": epert,
             "Etot": etot,
             "divL2": self.divergence_l2(state),
-            "u_top": jnp.real(jnp.mean(ut[1][-1, :, :])),
-            "u_bot": jnp.real(jnp.mean(ut[1][0, :, :])),
-            "mean_shear": jnp.real(jnp.mean(dv_dx + self.dUb_dx)),
+            "u_top": jnp.real(jnp.mean(uy_wall[1])),
+            "u_bot": jnp.real(jnp.mean(uy_wall[0])),
+            "wall_shear_top": jnp.real(jnp.mean(shear_wall[1])),
+            "wall_shear_bot": jnp.real(jnp.mean(shear_wall[0])),
+            "mean_shear": jnp.real(integrate(dv_dx + self.dUb_dx, self.TD)) / volume,
         }
 
 

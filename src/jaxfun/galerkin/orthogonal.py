@@ -258,8 +258,14 @@ class OrthogonalSpace(BaseSpace):
         )
 
     @jax.jit(static_argnums=(0, 1))
-    def integration_weights(self, N: int | None = None) -> Array:
-        """Return physical-domain quadrature weights for scalar integration."""
+    def quadrature_weights(self, N: int | None = None) -> Array:
+        """Return mapped weights for the basis' orthogonality measure.
+
+        These weights belong to Galerkin scalar products and transforms. For
+        weighted polynomial families they are not generally weights for the
+        unweighted physical-volume measure; diagnostics should use
+        :meth:`integration_weights` instead.
+        """
         xj, wj = self.quad_points_and_weights(N)
         weights = wj / float(self.domain_factor)
         sg = self.system.sg
@@ -268,6 +274,16 @@ class OrthogonalSpace(BaseSpace):
         x = self.system.base_scalars()[0]
         sg_values = lambdify(x, self.map_expr_true_domain(sg))(xj)
         return weights * sg_values
+
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Return physical-domain weights for unweighted scalar integration.
+
+        The default is correct when the orthogonality and physical measures
+        coincide (for example Legendre and Fourier). Weighted bases override
+        this method and retain :meth:`quadrature_weights` for Galerkin work.
+        """
+        return self.quadrature_weights(N)
 
     @jax.jit(static_argnums=0)
     def forward(self, u: Array) -> Array:

@@ -55,6 +55,56 @@ def test_znf_seed_is_solenoidal_and_has_zero_mean_vertical_flux() -> None:
     assert bool(jnp.isfinite(diagnostics["channel_kz1_total_rms"]))
 
 
+def test_znf_flux_and_electric_health_diagnostics() -> None:
+    solver = _solver()
+    state = solver.initial_state()
+    diagnostics = solver.diagnostics(state)
+
+    for key in (
+        "electric_ideal_l2",
+        "electric_resistive_l2",
+        "electric_total_l2",
+        "divergence_e_l2",
+        "divergence_a_l2",
+        "divergence_e_ideal_l2",
+        "divergence_e_resistive_l2",
+        "divergence_a_wall_linf",
+        "electric_ideal_wall_tangential_linf",
+        "electric_resistive_wall_tangential_linf",
+        "electric_wall_tangential_linf",
+        "faraday_mean_by_tendency",
+        "faraday_mean_bz_tendency",
+        "mean_bx_trace",
+        "mean_by_trace",
+        "mean_bz_trace",
+        "mean_b_trace_mismatch_linf",
+    ):
+        assert key in diagnostics
+        assert bool(jnp.isfinite(diagnostics[key]))
+
+    ideal, resistive, electric = solver.electric_field_parts(state)
+    for ei, er, et in zip(ideal, resistive, electric, strict=True):
+        assert np.asarray(et) == pytest.approx(np.asarray(ei + er), abs=1.0e-14)
+
+    assert float(diagnostics["mean_bx_trace"]) == pytest.approx(0.0, abs=1.0e-14)
+    assert float(diagnostics["mean_by_trace"]) == pytest.approx(0.0, abs=1.0e-14)
+    assert float(diagnostics["mean_bz_trace"]) == pytest.approx(0.0, abs=1.0e-14)
+    assert float(diagnostics["mean_b_trace_mismatch_linf"]) < 1.0e-13
+    assert float(diagnostics["electric_ideal_wall_tangential_linf"]) < 1.0e-13
+    assert abs(float(diagnostics["faraday_mean_by_tendency"])) < 1.0e-13
+    assert abs(float(diagnostics["faraday_mean_bz_tendency"])) < 1.0e-13
+
+
+def test_znf_flux_remains_machine_zero_after_a_step() -> None:
+    solver = _solver()
+    state = solver.step(solver.initial_state())
+    diagnostics = solver.diagnostics(state)
+
+    for key in ("mean_bx_trace", "mean_by_trace", "mean_bz_trace"):
+        assert abs(float(diagnostics[key])) < 1.0e-13
+    assert float(diagnostics["mean_b_trace_mismatch_linf"]) < 1.0e-12
+
+
 def test_multiplane_v2_shapes_and_append_layout(tmp_path: Path) -> None:
     solver = _solver()
     profiles = pcf_multiplane_profiles(solver, solver.initial_state())

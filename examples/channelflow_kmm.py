@@ -265,7 +265,8 @@ class KMM:
         values = jax.vmap(self.C0.backward)(eye_p).T
         lap_values = jax.vmap(lambda c: self.C0.backward_primitive(c, 2))(eye_p).T
         tests = jax.vmap(pressure_test.backward)(eye_t).T
-        weights = self.C0.integration_weights()
+        # These are Galerkin pressure rows, so retain the orthogonality measure.
+        weights = self.C0.quadrature_weights()
 
         stiffness = jnp.einsum("xi,xj,x->ij", tests, lap_values, weights)
         mass = jnp.einsum("xi,xj,x->ij", tests, values, weights)

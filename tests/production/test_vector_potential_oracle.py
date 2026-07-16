@@ -385,8 +385,37 @@ def test_vector_potential_emits_flux_diagnostics():
         "flux_drift_bx",
         "flux_drift_by",
         "flux_drift_bz",
+        "mean_bx_trace",
+        "mean_by_trace",
+        "mean_bz_trace",
+        "mean_b_trace_mismatch_linf",
+        "electric_ideal_l2",
+        "electric_resistive_l2",
+        "electric_total_l2",
+        "divergence_e_l2",
+        "divergence_a_l2",
+        "divergence_e_ideal_l2",
+        "divergence_e_resistive_l2",
+        "electric_wall_tangential_linf",
+        "faraday_mean_by_tendency",
+        "faraday_mean_bz_tendency",
     ):
         assert key in sc
+
+    runtime_keys = {
+        "electric_ideal_l2",
+        "electric_resistive_l2",
+        "electric_total_l2",
+        "divergence_e_l2",
+        "electric_wall_tangential_linf",
+        "divergence_e_ideal_l2",
+        "divergence_e_resistive_l2",
+        "faraday_mean_by_tendency",
+        "faraday_mean_bz_tendency",
+        "mean_b_trace_mismatch_linf",
+    }
+    assert out["time_series"]
+    assert all(runtime_keys <= row.keys() for row in out["time_series"])
 
 
 def test_vector_potential_energy_split_identity_and_total_field_means():

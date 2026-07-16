@@ -211,6 +211,173 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             power = power + 2.0 * jnp.sum(wall_weights * jnp.abs(coefficient) ** 2)
         return jnp.sqrt(power)
 
+    def _physical_vector_coefficients(self, fields):
+        """Project a physical vector onto the unrestricted diagnostic space."""
+        return tuple(self.TC.mask_nyquist(self.TC.forward(field)) for field in fields)
+
+    def _divergence_from_coefficients(self, coefficients):
+        return (
+            self.TC.backward_primitive(coefficients[0], (1, 0, 0))
+            + self.TC.backward_primitive(coefficients[1], (0, 1, 0))
+            + self.TC.backward_primitive(coefficients[2], (0, 0, 1))
+        )
+
+    def _vector_l2(self, fields):
+        total = jnp.asarray(0.0, dtype=jnp.real(fields[0]).dtype)
+        for field in fields:
+            total = total + jnp.real(integrate(jnp.conj(field) * field, self.TC))
+        return jnp.sqrt(total)
+
+    def _wall_values(self, coefficients, space, derivative: int = 0):
+        """Evaluate tensor-product coefficients at the two x walls."""
+        radial = space.basespaces[0]
+        bounds = jnp.asarray(self.x_bounds, dtype=jnp.real(coefficients).dtype)
+        rows = radial.evaluate_basis_derivative(
+            radial.map_reference_domain(bounds), derivative
+        )
+        rows = rows * float(radial.domain_factor) ** derivative
+        wall_modes = jnp.einsum("wi,ijk->wjk", rows, coefficients)
+        return jax.vmap(self.TYZ.backward)(wall_modes)
+
+    def _a_divergence(self, state: MHDState):
+        spaces = self.a_coeff_spaces
+        return (
+            spaces[0].backward_primitive(state.A[0], (1, 0, 0))
+            + spaces[1].backward_primitive(state.A[1], (0, 1, 0))
+            + spaces[2].backward_primitive(state.A[2], (0, 0, 1))
+        )
+
+    def magnetic_flux_from_a(self, state: MHDState):
+        """Topology/trace-based total box mean of B0 + curl(A)."""
+        ay_wall = self._wall_values(state.A[1], self.a_coeff_spaces[1])
+        az_wall = self._wall_values(state.A[2], self.a_coeff_spaces[2])
+        lx = self.x_bounds[1] - self.x_bounds[0]
+        mean_by = -(jnp.mean(az_wall[1]) - jnp.mean(az_wall[0])) / lx
+        mean_bz = (jnp.mean(ay_wall[1]) - jnp.mean(ay_wall[0])) / lx
+        return (
+            jnp.asarray(self.background_b[0], dtype=jnp.real(mean_by).dtype),
+            jnp.real(mean_by) + self.background_b[1],
+            jnp.real(mean_bz) + self.background_b[2],
+        )
+
+    def electric_field_parts(self, state: MHDState):
+        """Return ideal, resistive, and total physical electric fields."""
+        velocity = self.total_velocity_physical(state.flow)
+        B = self.update_B_from_A(state.A)
+        magnetic = self._total_B_physical(B, padded=False)
+        current = self._backward_J(self.update_J_from_B(B), padded=False)
+        emf = physical_cross(velocity, magnetic)
+        ideal = tuple(-component for component in emf)
+        resistive = tuple(self.eta * component for component in current)
+        total = tuple(ei + er for ei, er in zip(ideal, resistive, strict=True))
+        return ideal, resistive, total
+
+    def _electric_wall_parts(self, state: MHDState):
+        """Evaluate both electric-field terms directly at the x walls."""
+        velocity_spaces = (self.TB, self.TD, self.TD)
+        velocity = tuple(
+            self._wall_values(coeff, space)
+            for coeff, space in zip(state.flow.u, velocity_spaces, strict=True)
+        )
+        wall_x = jnp.asarray(self.x_bounds)[:, None, None]
+        velocity = (
+            velocity[0],
+            velocity[1] - self.shear_rate * wall_x,
+            velocity[2],
+        )
+
+        B = self.update_B_from_A(state.A)
+        magnetic = tuple(
+            self._wall_values(coeff, space) + self.background_b[index]
+            for index, (coeff, space) in enumerate(
+                zip(B, self.b_coeff_spaces, strict=True)
+            )
+        )
+        J = self.update_J_from_B(B)
+        current = tuple(
+            self._wall_values(coeff, space)
+            for coeff, space in zip(J, self.j_coeff_spaces, strict=True)
+        )
+        emf = physical_cross(velocity, magnetic)
+        ideal = tuple(-component for component in emf)
+        resistive = tuple(self.eta * component for component in current)
+        total = tuple(ei + er for ei, er in zip(ideal, resistive, strict=True))
+        return ideal, resistive, total
+
+    def _electromagnetic_diagnostics(self, state: MHDState, mean_b):
+        ideal, resistive, electric = self.electric_field_parts(state)
+        ideal_coeff = self._physical_vector_coefficients(ideal)
+        resistive_coeff = self._physical_vector_coefficients(resistive)
+        div_e_ideal = self._divergence_from_coefficients(ideal_coeff)
+        div_e_resistive = self._divergence_from_coefficients(resistive_coeff)
+        div_e = div_e_ideal + div_e_resistive
+        div_a = self._a_divergence(state)
+        div_a_wall = (
+            self._wall_values(state.A[0], self.a_coeff_spaces[0], derivative=1)
+            + self._wall_values(1j * self.K[1] * state.A[1], self.a_coeff_spaces[1])
+            + self._wall_values(1j * self.K[2] * state.A[2], self.a_coeff_spaces[2])
+        )
+        ideal_wall, resistive_wall, electric_wall = self._electric_wall_parts(state)
+
+        def tangential_linf(walls):
+            return jnp.max(jnp.asarray([jnp.max(jnp.abs(walls[i])) for i in (1, 2)]))
+
+        lx = self.x_bounds[1] - self.x_bounds[0]
+        faraday_by = (
+            jnp.mean(electric_wall[2][1]) - jnp.mean(electric_wall[2][0])
+        ) / lx
+        faraday_bz = (
+            -(jnp.mean(electric_wall[1][1]) - jnp.mean(electric_wall[1][0])) / lx
+        )
+        mean_b_trace = self.magnetic_flux_from_a(state)
+        mismatch = jnp.asarray([jnp.abs(mean_b[i] - mean_b_trace[i]) for i in range(3)])
+
+        out = {
+            "electric_ideal_l2": self._vector_l2(ideal),
+            "electric_resistive_l2": self._vector_l2(resistive),
+            "electric_total_l2": self._vector_l2(electric),
+            "divergence_e_l2": jnp.sqrt(
+                jnp.real(integrate(jnp.conj(div_e) * div_e, self.TC))
+            ),
+            "divergence_e_ideal_l2": jnp.sqrt(
+                jnp.real(integrate(jnp.conj(div_e_ideal) * div_e_ideal, self.TC))
+            ),
+            "divergence_e_resistive_l2": jnp.sqrt(
+                jnp.real(
+                    integrate(jnp.conj(div_e_resistive) * div_e_resistive, self.TC)
+                )
+            ),
+            "divergence_a_l2": jnp.sqrt(
+                jnp.real(integrate(jnp.conj(div_a) * div_a, self.TC))
+            ),
+            "divergence_a_wall_linf": jnp.max(jnp.abs(div_a_wall)),
+            "electric_ideal_wall_tangential_linf": tangential_linf(ideal_wall),
+            "electric_resistive_wall_tangential_linf": tangential_linf(resistive_wall),
+            "electric_wall_tangential_linf": tangential_linf(electric_wall),
+            "faraday_mean_bx_tendency": jnp.asarray(0.0),
+            "faraday_mean_by_tendency": jnp.real(faraday_by),
+            "faraday_mean_bz_tendency": jnp.real(faraday_bz),
+            "mean_bx_trace": mean_b_trace[0],
+            "mean_by_trace": mean_b_trace[1],
+            "mean_bz_trace": mean_b_trace[2],
+            "mean_b_trace_mismatch_linf": jnp.max(mismatch),
+        }
+        volume = (
+            (self.domain[0][1] - self.domain[0][0])
+            * (self.domain[1][1] - self.domain[1][0])
+            * (self.domain[2][1] - self.domain[2][0])
+        )
+        for label, fields in (
+            ("ideal", ideal),
+            ("resistive", resistive),
+            ("total", electric),
+        ):
+            for axis, field in zip(("x", "y", "z"), fields, strict=True):
+                out[f"mean_e{axis}_{label}"] = (
+                    jnp.real(integrate(field, self.TC)) / volume
+                )
+        return out
+
     def diagnostics(self, state: MHDState) -> dict[str, jnp.ndarray]:
         diag = super().diagnostics(state)
         up = self._backward_velocity(state.flow.u)
@@ -259,8 +426,10 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             for bi, sp in zip(b_fluct, b_spaces, strict=True)
         )
         mag_energy_mean = volume * sum(mb * mb for mb in mean_b)
+        electromagnetic = self._electromagnetic_diagnostics(state, mean_b)
         out = {
             **diag,
+            **electromagnetic,
             "Emag_total": emag_total,
             "bmax": bmax,
             "bmax_total": bmax_total,

@@ -126,7 +126,9 @@ Wall-condition conventions of the vector-potential family:
 
 - PCF conducting: `A = 0` on the walls (`b_x = 0` exact; the tangential
   electric field carries an `O(eta)` gauge residual — the convention of the
-  shenfun reference `couette/pcf_mhd_divfree.py`).
+  shenfun reference `couette/pcf_mhd_divfree.py`). The `A_y/A_z` wall traces
+  pin the global tangential flux exactly even though the local residual is not
+  zero; runtime diagnostics report both trace flux and the electric wall terms.
 - PCF insulating: exact per-mode vacuum matching
   `b_x' = -+k b_x`, `b_y = -+(i ky/k) b_x`, `b_z = -+(i kz/k) b_x` imposed as
   per-mode tau rows (Neumann/Robin split of the tangential potentials).
@@ -137,6 +139,14 @@ Wall-condition conventions of the vector-potential family:
   potentials (`r^{+-|m|}` at `kz=0`); the `(0,0)` mean mode uses
   `b_theta = 0` at both walls, `b_z(R2) = 0`, and the exact trapped-flux
   Faraday row `(R1/2) db_z(R1)/dt = eta db_z/dr(R1)`.
+
+PCF curl runs also emit an electromagnetic artifact budget. It separates
+`E_ideal = -u_total x B_total`, `E_resistive = eta J`, and their sum; reports
+their volume means/L2 norms, `div E`, `div A`, exact tangential wall values, the
+Faraday-predicted mean-flux tendencies, and an independent `A`-trace mean-flux
+check. `div E` and `div A` are observational gauge/charge indicators, not
+zero-valued solver invariants. The conservation alarms are the trace-versus-
+quadrature flux mismatch and the wall-integrated Faraday tendencies.
 
 | Case and evidence | Magnetic representation | Preserves `div B=0`? | `div u` (L2) | `div B` (L2) | Qualification |
 |---|---|---|---:|---:|---|

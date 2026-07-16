@@ -86,9 +86,9 @@ def test_pcf_one_step_matches_recorded_golden_diagnostics() -> None:
         "Epert": 0.21836099019180652,
         "Etot": 52.85625108205688,
         "divL2": 7.183953559387109e-17,
-        "u_top": 0.968160239435768,
-        "u_bot": -0.9681602394357679,
-        "mean_shear": 1.0000000004699001,
+        "u_top": 1.0,
+        "u_bot": -1.0,
+        "mean_shear": 1.0,
     }
     for key, value in expected.items():
         atol = 1.0e-12 if key != "divL2" else 5.0e-15
