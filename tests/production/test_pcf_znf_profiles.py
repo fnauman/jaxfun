@@ -93,8 +93,9 @@ def test_chebyshev_weighted_seed_can_hide_zero_physical_flux() -> None:
     assert float(diagnostics["mean_b_trace_mismatch_linf"]) < 1.0e-14
 
 
-def test_znf_flux_and_electric_health_diagnostics() -> None:
-    solver = _solver()
+@pytest.mark.parametrize("family", ("C", "L"))
+def test_znf_flux_and_electric_health_diagnostics(family: str) -> None:
+    solver = _solver(family)
     state = solver.initial_state()
     diagnostics = solver.diagnostics(state)
 
@@ -129,6 +130,8 @@ def test_znf_flux_and_electric_health_diagnostics() -> None:
     assert float(diagnostics["mean_bz_trace"]) == pytest.approx(0.0, abs=1.0e-14)
     assert float(diagnostics["mean_b_trace_mismatch_linf"]) < 1.0e-13
     assert float(diagnostics["electric_ideal_wall_tangential_linf"]) < 1.0e-13
+    # The lower bound is tied to this test's nonzero seed amplitude and eta;
+    # it ensures the unprojected resistive wall residual remains observable.
     assert float(diagnostics["electric_resistive_wall_tangential_linf"]) > 1.0e-6
     assert float(diagnostics["electric_wall_tangential_linf"]) == pytest.approx(
         float(diagnostics["electric_resistive_wall_tangential_linf"]),
@@ -138,8 +141,9 @@ def test_znf_flux_and_electric_health_diagnostics() -> None:
     assert abs(float(diagnostics["faraday_mean_bz_tendency"])) < 1.0e-13
 
 
-def test_znf_flux_remains_machine_zero_after_a_step() -> None:
-    solver = _solver()
+@pytest.mark.parametrize("family", ("C", "L"))
+def test_znf_flux_remains_machine_zero_after_a_step(family: str) -> None:
+    solver = _solver(family)
     state = solver.step(solver.initial_state())
     diagnostics = solver.diagnostics(state)
 

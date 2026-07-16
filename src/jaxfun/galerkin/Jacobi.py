@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partial
+from functools import cache, partial
 from typing import cast
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import sympy as sp
 from jax import Array
 from scipy.special import roots_jacobi
@@ -14,12 +15,32 @@ from sympy import Expr, Number, Symbol
 from jaxfun.coordinates import CoordSys
 from jaxfun.la import DiaMatrix, Matrix, diags
 from jaxfun.typing import TriDiagMatrixFun
-from jaxfun.utils.common import Domain, jit_vmap, n
+from jaxfun.utils.common import Domain, jit_vmap, lambdify, n
 
 from .orthogonal import OrthogonalSpace
 
 alf, bet = sp.symbols("a,b", real=True)
 delta = sp.KroneckerDelta
+
+
+@cache
+def _physical_interpolatory_rule(
+    N: int, alpha: float, beta: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return unweighted integration nodes/weights on the Jacobi grid.
+
+    The Gauss-Jacobi nodes are retained so sampled physical fields do not need
+    interpolation. Integrating their Lagrange cardinal polynomials against dX
+    gives the unique N-point rule exact through degree N-1. A Legendre
+    Vandermonde is better conditioned here than a monomial Vandermonde; only
+    its constant mode has a nonzero integral.
+    """
+    nodes, _ = roots_jacobi(N, alpha, beta)
+    vandermonde = np.polynomial.legendre.legvander(nodes, N - 1)
+    moments = np.zeros(N)
+    moments[0] = 2.0
+    weights = np.linalg.solve(vandermonde.T, moments)
+    return nodes, weights
 
 
 class Jacobi(OrthogonalSpace):
@@ -124,6 +145,31 @@ class Jacobi(OrthogonalSpace):
         N = self.num_quad_points if N is None else N
         x, w = roots_jacobi(N, float(self.alpha), float(self.beta))
         return jnp.array(x), jnp.array(w)
+
+    @jax.jit(static_argnums=(0, 1))
+    def integration_weights(self, N: int | None = None) -> Array:
+        """Return mapped weights for the unweighted physical measure.
+
+        Jacobi quadrature normally integrates against
+        (1-X)**alpha * (1+X)**beta dX. Physical diagnostics instead use
+        interpolatory weights for dX on the same Gauss-Jacobi nodes. Legendre
+        (alpha=beta=0) already has the physical measure and keeps its
+        higher-order Gauss rule.
+        """
+        N = self.num_quad_points if N is None else N
+        if self.alpha == 0 and self.beta == 0:
+            return self.quadrature_weights(N)
+
+        nodes, reference_weights = _physical_interpolatory_rule(
+            N, float(self.alpha), float(self.beta)
+        )
+        weights = jnp.asarray(reference_weights) / float(self.domain_factor)
+        sg = self.system.sg
+        if sp.sympify(sg).is_number:
+            return weights * float(sg)
+        x = self.system.base_scalars()[0]
+        sg_values = lambdify(x, self.map_expr_true_domain(sg))(jnp.asarray(nodes))
+        return weights * sg_values
 
     @jit_vmap(in_axes=(0, None), static_argnums=(0, 2))
     def eval_basis_function(self, X: float | Array, i: int) -> Array:

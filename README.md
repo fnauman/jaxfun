@@ -94,6 +94,16 @@ MHD live in [`couette/`](couette/). The corresponding Jaxfun production runners,
 specifications, and validation tools live in [`production/`](production/). See
 the [Couette demo guide](couette/README_Couette.md) for Shenfun entry points.
 
+### Integration and quadrature weights
+
+`integration_weights()` denotes the unweighted physical-volume measure.
+`quadrature_weights()` denotes the basis orthogonality measure used by
+Galerkin transforms and weak forms. These differ for weighted polynomial
+families such as Chebyshev and general Jacobi bases. Code written against older
+versions that used `integration_weights()` for Galerkin assembly must migrate
+to `quadrature_weights()`; physical diagnostics should continue to use
+`integration_weights()` or `integrate()`.
+
 ## Development
 
 Run tests (excluding slow):

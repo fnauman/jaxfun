@@ -228,17 +228,6 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             total = total + jnp.real(integrate(jnp.conj(field) * field, self.TC))
         return jnp.sqrt(total)
 
-    def _wall_values(self, coefficients, space, derivative: int = 0):
-        """Evaluate tensor-product coefficients at the two x walls."""
-        radial = space.basespaces[0]
-        bounds = jnp.asarray(self.x_bounds, dtype=jnp.real(coefficients).dtype)
-        rows = radial.evaluate_basis_derivative(
-            radial.map_reference_domain(bounds), derivative
-        )
-        rows = rows * float(radial.domain_factor) ** derivative
-        wall_modes = jnp.einsum("wi,ijk->wjk", rows, coefficients)
-        return jax.vmap(self.TYZ.backward)(wall_modes)
-
     @staticmethod
     def _tangential_derivative_coefficients(
         coefficients, space, *, dy: int = 0, dz: int = 0
@@ -257,8 +246,8 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
 
     def magnetic_flux_from_a(self, state: MHDState):
         """Topology/trace-based total box mean of B0 + curl(A)."""
-        ay_wall = self._wall_values(state.A[1], self.a_coeff_spaces[1])
-        az_wall = self._wall_values(state.A[2], self.a_coeff_spaces[2])
+        ay_wall = self._wall_trace(state.A[1], self.a_coeff_spaces[1])
+        az_wall = self._wall_trace(state.A[2], self.a_coeff_spaces[2])
         lx = self.x_bounds[1] - self.x_bounds[0]
         mean_by = -(jnp.mean(az_wall[1]) - jnp.mean(az_wall[0])) / lx
         mean_bz = (jnp.mean(ay_wall[1]) - jnp.mean(ay_wall[0])) / lx
@@ -268,10 +257,10 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             jnp.real(mean_bz) + self.background_b[2],
         )
 
-    def electric_field_parts(self, state: MHDState):
+    def electric_field_parts(self, state: MHDState, B=None):
         """Return ideal, resistive, and total physical electric fields."""
         velocity = self.total_velocity_physical(state.flow)
-        B = self.update_B_from_A(state.A)
+        B = self.update_B_from_A(state.A) if B is None else B
         magnetic = self._total_B_physical(B, padded=False)
         current = self._current_physical(B)
         emf = physical_cross(velocity, magnetic)
@@ -301,31 +290,31 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         """Return curl(B) evaluated directly at both x walls."""
         spaces = self.b_coeff_spaces
         return (
-            self._wall_values(
+            self._wall_trace(
                 self._tangential_derivative_coefficients(B[2], spaces[2], dy=1),
                 spaces[2],
             )
-            - self._wall_values(
+            - self._wall_trace(
                 self._tangential_derivative_coefficients(B[1], spaces[1], dz=1),
                 spaces[1],
             ),
-            self._wall_values(
+            self._wall_trace(
                 self._tangential_derivative_coefficients(B[0], spaces[0], dz=1),
                 spaces[0],
             )
-            - self._wall_values(B[2], spaces[2], derivative=1),
-            self._wall_values(B[1], spaces[1], derivative=1)
-            - self._wall_values(
+            - self._wall_trace(B[2], spaces[2], derivative=1),
+            self._wall_trace(B[1], spaces[1], derivative=1)
+            - self._wall_trace(
                 self._tangential_derivative_coefficients(B[0], spaces[0], dy=1),
                 spaces[0],
             ),
         )
 
-    def _electric_wall_parts(self, state: MHDState):
+    def _electric_wall_parts(self, state: MHDState, B=None):
         """Evaluate both electric-field terms directly at the x walls."""
         velocity_spaces = (self.TB, self.TD, self.TD)
         velocity = tuple(
-            self._wall_values(coeff, space)
+            self._wall_trace(coeff, space)
             for coeff, space in zip(state.flow.u, velocity_spaces, strict=True)
         )
         wall_x = jnp.asarray(self.x_bounds)[:, None, None]
@@ -335,9 +324,9 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             velocity[2],
         )
 
-        B = self.update_B_from_A(state.A)
+        B = self.update_B_from_A(state.A) if B is None else B
         magnetic = tuple(
-            self._wall_values(coeff, space) + self.background_b[index]
+            self._wall_trace(coeff, space) + self.background_b[index]
             for index, (coeff, space) in enumerate(
                 zip(B, self.b_coeff_spaces, strict=True)
             )
@@ -349,8 +338,8 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         total = tuple(ei + er for ei, er in zip(ideal, resistive, strict=True))
         return ideal, resistive, total
 
-    def _electromagnetic_diagnostics(self, state: MHDState, mean_b):
-        ideal, resistive, electric = self.electric_field_parts(state)
+    def _electromagnetic_diagnostics(self, state: MHDState, mean_b, B):
+        ideal, resistive, electric = self.electric_field_parts(state, B)
         ideal_coeff = self._physical_vector_coefficients(ideal)
         resistive_coeff = self._physical_vector_coefficients(resistive)
         div_e_ideal = self._divergence_from_coefficients(ideal_coeff)
@@ -358,21 +347,21 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         div_e = div_e_ideal + div_e_resistive
         div_a = self._a_divergence(state)
         div_a_wall = (
-            self._wall_values(state.A[0], self.a_coeff_spaces[0], derivative=1)
-            + self._wall_values(
+            self._wall_trace(state.A[0], self.a_coeff_spaces[0], derivative=1)
+            + self._wall_trace(
                 self._tangential_derivative_coefficients(
                     state.A[1], self.a_coeff_spaces[1], dy=1
                 ),
                 self.a_coeff_spaces[1],
             )
-            + self._wall_values(
+            + self._wall_trace(
                 self._tangential_derivative_coefficients(
                     state.A[2], self.a_coeff_spaces[2], dz=1
                 ),
                 self.a_coeff_spaces[2],
             )
         )
-        ideal_wall, resistive_wall, electric_wall = self._electric_wall_parts(state)
+        ideal_wall, resistive_wall, electric_wall = self._electric_wall_parts(state, B)
 
         def tangential_linf(walls):
             return jnp.max(jnp.asarray([jnp.max(jnp.abs(walls[i])) for i in (1, 2)]))
@@ -409,6 +398,8 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             "electric_ideal_wall_tangential_linf": tangential_linf(ideal_wall),
             "electric_resistive_wall_tangential_linf": tangential_linf(resistive_wall),
             "electric_wall_tangential_linf": tangential_linf(electric_wall),
+            # Periodic y/z face contributions cancel identically. Retain the
+            # component for a complete, axis-stable diagnostics schema.
             "faraday_mean_bx_tendency": jnp.asarray(0.0),
             "faraday_mean_by_tendency": jnp.real(faraday_by),
             "faraday_mean_bz_tendency": jnp.real(faraday_bz),
@@ -481,7 +472,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             for bi, sp in zip(b_fluct, b_spaces, strict=True)
         )
         mag_energy_mean = volume * sum(mb * mb for mb in mean_b)
-        electromagnetic = self._electromagnetic_diagnostics(state, mean_b)
+        electromagnetic = self._electromagnetic_diagnostics(state, mean_b, B)
         out = {
             **diag,
             **electromagnetic,
