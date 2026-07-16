@@ -12,9 +12,12 @@ import pytest
 
 from production.quench import (
     QuenchError,
+    adaptive_quench_step_bound,
     burn_in_horizon,
     checkpoint_bank_entry,
+    finalize_adaptive_quench_duration,
     finalize_fixed_quench_duration,
+    resolve_adaptive_quench_duration,
     resolve_fixed_quench_duration,
     validate_bank_checkpoint_record,
     validate_burn_in_request,
@@ -154,6 +157,57 @@ def test_quench_runner_preflight_rejects_unwired_saturation_runner():
     )
     with pytest.raises(QuenchError, match="quench runner is not implemented"):
         validate_quench_runner_preflight(spec, quench=True)
+
+
+def test_adaptive_quench_step_bound_is_stable_at_integer_ratio():
+    assert adaptive_quench_step_bound(0.3, 0.1) == 3
+    assert adaptive_quench_step_bound(0.30000000000000004, 0.1) == 3
+    assert adaptive_quench_step_bound(0.31, 0.1) == 4
+
+
+def test_primitive_adaptive_quench_is_rejected_upfront():
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    spec["time"]["adaptive_cfl"] = {}
+    with pytest.raises(QuenchError, match="only for vector-potential"):
+        validate_quench_runner_preflight(spec, quench=True)
+
+
+def test_adaptive_quench_duration_uses_time_target_and_attained_steps():
+    duration = resolve_adaptive_quench_duration(
+        additional_time=0.35,
+        additional_steps=None,
+        child_initial_dt=0.1,
+        parent_time=1.25,
+        parent_step=12,
+    )
+    metadata = duration.to_metadata()
+    assert metadata["stepping"] == "adaptive"
+    assert metadata["absolute_target"] == {"time": pytest.approx(1.6), "step": None}
+    finalized = finalize_adaptive_quench_duration(
+        metadata, final_time=1.6, final_step=17
+    )
+    assert finalized["attained"] == {
+        "final_time": pytest.approx(1.6),
+        "final_step": 17,
+        "additional_time": pytest.approx(0.35),
+        "additional_steps": 5,
+        "target_reached": True,
+    }
+
+
+def test_adaptive_quench_additional_steps_is_nominal_time_shorthand():
+    duration = resolve_adaptive_quench_duration(
+        additional_time=None,
+        additional_steps=4,
+        child_initial_dt=0.125,
+        parent_time=2.0,
+        parent_step=9,
+    )
+    assert duration.additional_time == pytest.approx(0.5)
+    assert duration.target_time == pytest.approx(2.5)
+    assert duration.to_metadata()["absolute_target"]["step"] is None
 
 
 def test_fixed_quench_duration_resolves_absolute_target_from_parent():

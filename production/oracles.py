@@ -17,6 +17,8 @@ from .adaptive import adaptive_cfl_from_spec, run_adaptive_cfl
 from .checkpoint import write_production_checkpoint
 from .quench import (
     QuenchError,
+    adaptive_quench_step_bound,
+    resolve_adaptive_quench_duration,
     resolve_fixed_quench_duration,
     validate_burn_in_request,
     validate_quench_duration_request,
@@ -249,6 +251,38 @@ def _resume_or_initial_state(
     )
 
 
+def _adaptive_controller_from_checkpoint(
+    resume_checkpoint: Any | None, *, quench: bool
+) -> dict[str, Any] | None:
+    """Restore committed adaptive controller state for resume-exact only."""
+
+    if resume_checkpoint is None or quench:
+        return None
+    payload = resume_checkpoint.fields.get("adaptive_controller")
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "adaptive resume checkpoint is missing adaptive_controller state; "
+            "regenerate it with adaptive checkpoint support"
+        )
+    try:
+        endpoint_steps = int(np.asarray(payload.get("endpoint_steps_remaining", 0)))
+        endpoint_dt = payload.get("endpoint_dt")
+        return {
+            "dt": float(np.asarray(payload["dt"])),
+            "steps_until_check": int(np.asarray(payload["steps_until_check"])),
+            "endpoint_dt": (
+                None
+                if endpoint_steps == 0 or endpoint_dt is None
+                else float(np.asarray(endpoint_dt))
+            ),
+            "endpoint_steps_remaining": endpoint_steps,
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "adaptive resume checkpoint has invalid controller state"
+        ) from exc
+
+
 def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) -> Any:
     if state_kind == "pcf_fluctuation_saturation":
         from examples.channelflow_kmm import KMMState
@@ -335,22 +369,22 @@ def _adaptive_elapsed_target(
 ) -> float:
     """Physical time remaining for an adaptive run.
 
-    An explicit step override preserves the CLI contract of ``steps * initial
-    dt``.  Without an override, adaptive stepping uses ``final_time`` directly,
-    so exact endpoint landing does not require it to be an integer multiple of
-    the initial timestep.
+    An explicit step override defines the absolute nominal target time
+    ``steps * initial_dt`` for both fresh and resumed runs. Without an override,
+    adaptive stepping uses ``final_time`` directly.
     """
 
     if steps is not None:
         if int(steps) < 0:
             raise ValueError("steps override must be non-negative")
-        return int(steps) * float(spec["time"]["dt"])
-    remaining = float(spec["time"]["final_time"]) - float(t0)
-    tolerance = 1.0e-12 * max(1.0, abs(float(spec["time"]["final_time"])))
+        target_time = int(steps) * float(spec["time"]["dt"])
+    else:
+        target_time = float(spec["time"]["final_time"])
+    remaining = target_time - float(t0)
+    tolerance = 1.0e-12 * max(1.0, abs(target_time))
     if remaining < -tolerance:
         raise ValueError(
-            f"resume time {float(t0):g} is beyond adaptive final_time "
-            f"{float(spec['time']['final_time']):g}"
+            f"resume time {float(t0):g} is beyond adaptive target time {target_time:g}"
         )
     return max(0.0, remaining)
 
@@ -411,51 +445,41 @@ def run_supported_spec(
     validate_burn_in_request(quench=quench, burn_in_steps=burn_in_steps)
     validate_quench_runner_preflight(spec, quench=quench)
     quench_target_step: int | None = None
+    quench_adaptive_elapsed: float | None = None
     if quench:
         if resume_checkpoint is None:
             raise QuenchError("quench requires a selected parent checkpoint")
-        if adaptive_cfl_from_spec(spec) is not None:
-            raise ProductionOracleNotImplementedError(
-                "adaptive_cfl quenching is not supported by the fixed-step "
-                "additional-duration contract"
+        adaptive = adaptive_cfl_from_spec(spec)
+        if adaptive is not None:
+            duration = resolve_adaptive_quench_duration(
+                additional_time=additional_time,
+                additional_steps=additional_steps,
+                child_initial_dt=float(spec["time"]["dt"]),
+                parent_time=float(resume_checkpoint.t),
+                parent_step=resume_checkpoint.tstep,
             )
-        duration = resolve_fixed_quench_duration(
-            additional_time=additional_time,
-            additional_steps=additional_steps,
-            child_dt=float(spec["time"]["dt"]),
-            parent_time=float(resume_checkpoint.t),
-            parent_step=resume_checkpoint.tstep,
-        )
-        validate_burn_in_request(
-            quench=True,
-            burn_in_steps=burn_in_steps,
-            resolved_additional_steps=duration.additional_steps,
-        )
-        quench_target_step = duration.target_step
-
-    if (
-        spec.get("representation") == "vector_potential"
-        and adaptive_cfl_from_spec(spec) is not None
-        and (
-            checkpoint_every is not None
-            or snapshot_every is not None
-            or profiles_every is not None
-        )
-    ):
-        requested = ", ".join(
-            name
-            for name, value in (
-                ("checkpoint_every", checkpoint_every),
-                ("snapshot_every", snapshot_every),
-                ("profiles_every", profiles_every),
+            validate_burn_in_request(
+                quench=True,
+                burn_in_steps=burn_in_steps,
+                resolved_additional_steps=adaptive_quench_step_bound(
+                    duration.additional_time, adaptive.dt_max
+                ),
             )
-            if value is not None
-        )
-        raise ProductionOracleNotImplementedError(
-            "adaptive_cfl does not yet support intermediate "
-            "checkpoint/snapshot/profile "
-            f"cadence ({requested}); remove those options or use fixed dt"
-        )
+            quench_adaptive_elapsed = duration.additional_time
+        else:
+            duration = resolve_fixed_quench_duration(
+                additional_time=additional_time,
+                additional_steps=additional_steps,
+                child_dt=float(spec["time"]["dt"]),
+                parent_time=float(resume_checkpoint.t),
+                parent_step=resume_checkpoint.tstep,
+            )
+            validate_burn_in_request(
+                quench=True,
+                burn_in_steps=burn_in_steps,
+                resolved_additional_steps=duration.additional_steps,
+            )
+            quench_target_step = duration.target_step
 
     if profiles_every is not None and not (
         spec["geometry"] == "pcf" and spec.get("representation") == "vector_potential"
@@ -514,6 +538,7 @@ def run_supported_spec(
             on_row=on_row,
             checkpoint_bank=checkpoint_bank,
             burn_in_steps=burn_in_steps,
+            adaptive_elapsed_target=quench_adaptive_elapsed,
         )
     if (
         spec["geometry"] == "taylor_couette"
@@ -612,6 +637,7 @@ def run_supported_spec(
             on_row=on_row,
             checkpoint_bank=checkpoint_bank,
             burn_in_steps=burn_in_steps,
+            adaptive_elapsed_target=quench_adaptive_elapsed,
         )
     if (
         spec["geometry"] == "pcf"
@@ -1528,6 +1554,7 @@ def _run_pcf_primitive_mhd_saturation(
         t0=t0,
         dt=float(spec["time"]["dt"]),
         burn_in_steps=burn_in_steps,
+        tstep0=tstep0,
     )
     fit_series = (
         series if analysis_start is None else _dedupe_time_rows([*analysis_rows, last])
@@ -1730,6 +1757,7 @@ def _run_pcf_vector_potential_mhd_saturation(
     on_row: Any | None = None,
     checkpoint_bank: bool = False,
     burn_in_steps: int = 0,
+    adaptive_elapsed_target: float | None = None,
 ) -> dict[str, Any]:
     """FJ-03: curl/vector-potential PCF-MRI DNS.
 
@@ -1776,7 +1804,11 @@ def _run_pcf_vector_potential_mhd_saturation(
         )
         adaptive_elapsed = None
     else:
-        adaptive_elapsed = _adaptive_elapsed_target(spec, steps=steps, t0=t0)
+        adaptive_elapsed = (
+            float(adaptive_elapsed_target)
+            if adaptive_elapsed_target is not None
+            else _adaptive_elapsed_target(spec, steps=steps, t0=t0)
+        )
 
     rows: list[dict[str, Any]] = []
 
@@ -1803,7 +1835,7 @@ def _run_pcf_vector_potential_mhd_saturation(
             "dissipation_kinetic": float(diag["dissipation_kinetic"]),
             "dissipation_magnetic": float(diag["dissipation_magnetic"]),
             "energy_convention": "integral_abs2",
-            "dt": float(solver.dt),
+            "dt": float(diag.get("_adaptive_step_dt", solver.dt)),
             **({"tstep": int(tstep)} if quench else {}),
             **({"transport_alpha": float(diag["alpha"])} if "alpha" in diag else {}),
             **(
@@ -1820,14 +1852,6 @@ def _run_pcf_vector_potential_mhd_saturation(
     health_observations: list[dict[str, float]] = []
     adaptive_record: dict[str, Any] | None = None
     if adaptive is not None:
-        # Experimental adaptive-CFL path (chunked dt adaptation with exact
-        # time accounting).  Fresh starts only; cadence IO reduces to
-        # per-check diagnostics rows plus a final checkpoint.
-        if resume_checkpoint is not None or quench or checkpoint_bank:
-            raise ProductionOracleNotImplementedError(
-                "adaptive_cfl runs are wired for fresh starts without the "
-                "checkpoint-bank/quench machinery (experimental)"
-            )
         out, adaptive_record = _run_vp_adaptive_blocks(
             solver,
             state,
@@ -1842,6 +1866,15 @@ def _run_pcf_vector_potential_mhd_saturation(
             out_dir=out_dir,
             state_kind="pcf_vector_potential_mhd_saturation",
             device_record=device_record,
+            checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            profiles_every=profiles_every,
+            diagnostics_every=diagnostics_every,
+            checkpoint_bank=checkpoint_bank,
+            plateau_rows=rows,
+            controller_state=_adaptive_controller_from_checkpoint(
+                resume_checkpoint, quench=quench
+            ),
             magnetic_divergence_limit=divergence_b_guard,
         )
     else:
@@ -1949,11 +1982,22 @@ def _run_pcf_vector_potential_mhd_saturation(
         "magnetic_energy_growth_factor": float(magnetic_growth),
         "saturation_check_passed": bool(saturation_passed),
     }
+    if quench and adaptive_record is not None:
+        validate_burn_in_request(
+            quench=True,
+            burn_in_steps=burn_in_steps,
+            resolved_additional_steps=final_steps_taken,
+        )
     series = _dedupe_time_rows([first, *rows, last])
     # FJ-05: on a quench, the burn-in window is excluded from the fitted
     # history (stationarity/correlation/budget), not merely recorded.
     analysis_rows, analysis_start = _analysis_window(
-        rows, t0=t0, dt=float(spec["time"]["dt"]), burn_in_steps=burn_in_steps
+        rows,
+        t0=t0,
+        dt=float(spec["time"]["dt"]),
+        burn_in_steps=burn_in_steps,
+        tstep0=tstep0,
+        adaptive=adaptive_record is not None,
     )
     fit_series = (
         series if analysis_start is None else _dedupe_time_rows([*analysis_rows, last])
@@ -2418,6 +2462,7 @@ def _run_taylor_couette_vp_mhd_saturation(
     on_row: Any | None = None,
     checkpoint_bank: bool = False,
     burn_in_steps: int = 0,
+    adaptive_elapsed_target: float | None = None,
 ) -> dict[str, Any]:
     """Vector-potential (curl) Taylor-Couette MHD/MRI DNS runner.
 
@@ -2492,7 +2537,11 @@ def _run_taylor_couette_vp_mhd_saturation(
         )
         adaptive_elapsed = None
     else:
-        adaptive_elapsed = _adaptive_elapsed_target(spec, steps=steps, t0=t0)
+        adaptive_elapsed = (
+            float(adaptive_elapsed_target)
+            if adaptive_elapsed_target is not None
+            else _adaptive_elapsed_target(spec, steps=steps, t0=t0)
+        )
 
     rows: list[dict[str, Any]] = []
 
@@ -2508,7 +2557,7 @@ def _run_taylor_couette_vp_mhd_saturation(
             "maxwell_stress_rt": float(diag["maxwell_rt"]),
             "total_stress": float(diag["total_stress"]),
             "mean_bz": float(diag["mean_bz"]),
-            "dt": float(solver.dt),
+            "dt": float(diag.get("_adaptive_step_dt", solver.dt)),
             **({"tstep": int(tstep)} if quench else {}),
             **(
                 {"insulating_bc_residual": float(diag["insulating_bc_residual"])}
@@ -2524,11 +2573,6 @@ def _run_taylor_couette_vp_mhd_saturation(
     health_observations: list[dict[str, float]] = []
     adaptive_record: dict[str, Any] | None = None
     if adaptive is not None:
-        if resume_checkpoint is not None or quench or checkpoint_bank:
-            raise ProductionOracleNotImplementedError(
-                "adaptive_cfl runs are wired for fresh starts without the "
-                "checkpoint-bank/quench machinery (experimental)"
-            )
         out, adaptive_record = _run_vp_adaptive_blocks(
             solver,
             state,
@@ -2543,6 +2587,15 @@ def _run_taylor_couette_vp_mhd_saturation(
             out_dir=out_dir,
             state_kind="tc_vector_potential_mhd_saturation",
             device_record=device_record,
+            checkpoint_every=checkpoint_every,
+            snapshot_every=snapshot_every,
+            profiles_every=None,
+            diagnostics_every=diagnostics_every,
+            checkpoint_bank=checkpoint_bank,
+            plateau_rows=rows,
+            controller_state=_adaptive_controller_from_checkpoint(
+                resume_checkpoint, quench=quench
+            ),
             magnetic_divergence_limit=divergence_b_guard,
         )
     else:
@@ -2628,9 +2681,25 @@ def _run_taylor_couette_vp_mhd_saturation(
         "growth_rate": float(growth_rate),
         "magnetic_energy_growth_factor": float(magnetic_growth),
     }
+    final_steps_taken = (
+        int(adaptive_record["steps_taken"])
+        if adaptive_record is not None
+        else int(n_steps)
+    )
+    if quench and adaptive_record is not None:
+        validate_burn_in_request(
+            quench=True,
+            burn_in_steps=burn_in_steps,
+            resolved_additional_steps=final_steps_taken,
+        )
     series = _dedupe_time_rows([first, *rows, last])
     analysis_rows, analysis_start = _analysis_window(
-        rows, t0=t0, dt=float(spec["time"]["dt"]), burn_in_steps=burn_in_steps
+        rows,
+        t0=t0,
+        dt=float(spec["time"]["dt"]),
+        burn_in_steps=burn_in_steps,
+        tstep0=tstep0,
+        adaptive=adaptive_record is not None,
     )
     fit_series = (
         series if analysis_start is None else _dedupe_time_rows([*analysis_rows, last])
@@ -2648,11 +2717,6 @@ def _run_taylor_couette_vp_mhd_saturation(
         )
         if independent is not None:
             scalars["effective_independent_samples_total_stress"] = float(independent)
-    final_steps_taken = (
-        int(adaptive_record["steps_taken"])
-        if adaptive_record is not None
-        else int(n_steps)
-    )
     return _with_quench_horizon(
         {"scalars": scalars, "time_series": series},
         quench=quench,
@@ -2925,40 +2989,20 @@ def _solve_with_optional_checkpoints(
     ) -> None:
         # Output callbacks run before should_stop. Guard the candidate state
         # before creating any artifact so a rejected state cannot persist.
-        _raise_on_divergence_drift(
+        _write_solver_outputs(
             solver,
             output_state,
             t=t,
             tstep=tstep,
             diagnostics=diagnostics_cache.get(int(tstep)),
-            magnetic_limit=magnetic_divergence_limit,
+            magnetic_divergence_limit=magnetic_divergence_limit,
+            snapshot_path=snapshot_path,
+            profiles_path=profiles_path,
+            write_snapshot=write_snapshot,
+            write_profiles=write_profiles,
+            spec=spec,
+            state_kind=state_kind,
         )
-        if write_snapshot:
-            assert snapshot_path is not None
-            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-            snapshot_payload, snapshot_spaces = _snapshot_payload(solver, output_state)
-            _write_atomic_uniform_snapshot(
-                snapshot_path,
-                snapshot_payload,
-                t=t,
-                tstep=tstep,
-                spaces=snapshot_spaces,
-                attrs={
-                    "problem_id": spec["problem_id"],
-                    "spec_hash": spec["spec_hash"],
-                    "state_kind": state_kind,
-                },
-            )
-        if write_profiles:
-            assert profiles_path is not None
-            from .profiles import pcf_multiplane_profiles, write_pcf_multiplane_h5
-
-            write_pcf_multiplane_h5(
-                profiles_path,
-                profiles=pcf_multiplane_profiles(solver, output_state),
-                t=t,
-                tstep=tstep,
-            )
 
     def on_output(t: float, tstep: int, output_state: Any) -> None:
         write_snapshot = (
@@ -3109,16 +3153,28 @@ def _stationarity_scalars(
 
 
 def _analysis_window(
-    rows: list[dict[str, Any]], *, t0: float, dt: float, burn_in_steps: int
+    rows: list[dict[str, Any]],
+    *,
+    t0: float,
+    dt: float,
+    burn_in_steps: int,
+    tstep0: int | None = None,
+    adaptive: bool = False,
 ) -> tuple[list[dict[str, Any]], float | None]:
     """FJ-05: cadence rows inside the analysis window (post burn-in).
 
-    Returns ``(rows, None)`` when no burn-in applies; otherwise the rows at
-    ``t >= t0 + burn_in_steps * dt`` and that start time.
+    Returns ``(rows, None)`` when no burn-in applies. Fixed stepping keeps
+    the exact physical boundary ``t0 + burn_in_steps * dt``. Adaptive stepping
+    selects by absolute ``tstep`` and reports the first retained sample time.
     """
 
     if int(burn_in_steps) <= 0:
         return list(rows), None
+    if adaptive and tstep0 is not None and any("tstep" in row for row in rows):
+        first_step = int(tstep0) + int(burn_in_steps)
+        kept = [row for row in rows if int(row.get("tstep", -1)) >= first_step]
+        start = float(kept[0]["t"]) if kept else float(t0)
+        return kept, start
     start = float(t0) + int(burn_in_steps) * float(dt)
     kept = [row for row in rows if float(row.get("t", -math.inf)) >= start - 1.0e-12]
     return kept, start
@@ -3444,6 +3500,58 @@ def _snapshot_payload(solver: Any, state: Any) -> tuple[dict[str, Any], dict[str
     raise TypeError(f"solver {type(solver).__name__} does not expose snapshot fields")
 
 
+def _write_solver_outputs(
+    solver: Any,
+    state: Any,
+    *,
+    t: float,
+    tstep: int,
+    diagnostics: dict[str, Any] | None,
+    magnetic_divergence_limit: float | None,
+    snapshot_path: Path | None,
+    profiles_path: Path | None,
+    write_snapshot: bool,
+    write_profiles: bool,
+    spec: dict[str, Any],
+    state_kind: str,
+) -> None:
+    """Guard and write shared fixed/adaptive snapshot and profile outputs."""
+
+    _raise_on_divergence_drift(
+        solver,
+        state,
+        t=t,
+        tstep=tstep,
+        diagnostics=diagnostics,
+        magnetic_limit=magnetic_divergence_limit,
+    )
+    if write_snapshot:
+        assert snapshot_path is not None
+        snapshot_payload, snapshot_spaces = _snapshot_payload(solver, state)
+        _write_atomic_uniform_snapshot(
+            snapshot_path,
+            snapshot_payload,
+            t=t,
+            tstep=tstep,
+            spaces=snapshot_spaces,
+            attrs={
+                "problem_id": spec["problem_id"],
+                "spec_hash": spec["spec_hash"],
+                "state_kind": state_kind,
+            },
+        )
+    if write_profiles:
+        assert profiles_path is not None
+        from .profiles import pcf_multiplane_profiles, write_pcf_multiplane_h5
+
+        write_pcf_multiplane_h5(
+            profiles_path,
+            profiles=pcf_multiplane_profiles(solver, state),
+            t=t,
+            tstep=tstep,
+        )
+
+
 def _snapshot_space(solver: Any) -> Any | None:
     for name in ("T0", "TD", "TC", "TP"):
         space = getattr(solver, name, None)
@@ -3609,54 +3717,275 @@ def _run_vp_adaptive_blocks(
     out_dir: str | Path | None,
     state_kind: str,
     device_record: dict[str, Any] | None,
+    checkpoint_every: int | None = None,
+    snapshot_every: int | None = None,
+    profiles_every: int | None = None,
+    diagnostics_every: int | None = None,
+    checkpoint_bank: bool = False,
+    plateau_rows: list[dict[str, Any]] | None = None,
+    controller_state: dict[str, Any] | None = None,
     magnetic_divergence_limit: float | None = None,
 ) -> tuple[Any, dict[str, Any]]:
-    """Adaptive-CFL block driver shared by the vector-potential runners.
+    """Adaptive vector-potential driver with fixed-run persistence semantics."""
 
-    The horizon is an explicit physical elapsed time: either the remaining
-    ``final_time`` or ``steps * initial dt`` for a CLI override.  The driver
-    adjusts the endpoint schedule to land exactly on that time, so growth
-    windows and saturation horizons keep the spec contract.  Every compiled
-    block produces a diagnostics row (with the exact accumulated time and
-    the dt actually used) and runs the full guard set: non-finite state,
-    energy runaway, divergence drift, and the resolution health gate.
-    A final production checkpoint is written when an output directory is set
-    (per-interval checkpoints under adaptive dt are not wired yet).
-    """
+    for name, value in (
+        ("checkpoint_every", checkpoint_every),
+        ("snapshot_every", snapshot_every),
+        ("profiles_every", profiles_every),
+        ("diagnostics_every", diagnostics_every),
+    ):
+        if value is not None and int(value) <= 0:
+            raise ValueError(f"{name} must be positive")
+    if out_dir is None and any(
+        value is not None
+        for value in (checkpoint_every, snapshot_every, profiles_every)
+    ):
+        raise ValueError(
+            "out_dir is required when checkpoint, snapshot, or profile output is set"
+        )
 
-    def on_block(
-        t: float, done: int, block_state: Any, health_values: dict[str, float]
-    ) -> None:
-        tstep = int(tstep0) + int(done)
+    from jaxfun.io import generate_xdmf
+
+    out_path = None if out_dir is None else Path(out_dir)
+    checkpoint_path = (
+        None if out_path is None else out_path / "checkpoints" / "checkpoints.h5"
+    )
+    diagnostics_path = None if out_path is None else out_path / "diagnostics.jsonl"
+    snapshot_path = (
+        None if out_path is None else out_path / "snapshots" / "snapshots.h5"
+    )
+    profiles_path = (
+        None if out_path is None else out_path / "profiles" / "multiplane_v2.h5"
+    )
+    if (
+        profiles_every is not None
+        and profiles_path is not None
+        and profiles_path.exists()
+    ):
+        from .profiles import truncate_pcf_multiplane_h5
+
+        truncate_pcf_multiplane_h5(profiles_path, after_tstep=int(tstep0))
+
+    cadences = tuple(
+        int(value)
+        for value in (
+            checkpoint_every,
+            snapshot_every,
+            profiles_every,
+            diagnostics_every,
+        )
+        if value is not None
+    )
+
+    def block_steps(done: int) -> int:
+        if not cadences:
+            return int(config.check_every)
+        absolute = int(tstep0) + int(done)
+        return min(cadence - absolute % cadence for cadence in cadences)
+
+    def adaptive_payload(
+        block_state: Any, controller: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            "state": _checkpoint_payload(block_state),
+            "adaptive_controller": {
+                "dt": jnp.asarray(controller["dt"]),
+                "steps_until_check": jnp.asarray(
+                    controller["steps_until_check"], dtype=jnp.int32
+                ),
+                "endpoint_dt": jnp.asarray(controller.get("endpoint_dt") or 0.0),
+                "endpoint_steps_remaining": jnp.asarray(
+                    controller.get("endpoint_steps_remaining", 0), dtype=jnp.int32
+                ),
+            },
+        }
+
+    def validate_adaptive_state(
+        t: float,
+        tstep: int,
+        block_state: Any,
+        public_health: dict[str, float],
+        *,
+        step_dt: float | None,
+    ) -> dict[str, Any]:
         if not _tree_all_finite(block_state):
             raise FloatingPointError(
                 f"nonfinite solver state at tstep={tstep} t={float(t):g}"
             )
-        diag = dict(solver.diagnostics(block_state))
-        if "cfl_total" in health_values:
-            diag["cfl_total"] = health_values["cfl_total"]
+        diagnostics = dict(solver.diagnostics(block_state))
+        if step_dt is not None:
+            diagnostics["_adaptive_step_dt"] = float(step_dt)
+        if "cfl_total" in public_health:
+            diagnostics["cfl_total"] = public_health["cfl_total"]
         _raise_on_energy_runaway(
-            solver, block_state, t=t, tstep=tstep, diagnostics=diag
+            solver, block_state, t=t, tstep=tstep, diagnostics=diagnostics
         )
         _raise_on_divergence_drift(
             solver,
             block_state,
             t=t,
             tstep=tstep,
-            diagnostics=diag,
+            diagnostics=diagnostics,
+            magnetic_limit=magnetic_divergence_limit,
+        )
+        _raise_on_resolution_health(
+            public_health,
+            t=t,
+            tstep=tstep,
+            enforce_spectral=(int(tstep) - int(tstep0))
+            >= health.EARLY_ABORT_STARTUP_STEPS,
+            enforce_cfl=True,
+        )
+        health_observations.append(dict(public_health))
+        return diagnostics
+
+    def write_checkpoint(
+        t: float,
+        tstep: int,
+        block_state: Any,
+        health_values: dict[str, float],
+        diagnostics: dict[str, Any],
+        controller: dict[str, Any],
+    ) -> None:
+        assert checkpoint_path is not None
+        # Every checkpoint, including a zero-step final flush, is gated before
+        # it can become the latest state or a selectable bank parent.
+        if not _tree_all_finite(block_state):
+            raise FloatingPointError(
+                f"nonfinite solver state at tstep={tstep} t={float(t):g}"
+            )
+        _raise_on_energy_runaway(
+            solver, block_state, t=t, tstep=tstep, diagnostics=diagnostics
+        )
+        _raise_on_divergence_drift(
+            solver,
+            block_state,
+            t=t,
+            tstep=tstep,
+            diagnostics=diagnostics,
             magnetic_limit=magnetic_divergence_limit,
         )
         _raise_on_resolution_health(
             health_values,
             t=t,
             tstep=tstep,
-            enforce_spectral=int(done) >= health.EARLY_ABORT_STARTUP_STEPS,
-            # An unsafe initial dt is recoverable in the pre-flight check, but
-            # a completed block above CFL=1 cannot be rolled back safely.
+            enforce_spectral=(int(tstep) - int(tstep0))
+            >= health.EARLY_ABORT_STARTUP_STEPS,
             enforce_cfl=True,
         )
-        health_observations.append(dict(health_values))
-        diagnostics_row_fn(float(t), tstep, diag)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = adaptive_payload(block_state, controller)
+        write_production_checkpoint(
+            checkpoint_path,
+            payload,
+            t=t,
+            tstep=tstep,
+            spec=spec,
+            state_kind=state_kind,
+            device_record=device_record,
+            diagnostics_path=diagnostics_path,
+        )
+        if checkpoint_bank:
+            _write_bank_checkpoint(
+                checkpoint_path.parent,
+                payload,
+                t=t,
+                tstep=tstep,
+                spec=spec,
+                state_kind=state_kind,
+                device_record=device_record,
+                diagnostics_path=diagnostics_path,
+                plateau_stats=_checkpoint_plateau_stats(
+                    plateau_rows or [],
+                    checkpoint_time=float(t),
+                    health_scalars=health_values,
+                ),
+            )
+
+    def write_outputs(
+        t: float,
+        tstep: int,
+        block_state: Any,
+        diagnostics: dict[str, Any],
+        *,
+        write_snapshot: bool,
+        write_profiles: bool,
+    ) -> None:
+        _write_solver_outputs(
+            solver,
+            block_state,
+            t=t,
+            tstep=tstep,
+            diagnostics=diagnostics,
+            magnetic_divergence_limit=magnetic_divergence_limit,
+            snapshot_path=snapshot_path,
+            profiles_path=profiles_path,
+            write_snapshot=write_snapshot,
+            write_profiles=write_profiles,
+            spec=spec,
+            state_kind=state_kind,
+        )
+
+    last_context: dict[str, Any] = {}
+
+    def on_block(
+        t: float, done: int, block_state: Any, health_values: dict[str, float]
+    ) -> None:
+        tstep = int(tstep0) + int(done)
+        private = {
+            key: float(value)
+            for key, value in health_values.items()
+            if key.startswith("_adaptive_")
+        }
+        public_health = {
+            key: float(value)
+            for key, value in health_values.items()
+            if not key.startswith("_adaptive_")
+        }
+        endpoint_steps = int(private["_adaptive_endpoint_steps_remaining"])
+        controller = {
+            "dt": private["_adaptive_controller_dt"],
+            "steps_until_check": int(private["_adaptive_steps_until_check"]),
+            "endpoint_dt": (
+                private["_adaptive_endpoint_dt"] if endpoint_steps else None
+            ),
+            "endpoint_steps_remaining": endpoint_steps,
+        }
+        diagnostics = validate_adaptive_state(
+            t,
+            tstep,
+            block_state,
+            public_health,
+            step_dt=private["_adaptive_step_dt"],
+        )
+        last_context.update({"health": public_health, "diagnostics": diagnostics})
+        # Preserve the historical per-compiled-block time series. Cadence-only
+        # block splits may add rows, but no evolved block is silently dropped.
+        diagnostics_row_fn(float(t), tstep, diagnostics)
+
+        checkpoint_due = (
+            checkpoint_every is not None and tstep % int(checkpoint_every) == 0
+        )
+        if checkpoint_due:
+            write_checkpoint(
+                t,
+                tstep,
+                block_state,
+                public_health,
+                diagnostics,
+                controller,
+            )
+        snapshot_due = snapshot_every is not None and tstep % int(snapshot_every) == 0
+        profiles_due = profiles_every is not None and tstep % int(profiles_every) == 0
+        if snapshot_due or profiles_due:
+            write_outputs(
+                t,
+                tstep,
+                block_state,
+                diagnostics,
+                write_snapshot=snapshot_due,
+                write_profiles=profiles_due,
+            )
 
     out, record = run_adaptive_cfl(
         solver,
@@ -3666,19 +3995,74 @@ def _run_vp_adaptive_blocks(
         health_scalars_fn=health_scalars_fn,
         on_block=on_block,
         t0=float(t0),
+        block_steps_fn=block_steps if cadences else None,
+        controller_state=controller_state,
     )
-    if out_dir is not None:
-        checkpoint_path = Path(out_dir) / "checkpoints" / "checkpoints.h5"
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        write_production_checkpoint(
-            checkpoint_path,
-            {"state": _checkpoint_payload(out)},
-            t=float(t0) + float(record["elapsed_time"]),
-            tstep=int(tstep0) + int(record["steps_taken"]),
+    final_t = float(t0) + float(record["elapsed_time"])
+    final_tstep = int(tstep0) + int(record["steps_taken"])
+    if last_context:
+        final_health = dict(last_context["health"])
+        final_diagnostics = dict(last_context["diagnostics"])
+    else:
+        final_health = {
+            str(key): float(value)
+            for key, value in health_scalars_fn(solver, out).items()
+        }
+        final_diagnostics = validate_adaptive_state(
+            final_t,
+            final_tstep,
+            out,
+            final_health,
+            step_dt=None,
+        )
+    controller = record["controller_state"]
+
+    # Always leave a resumable final checkpoint when an output directory exists.
+    if checkpoint_path is not None and (
+        int(record["steps_taken"]) == 0
+        or checkpoint_every is None
+        or final_tstep % int(checkpoint_every) != 0
+    ):
+        write_checkpoint(
+            final_t,
+            final_tstep,
+            out,
+            final_health,
+            final_diagnostics,
+            controller,
+        )
+    if snapshot_every is not None and (
+        int(record["steps_taken"]) == 0 or final_tstep % int(snapshot_every) != 0
+    ):
+        write_outputs(
+            final_t,
+            final_tstep,
+            out,
+            final_diagnostics,
+            write_snapshot=True,
+            write_profiles=False,
+        )
+    if profiles_every is not None and (
+        int(record["steps_taken"]) == 0 or final_tstep % int(profiles_every) != 0
+    ):
+        write_outputs(
+            final_t,
+            final_tstep,
+            out,
+            final_diagnostics,
+            write_snapshot=False,
+            write_profiles=True,
+        )
+    if snapshot_path is not None and snapshot_path.exists():
+        xdmf_path = generate_xdmf(snapshot_path)
+        _write_snapshot_manifest(
+            snapshot_path.with_name("manifest.json"),
+            snapshot_path=snapshot_path,
+            xdmf_path=xdmf_path,
             spec=spec,
             state_kind=state_kind,
+            snapshot_every=snapshot_every,
             device_record=device_record,
-            diagnostics_path=None,
         )
     return out, record
 

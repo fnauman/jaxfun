@@ -116,6 +116,41 @@ class FixedQuenchDuration:
         }
 
 
+@dataclass(frozen=True)
+class AdaptiveQuenchDuration:
+    """Physical-time horizon for an adaptive continuation."""
+
+    request_kind: str
+    requested_additional_time: float | None
+    requested_additional_steps: int | None
+    additional_time: float
+    parent_time: float
+    parent_step: int
+    target_time: float
+    child_initial_dt: float
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "schema_version": QUENCH_DURATION_SCHEMA_VERSION,
+            "stepping": "adaptive",
+            "request_kind": self.request_kind,
+            "child_dt": self.child_initial_dt,
+            "parent_checkpoint": {"time": self.parent_time, "step": self.parent_step},
+            "requested": {
+                "additional_time": self.requested_additional_time,
+                "additional_steps": self.requested_additional_steps,
+            },
+            "absolute_target": {"time": self.target_time, "step": None},
+            "attained": {
+                "final_time": None,
+                "final_step": None,
+                "additional_time": None,
+                "additional_steps": None,
+                "target_reached": None,
+            },
+        }
+
+
 def validate_quench_duration_request(
     *,
     quench: bool,
@@ -212,6 +247,23 @@ def validate_burn_in_request(
         )
 
 
+def adaptive_quench_step_bound(elapsed: float, dt: float) -> int:
+    """Conservative positive step count with roundoff-stable integer ratios."""
+
+    elapsed_value = float(elapsed)
+    dt_value = float(dt)
+    if not math.isfinite(elapsed_value) or elapsed_value <= 0.0:
+        raise QuenchError("adaptive quench elapsed time must be finite and positive")
+    if not math.isfinite(dt_value) or dt_value <= 0.0:
+        raise QuenchError("adaptive quench timestep bound must be finite and positive")
+    ratio = elapsed_value / dt_value
+    nearest = int(round(ratio))
+    tolerance = 1.0e-12 * max(1.0, abs(ratio))
+    if math.isclose(ratio, nearest, rel_tol=0.0, abs_tol=tolerance):
+        return max(1, nearest)
+    return max(1, int(math.ceil(ratio)))
+
+
 def validate_quench_runner_preflight(spec: dict[str, Any], *, quench: bool) -> None:
     """Allow quenching only through runners with an explicit continuation path."""
 
@@ -241,6 +293,12 @@ def validate_quench_runner_preflight(spec: dict[str, Any], *, quench: bool) -> N
         and representation == "vector_potential"
         and oracle == "tc_mri_saturation_ladder"
     )
+    adaptive_enabled = (spec.get("time") or {}).get("adaptive_cfl", False) is not False
+    if adaptive_enabled and pcf_primitive:
+        raise QuenchError(
+            "adaptive_cfl quenching is implemented only for vector-potential "
+            "PCF/TC MHD/MRI runners; use fixed dt for a primitive quench"
+        )
     if pcf_primitive or pcf_vector_potential or tc_vector_potential:
         return
     raise QuenchError(
@@ -315,6 +373,54 @@ def resolve_fixed_quench_duration(
         target_time=t0 + elapsed,
         target_step=step0 + resolved_steps,
         child_dt=dt,
+    )
+
+
+def resolve_adaptive_quench_duration(
+    *,
+    additional_time: float | None,
+    additional_steps: int | None,
+    child_initial_dt: float,
+    parent_time: float,
+    parent_step: int,
+) -> AdaptiveQuenchDuration:
+    """Resolve adaptive continuation to an exact physical-time horizon."""
+    validate_quench_duration_request(
+        quench=True,
+        steps=None,
+        additional_time=additional_time,
+        additional_steps=additional_steps,
+    )
+    dt = float(child_initial_dt)
+    if not math.isfinite(dt) or dt <= 0.0:
+        raise QuenchError("adaptive quench requires a finite positive initial dt")
+    t0 = float(parent_time)
+    if not math.isfinite(t0):
+        raise QuenchError("parent checkpoint time must be finite")
+    if isinstance(parent_step, bool) or not isinstance(parent_step, Integral):
+        raise QuenchError("parent checkpoint step must be an integer")
+    step0 = int(parent_step)
+    if step0 < 0:
+        raise QuenchError("parent checkpoint step must be non-negative")
+    if additional_time is not None:
+        elapsed = float(additional_time)
+        kind = "additional_time"
+        requested_time = elapsed
+        requested_steps = None
+    else:
+        requested_steps = int(additional_steps)
+        elapsed = requested_steps * dt
+        kind = "additional_steps"
+        requested_time = None
+    return AdaptiveQuenchDuration(
+        request_kind=kind,
+        requested_additional_time=requested_time,
+        requested_additional_steps=requested_steps,
+        additional_time=elapsed,
+        parent_time=t0,
+        parent_step=step0,
+        target_time=t0 + elapsed,
+        child_initial_dt=dt,
     )
 
 
@@ -431,6 +537,38 @@ def finalize_fixed_quench_duration(
             rel_tol=0.0,
             abs_tol=8.0 * math.ulp(time_scale),
         )
+    )
+    data["attained"] = {
+        "final_time": tf,
+        "final_step": stepf,
+        "additional_time": elapsed,
+        "additional_steps": taken,
+        "target_reached": bool(reached),
+    }
+    return data
+
+
+def finalize_adaptive_quench_duration(
+    duration: dict[str, Any], *, final_time: float, final_step: int
+) -> dict[str, Any]:
+    """Fill an adaptive quench endpoint using physical time as authority."""
+    data = copy.deepcopy(duration)
+    parent = data["parent_checkpoint"]
+    target = data["absolute_target"]
+    t0 = float(parent["time"])
+    step0 = int(parent["step"])
+    tf = float(final_time)
+    if not math.isfinite(tf):
+        raise QuenchError("quench solver endpoint time must be finite")
+    if isinstance(final_step, bool) or not isinstance(final_step, Integral):
+        raise QuenchError("quench solver endpoint step must be an integer")
+    stepf = int(final_step)
+    elapsed = tf - t0
+    taken = stepf - step0
+    target_time = float(target["time"])
+    tolerance = 1.0e-10 * max(1.0, abs(tf), abs(target_time))
+    reached = taken > 0 and math.isclose(
+        tf, target_time, rel_tol=0.0, abs_tol=tolerance
     )
     data["attained"] = {
         "final_time": tf,

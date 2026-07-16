@@ -492,12 +492,14 @@ evidence and measured `div B` floors are recorded in
 [`README.md`](README.md#magnetic-representation-and-divergence-evidence);
 none of the four has a committed full-resolution GPU golden yet.
 
-To run with adaptive-CFL stepping (experimental; fresh starts only), add an
+To run with adaptive-CFL stepping, add an
 `adaptive_cfl` block to the spec's `time` section, e.g.
 `"adaptive_cfl": {"target": 0.4, "check_every": 25, "dt_min": 1e-6,
 "dt_max": 0.01}`; the run then records `n_dt_changes`, `dt_final`,
 `dt_min_used`/`dt_max_used`, `cfl_total_max_observed`, and per-row `dt` and
-`cfl_total`.
+`cfl_total`. Adaptive runs support resume-exact, checkpoint banks, snapshots,
+and PCF profiles; controller `dt`, CFL-check phase, and any in-progress
+exact-endpoint redistribution schedule are checkpointed.
 
 ## Taylor-Couette saturation smoke
 
@@ -589,12 +591,14 @@ block + A coefficients, `state_kind=pcf_vector_potential_mhd_saturation`):
   --quench runs/exp_pcf_mri_vector_potential/parent --additional-time 20
 ```
 
-A quench must provide exactly one explicit fixed-step horizon:
-`--additional-time T` (where `T` is an integer multiple of the child `dt`) or
-`--additional-steps N`. `--steps` remains an absolute target for fresh runs and
-resume-exact only; it cannot be combined with `--quench`. The immutable child
-spec's `time.final_time` does not define the quench horizon. Adaptive-CFL quench
-continuation is intentionally still unsupported.
+A quench must provide exactly one explicit horizon: `--additional-time T` or
+`--additional-steps N`. Fixed stepping requires `T` to be an integer multiple
+of the child `dt`. For adaptive stepping, time is authoritative;
+`--additional-steps N` is a nominal-time shorthand for `N * initial_dt`, and
+the attained adaptive step count is recorded at completion. `--steps` remains
+an absolute target for fresh runs and resume-exact only; it cannot be combined
+with `--quench`. The immutable child spec's `time.final_time` does not define
+the quench horizon.
 
 ### Parent bank: multiple plateau times
 
@@ -617,8 +621,10 @@ versioned `quench.duration` block. Quench children use
 `validation_scope=quench_continuation`: finite/divergence health remains a hard
 gate, while growth, decay, and saturation are recorded as scientific outcomes
 rather than launch-success requirements. Burn-in must satisfy
-`0 <= --burn-in-steps < additional steps`; golden comparison and promotion are
-not quench workflows and are rejected. A failed or interrupted solve leaves the
+`0 <= --burn-in-steps < additional steps`. For adaptive quenches, preflight
+uses the conservative minimum step count implied by `dt_max`, then validates
+the attained step count again at completion. Golden comparison and promotion
+are not quench workflows and are rejected. A failed or interrupted solve leaves the
 certified `attained` fields unset and records only a conservative
 `last_observed` cadence lower bound when one is available.
 
