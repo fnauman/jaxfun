@@ -12,6 +12,7 @@ import pytest
 
 from production.quench import (
     QuenchError,
+    adaptive_quench_step_bound,
     burn_in_horizon,
     checkpoint_bank_entry,
     finalize_adaptive_quench_duration,
@@ -155,6 +156,21 @@ def test_quench_runner_preflight_rejects_unwired_saturation_runner():
         ).read_text()
     )
     with pytest.raises(QuenchError, match="quench runner is not implemented"):
+        validate_quench_runner_preflight(spec, quench=True)
+
+
+def test_adaptive_quench_step_bound_is_stable_at_integer_ratio():
+    assert adaptive_quench_step_bound(0.3, 0.1) == 3
+    assert adaptive_quench_step_bound(0.30000000000000004, 0.1) == 3
+    assert adaptive_quench_step_bound(0.31, 0.1) == 4
+
+
+def test_primitive_adaptive_quench_is_rejected_upfront():
+    spec = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    spec["time"]["adaptive_cfl"] = {}
+    with pytest.raises(QuenchError, match="only for vector-potential"):
         validate_quench_runner_preflight(spec, quench=True)
 
 

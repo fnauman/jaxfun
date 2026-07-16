@@ -498,7 +498,8 @@ To run with adaptive-CFL stepping, add an
 "dt_max": 0.01}`; the run then records `n_dt_changes`, `dt_final`,
 `dt_min_used`/`dt_max_used`, `cfl_total_max_observed`, and per-row `dt` and
 `cfl_total`. Adaptive runs support resume-exact, checkpoint banks, snapshots,
-and PCF profiles; controller `dt` and CFL-check phase are checkpointed.
+and PCF profiles; controller `dt`, CFL-check phase, and any in-progress
+exact-endpoint redistribution schedule are checkpointed.
 
 ## Taylor-Couette saturation smoke
 
@@ -620,8 +621,10 @@ versioned `quench.duration` block. Quench children use
 `validation_scope=quench_continuation`: finite/divergence health remains a hard
 gate, while growth, decay, and saturation are recorded as scientific outcomes
 rather than launch-success requirements. Burn-in must satisfy
-`0 <= --burn-in-steps < additional steps`; golden comparison and promotion are
-not quench workflows and are rejected. A failed or interrupted solve leaves the
+`0 <= --burn-in-steps < additional steps`. For adaptive quenches, preflight
+uses the conservative minimum step count implied by `dt_max`, then validates
+the attained step count again at completion. Golden comparison and promotion
+are not quench workflows and are rejected. A failed or interrupted solve leaves the
 certified `attained` fields unset and records only a conservative
 `last_observed` cadence lower bound when one is available.
 

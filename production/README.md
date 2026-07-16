@@ -207,8 +207,9 @@ and an impossible sub-floor horizon is rejected before solving. `dt_final`
 is restored to the controller value after an endpoint adjustment, while
 `dt_last_used` records the actual final step.
 The solenoidal gates run every block. Adaptive checkpoints persist the field
-state, exact physical time, controller `dt`, and remaining steps to the next
-CFL decision. Resume-exact, adaptive quench continuations, checkpoint banks,
+state, exact physical time, controller `dt`, remaining steps to the next
+CFL decision, and any in-progress exact-endpoint redistribution schedule.
+Resume-exact, adaptive quench continuations, checkpoint banks,
 snapshots, and PCF `multiplane_v2` profiles use the same step-cadence contract
 as fixed stepping. Output-only block splits do not alter the controller's
 `check_every` decision schedule. Fixed-`dt` remains the default and the

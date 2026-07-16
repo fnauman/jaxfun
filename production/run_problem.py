@@ -47,6 +47,7 @@ try:
     from .provenance import ReleaseCleanlinessError
     from .quench import (
         QuenchError,
+        adaptive_quench_step_bound,
         burn_in_horizon,
         finalize_adaptive_quench_duration,
         finalize_fixed_quench_duration,
@@ -93,6 +94,7 @@ except ImportError:  # pragma: no cover - direct script mode
     from production.provenance import ReleaseCleanlinessError  # type: ignore
     from production.quench import (  # type: ignore
         QuenchError,
+        adaptive_quench_step_bound,
         burn_in_horizon,
         finalize_adaptive_quench_duration,
         finalize_fixed_quench_duration,
@@ -190,8 +192,8 @@ def run_problem(
                 elapsed = float(quench_duration["absolute_target"]["time"]) - float(
                     quench_duration["parent_checkpoint"]["time"]
                 )
-                quench_additional_steps = max(
-                    1, int(math.ceil(elapsed / float(config.spec["time"]["dt"])))
+                quench_additional_steps = adaptive_quench_step_bound(
+                    elapsed, float(config.spec["time"]["dt"])
                 )
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1276,13 +1278,21 @@ def _resolve_resume_or_quench(
         )
         diff = validate_quench(parent_spec, config.spec)  # raises on illegal change
         tstep0 = int(getattr(record, "tstep", 0))
-        if adaptive_cfl_from_spec(config.spec) is not None:
+        adaptive = adaptive_cfl_from_spec(config.spec)
+        if adaptive is not None:
             duration = resolve_adaptive_quench_duration(
                 additional_time=additional_time,
                 additional_steps=additional_steps,
                 child_initial_dt=float(config.spec["time"]["dt"]),
                 parent_time=float(record.t),
                 parent_step=tstep0,
+            )
+            validate_burn_in_request(
+                quench=True,
+                burn_in_steps=burn_in_steps,
+                resolved_additional_steps=adaptive_quench_step_bound(
+                    duration.additional_time, adaptive.dt_max
+                ),
             )
         else:
             duration = resolve_fixed_quench_duration(

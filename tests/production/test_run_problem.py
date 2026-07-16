@@ -20,6 +20,7 @@ from production.run_problem import (
     _assert_validation_floor_checks,
     _classification_metadata,
     _effective_diagnostics_every,
+    _resolve_resume_or_quench,
     _saturation_check_metadata,
     _validation_floor_metadata,
     _validation_scope_metadata,
@@ -138,6 +139,72 @@ def test_adaptive_quench_reaches_parent_bank_validation(tmp_path):
             additional_steps=2,
         )
     assert not out.exists()
+
+
+def test_primitive_adaptive_quench_is_rejected_before_parent_or_output(tmp_path):
+    data = json.loads(
+        (ROOT / "production" / "runs" / "pcf_mhd_divfree.json").read_text()
+    )
+    data["time"]["adaptive_cfl"] = {}
+    child = tmp_path / "primitive-adaptive-child.json"
+    child.write_text(json.dumps(data), encoding="utf-8")
+    out = tmp_path / "must-not-exist"
+
+    with pytest.raises(QuenchError, match="only for vector-potential"):
+        run_problem(
+            config_path=child,
+            out=out,
+            quench_from=tmp_path / "missing-parent",
+            additional_steps=2,
+        )
+    assert not out.exists()
+
+
+def test_adaptive_burn_in_bound_is_rejected_during_quench_resolution(
+    tmp_path, monkeypatch
+):
+    import production.run_problem as runner
+
+    data = json.loads(
+        (ROOT / "production" / "runs" / "exp_pcf_mri_vector_potential.json").read_text()
+    )
+    data["time"]["adaptive_cfl"] = {
+        "dt_min": 1.0e-6,
+        "dt_max": data["time"]["dt"],
+    }
+    child = tmp_path / "adaptive-child.json"
+    child.write_text(json.dumps(data), encoding="utf-8")
+    config = load_config(child)
+    parent_spec = dict(config.spec)
+    record = SimpleNamespace(t=0.0, tstep=10)
+    entry = {
+        "tstep": 10,
+        "plateau_window_stats": {},
+        "file_sha256": "unused",
+    }
+    monkeypatch.setattr(
+        runner, "select_qualified_parent_checkpoint", lambda *_args, **_kwargs: entry
+    )
+    monkeypatch.setattr(
+        runner, "load_resume_checkpoint", lambda *_args, **_kwargs: record
+    )
+    monkeypatch.setattr(runner, "load_spec", lambda *_args, **_kwargs: parent_spec)
+    monkeypatch.setattr(
+        runner, "validate_bank_checkpoint_record", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        runner, "validate_quench", lambda *_args, **_kwargs: {"changed": {}}
+    )
+
+    dt = float(config.spec["time"]["dt"])
+    with pytest.raises(QuenchError, match="strictly less"):
+        _resolve_resume_or_quench(
+            config,
+            resume=None,
+            quench_from=tmp_path / "parent",
+            burn_in_steps=2,
+            additional_time=2 * dt,
+        )
 
 
 def test_direct_quench_rejects_unwired_runner_before_output_or_parent_load(tmp_path):

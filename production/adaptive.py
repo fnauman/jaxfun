@@ -244,6 +244,8 @@ def run_adaptive_cfl(
     # Round-off guard: treat anything below this fraction of dt_min as "done".
     tiny = 1.0e-12 * max(elapsed_target, float(solver.dt))
 
+    endpoint_steps_remaining = 0
+    endpoint_restore_dt: float | None = None
     if controller_state is None:
         steps_until_check = int(config.check_every)
         restored_controller = False
@@ -263,7 +265,29 @@ def run_adaptive_cfl(
                 "restored adaptive steps_until_check must lie in "
                 f"[0, {int(config.check_every)}]"
             )
-        solver.set_dt(restored_dt)
+        endpoint_steps_remaining = int(
+            controller_state.get("endpoint_steps_remaining", 0)
+        )
+        if endpoint_steps_remaining < 0:
+            raise ValueError(
+                "restored adaptive endpoint_steps_remaining must be non-negative"
+            )
+        endpoint_dt_raw = controller_state.get("endpoint_dt")
+        if endpoint_steps_remaining:
+            if endpoint_dt_raw is None:
+                raise ValueError(
+                    "restored adaptive endpoint schedule is missing endpoint_dt"
+                )
+            endpoint_dt = float(endpoint_dt_raw)
+            if not (config.dt_min <= endpoint_dt <= config.dt_max):
+                raise ValueError(
+                    f"restored adaptive endpoint_dt={endpoint_dt:g} lies outside "
+                    f"[{config.dt_min:g}, {config.dt_max:g}]"
+                )
+            endpoint_restore_dt = restored_dt
+            solver.set_dt(endpoint_dt)
+        else:
+            solver.set_dt(restored_dt)
         restored_controller = True
 
     # Fresh-run pre-flight adapts before any stepping. A restored controller
@@ -271,14 +295,14 @@ def run_adaptive_cfl(
     health, cfl_total = measure(state)
     require_finite_cfl(cfl_total, done=done, t=t)
     cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
-    pending_controller_check = restored_controller and steps_until_check == 0
+    pending_controller_check = (
+        restored_controller and endpoint_steps_remaining == 0 and steps_until_check == 0
+    )
     if not restored_controller or pending_controller_check:
         state = maybe_adapt(state, cfl_total, done, t)
     if pending_controller_check:
         steps_until_check = int(config.check_every)
 
-    endpoint_steps_remaining = 0
-    endpoint_restore_dt: float | None = None
     while time_left > tiny:
         working_dt = float(solver.dt)
         if endpoint_steps_remaining <= 0:
@@ -403,9 +427,17 @@ def run_adaptive_cfl(
         )
         if endpoint_completed:
             # Endpoint dt is an exact-horizon detail, not controller state.
+            # Re-measure at the restored committed dt and make the pending
+            # controller decision now, so checkpoints and extended runs never
+            # reuse CFL measured at the temporary endpoint timestep.
             solver.set_dt(endpoint_restore_dt)
             state = _reset_multistep_history(state)
             endpoint_restore_dt = None
+            health, cfl_total = measure(state)
+            require_finite_cfl(cfl_total, done=done, t=t)
+            cfl_max = max(cfl_max, cfl_total) if math.isfinite(cfl_total) else cfl_max
+            state = maybe_adapt(state, cfl_total, done, t)
+            steps_until_check = int(config.check_every)
 
         controller_check = steps_until_check == 0
         if time_left > tiny and controller_check and endpoint_steps_remaining == 0:
@@ -420,10 +452,18 @@ def run_adaptive_cfl(
             callback_health.update(
                 {
                     "_adaptive_step_dt": float(step_dt),
-                    "_adaptive_controller_dt": float(solver.dt),
+                    "_adaptive_controller_dt": float(
+                        endpoint_restore_dt
+                        if endpoint_restore_dt is not None
+                        else solver.dt
+                    ),
                     "_adaptive_steps_until_check": float(steps_until_check),
-                    "_adaptive_controller_check": float(controller_check),
-                    "_adaptive_horizon_reached": float(time_left <= tiny),
+                    "_adaptive_endpoint_dt": float(
+                        solver.dt if endpoint_steps_remaining > 0 else 0.0
+                    ),
+                    "_adaptive_endpoint_steps_remaining": float(
+                        endpoint_steps_remaining
+                    ),
                 }
             )
             on_block(t, done, state, callback_health)
@@ -450,6 +490,8 @@ def run_adaptive_cfl(
         "controller_state": {
             "dt": float(solver.dt),
             "steps_until_check": int(steps_until_check),
+            "endpoint_dt": None,
+            "endpoint_steps_remaining": 0,
         },
     }
     return state, record

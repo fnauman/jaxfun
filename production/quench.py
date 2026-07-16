@@ -247,6 +247,23 @@ def validate_burn_in_request(
         )
 
 
+def adaptive_quench_step_bound(elapsed: float, dt: float) -> int:
+    """Conservative positive step count with roundoff-stable integer ratios."""
+
+    elapsed_value = float(elapsed)
+    dt_value = float(dt)
+    if not math.isfinite(elapsed_value) or elapsed_value <= 0.0:
+        raise QuenchError("adaptive quench elapsed time must be finite and positive")
+    if not math.isfinite(dt_value) or dt_value <= 0.0:
+        raise QuenchError("adaptive quench timestep bound must be finite and positive")
+    ratio = elapsed_value / dt_value
+    nearest = int(round(ratio))
+    tolerance = 1.0e-12 * max(1.0, abs(ratio))
+    if math.isclose(ratio, nearest, rel_tol=0.0, abs_tol=tolerance):
+        return max(1, nearest)
+    return max(1, int(math.ceil(ratio)))
+
+
 def validate_quench_runner_preflight(spec: dict[str, Any], *, quench: bool) -> None:
     """Allow quenching only through runners with an explicit continuation path."""
 
@@ -276,6 +293,12 @@ def validate_quench_runner_preflight(spec: dict[str, Any], *, quench: bool) -> N
         and representation == "vector_potential"
         and oracle == "tc_mri_saturation_ladder"
     )
+    adaptive_enabled = (spec.get("time") or {}).get("adaptive_cfl", False) is not False
+    if adaptive_enabled and pcf_primitive:
+        raise QuenchError(
+            "adaptive_cfl quenching is implemented only for vector-potential "
+            "PCF/TC MHD/MRI runners; use fixed dt for a primitive quench"
+        )
     if pcf_primitive or pcf_vector_potential or tc_vector_potential:
         return
     raise QuenchError(
