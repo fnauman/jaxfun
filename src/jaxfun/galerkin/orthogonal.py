@@ -215,6 +215,16 @@ class OrthogonalSpace(BaseSpace):
         """
         pass
 
+    @jax.jit(static_argnums=0)
+    def project_orthogonal_coeffs(self, c: Array) -> Array:
+        """Project underlying orthogonal coefficients into this space.
+
+        An orthogonal space is already its own Galerkin trial space, so the
+        projection is the identity. Constrained spaces override this method.
+        """
+
+        return c
+
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Return series evaluation at quadrature points (possibly with padding).

@@ -52,7 +52,12 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo, cnab2_rhs
+from jaxfun.integrators.cnab2 import (
+    ScanRolloutCache,
+    ScanRolloutCacheInfo,
+    batch_components,
+    cnab2_rhs,
+)
 from jaxfun.io import Cadence, run_with_cadence
 
 type Velocity = tuple[Array, Array, Array]
@@ -104,14 +109,14 @@ class AxisymmetricTCState:
     u: Velocity
     p: Array
     nonlinear_old: Velocity
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
 
     def tree_flatten(self):
         return (
             self.u,
             self.p,
             self.nonlinear_old,
-            jnp.asarray(self.have_old, dtype=jnp.float32),
+            self.have_old,
         ), None
 
     @classmethod
@@ -131,14 +136,14 @@ class AxisymmetricMRIState:
     x: MHDFields
     p: Array
     nonlinear_old: MHDFields
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
 
     def tree_flatten(self):
         return (
             self.x,
             self.p,
             self.nonlinear_old,
-            jnp.asarray(self.have_old, dtype=jnp.float32),
+            self.have_old,
         ), None
 
     @classmethod
@@ -216,7 +221,16 @@ class AxisymmetricTCDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._configure_rollout_cache()
+
+    def _configure_rollout_cache(self) -> None:
+        self._rollout_cache = ScanRolloutCache(
+            self._step_with_operators,
+            dynamic_args=lambda: (self.Lexp_modes, *self.Limp_lu),
+        )
+
+    def _step_with_operators(self, state, Lexp_modes: Array, lu: Array, piv: Array):
+        return self.step(state, Lexp_modes, (lu, piv))
 
     @staticmethod
     def _family_class(family: str):
@@ -375,11 +389,13 @@ class AxisymmetricTCDNSJax:
         modes = modes.at[0, pressure_row, :].set(0)
         return modes.at[0, pressure_row, pressure_row].set(1)
 
-    def _solve_limp(self, rhs: Array) -> Array:
+    def _solve_limp(
+        self, rhs: Array, Limp_lu: tuple[Array, Array] | None = None
+    ) -> Array:
         rhs_modes = rhs[self.VQ_mode_indices]
         pressure_row = sum(int(space.num_dofs[-1]) for space in self.VQ[:3])
         rhs_modes = rhs_modes.at[0, pressure_row].set(0)
-        lu, piv = self.Limp_lu
+        lu, piv = self.Limp_lu if Limp_lu is None else Limp_lu
         sol_modes = jax.vmap(
             lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve((lu_i, piv_i), b_i)
         )(lu, piv, rhs_modes)
@@ -389,13 +405,13 @@ class AxisymmetricTCDNSJax:
         u = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VV)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(ui) for ui in u)
-        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: Velocity) -> AxisymmetricTCState:
         u = tuple(self.TD.forward(value) for value in values)
         p = jnp.zeros(self.TP.num_dofs, dtype=u[0].dtype)
         nold = tuple(jnp.zeros_like(ui) for ui in u)
-        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=0.0)
 
     def initial_state(
         self, amp: float = 1.0e-3, kz_mode: int = 1
@@ -467,12 +483,13 @@ class AxisymmetricTCDNSJax:
 
         Reference: ``couette/taylor_couette_dns.py:251-272``.
         """
-        ur, urr, urz = self._phys(state.u[0])
-        ut, utr, _utz = self._phys(state.u[1])
-        uz, uzr, uzz = self._phys(state.u[2])
+        values, radial, axial = batch_components(self._phys, state.u)
+        ur, ut, uz = values
+        urr, utr, uzr = radial
+        urz, utz, uzz = axial
         invr = self.inv_r_p
         n_r = ur * urr + uz * urz - ut * ut * invr
-        n_t = ur * utr + uz * _utz + ur * ut * invr
+        n_t = ur * utr + uz * utz + ur * ut * invr
         n_z = ur * uzr + uz * uzz
         return (
             self.TD.mask_nyquist(
@@ -486,26 +503,33 @@ class AxisymmetricTCDNSJax:
             ),
         )
 
-    def _apply_lexp(self, u: Velocity) -> Velocity:
+    def _apply_lexp(self, u: Velocity, Lexp_modes: Array | None = None) -> Velocity:
         flat = self.VV.flatten(u)
         modes = flat[self.VV_mode_indices]
-        out_modes = jnp.einsum("kij,kj->ki", self.Lexp_modes, modes)
+        if Lexp_modes is None:
+            Lexp_modes = self.Lexp_modes
+        out_modes = jnp.einsum("kij,kj->ki", Lexp_modes, modes)
         out = self._scatter_modes(out_modes, self.VV_mode_indices, self.VV.dim)
         return self.VV.unflatten(out)  # ty: ignore[return-value]
 
-    def step(self, state: AxisymmetricTCState) -> AxisymmetricTCState:
+    def step(
+        self,
+        state: AxisymmetricTCState,
+        Lexp_modes: Array | None = None,
+        Limp_lu: tuple[Array, Array] | None = None,
+    ) -> AxisymmetricTCState:
         """Advance one CNAB2 step with an IMEX-Euler bootstrap."""
         n_hat = self.nonlinear(state)
-        rhs_v = self._apply_lexp(state.u)
+        rhs_v = self._apply_lexp(state.u, Lexp_modes)
         rhs_u = cnab2_rhs(rhs_v, n_hat, state.nonlinear_old, state.have_old)
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_u, rhs_p))
-        sol = self.VQ.unflatten(self._solve_limp(rhs))
+        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         return AxisymmetricTCState(
             u=(sol[0], sol[1], sol[2]),
             p=sol[3],
             nonlinear_old=n_hat,
-            have_old=True,
+            have_old=jnp.ones_like(state.have_old),
         )
 
     def set_dt(self, dt: float) -> None:
@@ -522,7 +546,6 @@ class AxisymmetricTCDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache.rebind(self.step)
 
     def solve(self, state: AxisymmetricTCState, steps: int) -> AxisymmetricTCState:
         return self._rollout_cache(state, int(steps))
@@ -680,7 +703,7 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._configure_rollout_cache()
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
         return _cylindrical_laplacian_3d(u, self.r)
@@ -771,9 +794,11 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         return value, radial, theta, axial
 
     def nonlinear(self, state: AxisymmetricTCState) -> Velocity:
-        ur, urr, urt, urz = self._phys(state.u[0])
-        ut, utr, utt, utz = self._phys(state.u[1])
-        uz, uzr, uzt, uzz = self._phys(state.u[2])
+        values, radial, theta, axial = batch_components(self._phys, state.u)
+        ur, ut, uz = values
+        urr, utr, uzr = radial
+        urt, utt, uzt = theta
+        urz, utz, uzz = axial
         invr = self.inv_r_p
         n_r = ur * urr + (ut * invr) * urt + uz * urz - ut * ut * invr
         n_t = ur * utr + (ut * invr) * utt + uz * utz + ur * ut * invr
@@ -977,7 +1002,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._configure_rollout_cache()
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
         return _cylindrical_laplacian_axisymmetric(u, self.r)
@@ -1099,7 +1124,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         x = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VE)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: MHDFields) -> AxisymmetricMRIState:
         spaces = (self.TD, self.TD, self.TD, self.TD, self.Tbt, self.Tbz)
@@ -1108,7 +1133,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=x[0].dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def _phys_mhd(self, coeff: Array, space) -> tuple[Array, Array, Array]:
         N = self.padded_counts
@@ -1126,12 +1151,22 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         return self._dealias_to_standard(values)
 
     def nonlinear(self, state: AxisymmetricMRIState) -> MHDFields:
-        ur, urr, urz = self._phys_mhd(state.x[0], self.TD)
-        ut, utr, utz = self._phys_mhd(state.x[1], self.TD)
-        uz, uzr, uzz = self._phys_mhd(state.x[2], self.TD)
-        br, brr, brz = self._phys_mhd(state.x[3], self.TD)
-        bt, btr, btz = self._phys_mhd(state.x[4], self.Tbt)
-        bz, bzr, bzz = self._phys_mhd(state.x[5], self.Tbz)
+        td_values, td_radial, td_axial = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:4]
+        )
+        ur, ut, uz, br = td_values
+        urr, utr, uzr, brr = td_radial
+        urz, utz, uzz, brz = td_axial
+        if self.Tbt is self.Tbz:
+            b_values, b_radial, b_axial = batch_components(
+                lambda coeff: self._phys_mhd(coeff, self.Tbt), state.x[4:]
+            )
+            bt, bz = b_values
+            btr, bzr = b_radial
+            btz, bzz = b_axial
+        else:
+            bt, btr, btz = self._phys_mhd(state.x[4], self.Tbt)
+            bz, bzr, bzz = self._phys_mhd(state.x[5], self.Tbz)
         invr = self.inv_r_p
         au_r = ur * urr + uz * urz - ut * ut * invr
         au_t = ur * utr + uz * utz + ur * ut * invr
@@ -1163,22 +1198,33 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
             self.Tbz.mask_nyquist(self.Tbz.scalar_product(nb_z)),
         )
 
-    def _apply_lexp_mhd(self, x: MHDFields) -> MHDFields:
+    def _apply_lexp_mhd(
+        self, x: MHDFields, Lexp_modes: Array | None = None
+    ) -> MHDFields:
         flat = self.VE.flatten(x)
         modes = flat[self.VE_mode_indices]
-        out_modes = jnp.einsum("kij,kj->ki", self.Lexp_modes, modes)
+        if Lexp_modes is None:
+            Lexp_modes = self.Lexp_modes
+        out_modes = jnp.einsum("kij,kj->ki", Lexp_modes, modes)
         out = self._scatter_modes(out_modes, self.VE_mode_indices, self.VE.dim)
         return self.VE.unflatten(out)  # ty: ignore[return-value]
 
-    def step(self, state: AxisymmetricMRIState) -> AxisymmetricMRIState:
+    def step(
+        self,
+        state: AxisymmetricMRIState,
+        Lexp_modes: Array | None = None,
+        Limp_lu: tuple[Array, Array] | None = None,
+    ) -> AxisymmetricMRIState:
         n_hat = self.nonlinear(state)
-        rhs_e = self._apply_lexp_mhd(state.x)
+        rhs_e = self._apply_lexp_mhd(state.x, Lexp_modes)
         rhs_x = cnab2_rhs(rhs_e, n_hat, state.nonlinear_old, state.have_old)
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
-        sol = self.VQ.unflatten(self._solve_limp(rhs))
+        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
-        return AxisymmetricMRIState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
+        return AxisymmetricMRIState(
+            x=x, p=sol[3], nonlinear_old=n_hat, have_old=jnp.ones_like(state.have_old)
+        )
 
     def solve(self, state: AxisymmetricMRIState, steps: int) -> AxisymmetricMRIState:
         return self._rollout_cache(state, int(steps))
@@ -1377,7 +1423,7 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._configure_rollout_cache()
 
     def _lap(self, u: sp.Expr) -> sp.Expr:
         return _cylindrical_laplacian_3d(u, self.r)
@@ -1519,12 +1565,24 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
         return value, radial, theta, axial
 
     def nonlinear(self, state: AxisymmetricMRIState) -> MHDFields:
-        ur, urr, urt, urz = self._phys_mhd(state.x[0], self.TD)
-        ut, utr, utt, utz = self._phys_mhd(state.x[1], self.TD)
-        uz, uzr, uzt, uzz = self._phys_mhd(state.x[2], self.TD)
-        br, brr, brt, brz = self._phys_mhd(state.x[3], self.TD)
-        bt, btr, btt, btz = self._phys_mhd(state.x[4], self.Tbt)
-        bz, bzr, bzt, bzz = self._phys_mhd(state.x[5], self.Tbz)
+        td_values, td_radial, td_theta, td_axial = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:4]
+        )
+        ur, ut, uz, br = td_values
+        urr, utr, uzr, brr = td_radial
+        urt, utt, uzt, brt = td_theta
+        urz, utz, uzz, brz = td_axial
+        if self.Tbt is self.Tbz:
+            b_values, b_radial, b_theta, b_axial = batch_components(
+                lambda coeff: self._phys_mhd(coeff, self.Tbt), state.x[4:]
+            )
+            bt, bz = b_values
+            btr, bzr = b_radial
+            btt, bzt = b_theta
+            btz, bzz = b_axial
+        else:
+            bt, btr, btt, btz = self._phys_mhd(state.x[4], self.Tbt)
+            bz, bzr, bzt, bzz = self._phys_mhd(state.x[5], self.Tbz)
         invr = self.inv_r_p
         au_r = ur * urr + (ut * invr) * urt + uz * urz - ut * ut * invr
         au_t = ur * utr + (ut * invr) * utt + uz * utz + ur * ut * invr

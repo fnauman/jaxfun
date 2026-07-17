@@ -214,10 +214,12 @@ unsafe starting `dt` is shrunk before any stepping instead of tripping the
 production health gate. A block whose evolved state exceeds the hard
 `CFL=1` ceiling aborts immediately: shrinking the next block cannot repair
 statistics already produced in an unstable block. Safe values above the
-target still shrink before the next solve. On a change the implicit
-factorizations are rebuilt at the new `dt` (`solver.set_dt`), with the CNAB2
-family restarting its IMEX-Euler bootstrap so no stale multistep history is
-extrapolated. Elapsed time is accumulated exactly, every `dt` change is
+target still shrink before the next solve. On a change, `solver.set_dt` rebuilds
+the implicit factor values and passes them as dynamic rollout arguments, so the
+shape-specialized executable is reused. Variable-step CNAB2 retains the previous
+nonlinear term and previous `dt`, applies the correct step-ratio extrapolation,
+and checkpoints that history for exact resume. Elapsed time is accumulated
+exactly, and every `dt` change is
 recorded (scalars `n_dt_changes`, controller `dt_final`, actual
 `dt_last_used`, `dt_min_used`, `dt_max_used`,
 `adaptive_steps_taken`, `adaptive_final_step_clipped`,
@@ -301,13 +303,12 @@ Current implemented entry points:
   `solver_steps`, `ms_per_step`, and `steps_per_second` for DNS paths.
 - Every nonlinear PCF and Taylor-Couette rollout (hydrodynamic, primitive MHD,
   and vector-potential MHD/MRI) keeps a persistent, eight-entry LRU of compiled
-  static-length `lax.scan` blocks. Repeated cadence blocks at fixed `dt` reuse
-  those callables and one persistent checkpointed step instead of constructing
-  a new checkpoint/scan closure. This retains reverse-mode rematerialization
-  without per-block executable growth. `set_dt()` clears all live variants
-  before rebinding rebuilt implicit factors, so adaptive runs retain only the
-  current timestep generation. Cache counters are available from
-  `rollout_cache_info()`.
+  static-length `lax.scan` blocks. Repeated cadence blocks reuse those callables
+  and one persistent transformed step instead of constructing a new closure.
+  Timestep-dependent matrices and LU factors are dynamic pytree arguments, so
+  `set_dt()` preserves the live rollout variant; a sequence of adaptive `dt`
+  values therefore produces cache hits rather than one executable per value.
+  Cache counters are available from `rollout_cache_info()`.
 - `production/objectives.py` exposes differentiable final-energy, integrated-energy, stress/alpha, growth-proxy, and PCF minimal-seed objectives with finite-difference tests.
 - `production/compare_devices.py` runs the same config in separate device-specific subprocesses, compares final numeric diagnostics for CPU/GPU agreement checks, and records left/right wall times plus speedup; production run specs can pass `--resolution-tier smoke|start|production` plus `--steps` for bounded agreement evidence. Same-backend comparisons fail by default; pass `--allow-same-backend` only for intentional CPU/CPU smoke checks.
 - `production/report.py` builds machine-readable summaries from run metadata, including `validation_scope`, `checked_observables`, fallback rung fields, and failed comparison details. `production/validate_gpu.sh` writes this report before exiting nonzero when an executed run fails.
@@ -316,6 +317,60 @@ Current implemented entry points:
   locked dependency graph, archived passing test artifacts, and whole-horizon
   constraint/health/budget/classification evidence. It writes a content-hashed,
   non-overwritable release bundle; see `production/commands.md`.
+
+## Wall-bounded GPU performance qualification
+
+Wall-bounded production rollouts enable simplified JAX constants by default. This
+prevents timestep-dependent factor arrays from being embedded and constant-folded
+into the executable. Set `JAXFUN_USE_SIMPLIFIED_JAXPR_CONSTANTS=false` only for a
+controlled compiler comparison. The compact JAX wavenumber solver is the default;
+`JAXFUN_WAVENUMBER_SOLVER=pallas-triton` selects the experimental GPU kernel and
+must pass parity plus H100 qualification before campaign use.
+
+The benchmark harness measures `solver.solve()` with the same compiled `lax.scan`
+blocks used in production and records generated-code, temporary, argument, output,
+peak-device-memory, and rollout-cache statistics. Run both H100 variants with:
+
+```bash
+JAX_COMPILATION_CACHE_DIR=benchmark-cache/compact \
+.venv/bin/python -m production.benchmark \
+  --config production/runs/exp_pcf_mri_vector_potential.json \
+  --tiers start --warmup-steps 2 --timed-steps 10 --rollout-steps 25 \
+  --dt-transition-probes 3 --out benchmark-h100-compact.json
+
+JAXFUN_WAVENUMBER_SOLVER=pallas-triton \
+JAX_COMPILATION_CACHE_DIR=benchmark-cache/pallas \
+.venv/bin/python -m production.benchmark \
+  --config production/runs/exp_pcf_mri_vector_potential.json \
+  --tiers start --warmup-steps 2 --timed-steps 10 --rollout-steps 25 \
+  --dt-transition-probes 3 --out benchmark-h100-pallas.json
+```
+
+A bounded local RTX 5090 Laptop GPU measurement at `65x128x64`, float64, and a
+25-step block produced the following evidence. These are local qualification
+numbers, not H100 claims:
+
+| PCF vector-potential MHD path | Compile | Warm step | Generated code | Peak device memory | Speedup vs 0.282 s baseline |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| compact JAX + CNAB2 | 23.74 s | 0.1298 s | 15.1 KB | 1.82 GB | 2.17x |
+| Pallas/Triton + CNAB2 | 22.50 s | 0.0996 s | 61.9 KB | 2.38 GB | 2.83x |
+
+The optimized magnetic path forms `B=curl(A)` and `J=curl(B)` in coefficient
+space, avoiding the former unpadded physical round trips while retaining the
+discrete projection, boundary traces, and diagnostic contract. A direct padded
+physical curl was rejected because it changed the represented KMM right-hand side
+and wall-current health quantities. A rotational velocity form was also rejected:
+the current discrete projection does not cancel its gradient difference, so it was
+not algebraically equivalent at float64 tolerance.
+
+`time.integrator=CNAB2` is available for PCF KMM hydro and PCF vector-potential
+MHD/MRI. It performs one nonlinear evaluation per step after bootstrap, supports
+variable adaptive timesteps, and serializes its nonlinear history for exact
+checkpoint/resume. Production PCF seeds should remain solenoidal; projecting a
+legacy nonsolenoidal seed on its first KMM reconstruction pollutes temporal-order
+measurements. The benchmark factory covers production PCF hydro/primitive/VP paths
+and axisymmetric or 3-D TCF hydro/primitive/VP paths so the same artifact schema can
+be collected for every supported wall-bounded family.
 
 ## Validation scopes
 

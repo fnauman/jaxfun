@@ -289,6 +289,14 @@ class Composite(OrthogonalSpace):
         """Map underlying orthogonal coefficients -> composite coefficients."""
         return self.P.solve(self.S @ a)
 
+    @jax.jit(static_argnums=0)
+    def project_orthogonal_coeffs(self, a: Array) -> Array:
+        """Galerkin-project orthogonal coefficients into the constrained basis."""
+
+        weighted = self.orthogonal.mass_matrix().matvec(a)
+        rhs = self.apply_stencil_right(weighted)
+        return self._mass_matrix.solve(rhs)
+
     @overload
     def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
     @overload

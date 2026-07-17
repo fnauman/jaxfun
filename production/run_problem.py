@@ -62,7 +62,9 @@ try:
     )
     from .wandb_sink import WandbUnavailableError
 except ImportError:  # pragma: no cover - direct script mode
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    _repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(_repo_root / "src"))
+    sys.path.insert(0, str(_repo_root))
     from production.adapters import ProductionConfig, load_config  # type: ignore
     from production.adaptive import adaptive_cfl_from_spec  # type: ignore
     from production.compare_goldens import (
@@ -1374,8 +1376,8 @@ def _integrator_provenance(spec: dict[str, Any]) -> dict[str, Any]:
     representation = spec.get("representation")
     actual = requested
     if representation == "vector_potential":
-        # curl family dispatches to PlaneCouetteMRIShearpyJax, which runs IMEXRK222.
-        actual = "IMEXRK222"
+        # The curl family honors the requested IMEXRK222 or CNAB2 method.
+        actual = requested
     elif oracle in _PRIMITIVE_SATURATION_ORACLES and spec.get("physics") in {
         "mhd",
         "mri",
@@ -1387,7 +1389,11 @@ def _integrator_provenance(spec: dict[str, Any]) -> dict[str, Any]:
         "formal_order": _INTEGRATOR_FORMAL_ORDER.get(actual),
         "dt": spec.get("time", {}).get("dt"),
         "order_regression_test": (
-            "tests/couette/test_pcf_mri_cnab2_order_jax.py"
+            (
+                "tests/couette/test_pcf_mri_vp_cnab2_order_jax.py"
+                if representation == "vector_potential"
+                else "tests/couette/test_pcf_mri_cnab2_order_jax.py"
+            )
             if actual == "CNAB2"
             else None
         ),

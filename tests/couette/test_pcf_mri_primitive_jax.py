@@ -18,12 +18,22 @@ def _assert_rollout_lifecycle(solver, state) -> None:
     assert info.hits == 2
 
     solver.set_dt(0.5 * solver.dt)
-    rebound = solver.rollout_cache_info()
-    assert rebound.generation == 1
-    assert rebound.live_entries == 0
+    retained = solver.rollout_cache_info()
+    assert retained.generation == 0
+    assert retained.live_entries == 1
+    expected = solver.step(state)
     state = solver.solve(state, 1)
-    jax.block_until_ready(state)
-    assert solver.rollout_cache_info().live_entries == 1
+    jax.block_until_ready((expected, state))
+    assert all(
+        bool(jnp.allclose(actual, reference, rtol=1.0e-12, atol=1.0e-12))
+        for actual, reference in zip(
+            jax.tree.leaves(state), jax.tree.leaves(expected), strict=True
+        )
+    )
+    reused = solver.rollout_cache_info()
+    assert reused.live_entries == 1
+    assert reused.misses == 1
+    assert reused.hits == 3
 
 
 def test_pcf_primitive_dns_zero_state_stays_zero() -> None:

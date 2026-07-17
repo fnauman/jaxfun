@@ -11,9 +11,9 @@ Contracts kept honest:
 
 * Elapsed time is accumulated exactly (``t += n * dt`` per block with the dt
   actually used), never inferred as ``tstep * dt``.
-* Multistep (CNAB2) solvers restart with their IMEX-Euler bootstrap after a
-  dt change: the Adams-Bashforth history belongs to the old step size, so the
-  driver clears ``have_old``.
+* Variable-step CNAB2 solvers retain their nonlinear history and previous
+  timestep across dt changes. Fixed-step multistep solvers restart with their
+  IMEX-Euler bootstrap because their history belongs to the old step size.
 * Shrinking is immediate when the CFL exceeds the target; growth is damped
   (one ``growth_cap`` factor per check) and only engages when the measured
   CFL sits below ``grow_when_below * target``, giving hysteresis.
@@ -84,9 +84,13 @@ def adaptive_cfl_from_spec(spec: dict[str, Any]) -> AdaptiveCFLConfig | None:
 
 
 def _reset_multistep_history(state: Any) -> Any:
-    """Clear the AB2 history after a dt change (IMEX-Euler bootstrap)."""
+    """Clear fixed-step AB2 history while preserving variable-step history."""
+
+    previous_dt_owner = getattr(state, "flow", state)
+    if hasattr(previous_dt_owner, "previous_dt"):
+        return state
     if dataclasses.is_dataclass(state) and hasattr(state, "have_old"):
-        return dataclasses.replace(state, have_old=False)
+        return dataclasses.replace(state, have_old=0.0)
     return state
 
 

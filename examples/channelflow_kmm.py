@@ -29,28 +29,48 @@ from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
 from jaxfun.integrators import IMEXRK3, IMEXRK222, PDEIMEXRK, ars_stage_rhs
-from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo
+from jaxfun.integrators.cnab2 import (
+    ScanRolloutCache,
+    ScanRolloutCacheInfo,
+    variable_ab2_extrapolate,
+)
 from jaxfun.io import Cadence, run_with_cadence
 from jaxfun.la.solvers import Biharmonic, Helmholtz
 
 type Velocity = tuple[Array, Array, Array]
+type KMMNonlinear = tuple[Array, Array, Array, Array]
 
 
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class KMMState:
-    """Coefficient-space KMM state."""
+    """Coefficient-space KMM state with optional CNAB2 history."""
 
     u: Velocity
     g: Array
+    nonlinear_old: KMMNonlinear | None = None
+    have_old: float | Array = 0.0
+    previous_dt: float | Array = 0.0
 
     def tree_flatten(self):
-        return (self.u[0], self.u[1], self.u[2], self.g), None
+        return (
+            self.u,
+            self.g,
+            self.nonlinear_old,
+            self.have_old,
+            self.previous_dt,
+        ), None
 
     @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        u0, u1, u2, g = children
-        return cls(u=(u0, u1, u2), g=g)
+    def tree_unflatten(cls, _aux_data, children):
+        u, g, nonlinear_old, have_old, previous_dt = children
+        return cls(
+            u=u,
+            g=g,
+            nonlinear_old=nonlinear_old,
+            have_old=have_old,
+            previous_dt=previous_dt,
+        )
 
 
 class KMM:
@@ -73,18 +93,56 @@ class KMM:
         family: str = "C",
         padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         dpdy: float = 0.0,
-        timestepper: type[PDEIMEXRK] = IMEXRK222,
+        timestepper: type[PDEIMEXRK] | type[IMEXRK3] | None = None,
+        time_integrator: str | None = None,
     ) -> None:
         self.N = tuple(int(n) for n in N)
         self.domain = domain
         self.nu = float(nu)
         self.dt = float(dt)
+        # Keep the controller timestep as a dynamic JAX value in compiled
+        # rollouts. ``self.dt`` remains the public Python scalar used when
+        # rebuilding dt-dependent implicit operators and reporting time.
+        self._dt_array = jnp.asarray(self.dt)
         self.padding_factor = padding_factor
         self.dpdy = float(dpdy)
+        requested_integrator = None if time_integrator is None else str(time_integrator)
+        if requested_integrator is not None and requested_integrator not in {
+            "IMEXRK222",
+            "IMEXRK3",
+            "CNAB2",
+        }:
+            raise ValueError(
+                "time_integrator must be one of {'IMEXRK222', 'IMEXRK3', 'CNAB2'}"
+            )
+        if timestepper is None:
+            timestepper = IMEXRK3 if requested_integrator == "IMEXRK3" else IMEXRK222
         if not (issubclass(timestepper, PDEIMEXRK) or timestepper is IMEXRK3):
             raise NotImplementedError("KMM supports ARS PDEIMEXRK steppers and IMEXRK3")
+
+        inferred_integrator = (
+            "IMEXRK3"
+            if timestepper is IMEXRK3
+            else "IMEXRK222"
+            if timestepper is IMEXRK222
+            else timestepper.__name__
+        )
+        if requested_integrator == "CNAB2":
+            if timestepper is not IMEXRK222:
+                raise ValueError("CNAB2 requires the default IMEXRK222 timestepper")
+        elif (
+            requested_integrator is not None
+            and requested_integrator != inferred_integrator
+        ):
+            raise ValueError(
+                f"time_integrator={requested_integrator!r} conflicts with "
+                f"timestepper={timestepper.__name__}"
+            )
+
         self.timestepper = timestepper
-        self._low_storage_imexrk3 = timestepper is IMEXRK3
+        self.time_integrator = requested_integrator or inferred_integrator
+        self._low_storage_imexrk3 = self.time_integrator == "IMEXRK3"
+        self._cnab2 = self.time_integrator == "CNAB2"
 
         family_cls = self._family_class(family)
         self.B0 = FunctionSpace(
@@ -124,7 +182,10 @@ class KMM:
         self.Xp = self.TDp.mesh()
 
         self._build_operators()
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._rollout_cache = ScanRolloutCache(
+            self._step_with_dt,
+            dynamic_args=lambda: (self._dt_array, self._runtime_factor_args()),
+        )
         self._pressure_cache = None
 
     @staticmethod
@@ -147,7 +208,11 @@ class KMM:
         shenfun/shenfun/utilities/integrators.py:702-817.
         """
         a, b, _ = self.timestepper.stages()
-        self._gamma = None if self._low_storage_imexrk3 else float(a[1, 1])
+        self._gamma = (
+            None
+            if self._low_storage_imexrk3
+            else (0.5 if self._cnab2 else float(a[1, 1]))
+        )
 
         ub = TrialFunction(self.TB, name="ub")
         vb = TestFunction(self.TB, name="vb")
@@ -246,9 +311,30 @@ class KMM:
             return tuple(item.lu_factor() for item in solver)
         return solver.lu_factor()
 
+    @classmethod
+    def _factor_runtime_args(cls, factor):
+        if isinstance(factor, tuple):
+            return tuple(cls._factor_runtime_args(item) for item in factor)
+        runtime_args = getattr(factor, "runtime_args", None)
+        return runtime_args() if runtime_args is not None else (factor,)
+
+    def _runtime_factor_args(self):
+        return (
+            self._factor_runtime_args(self.Su_factor),
+            self._factor_runtime_args(self.Sg_factor),
+            self._factor_runtime_args(self.S00_factor),
+        )
+
     @staticmethod
-    def _solve_prefactor(factor, rhs):
-        return factor.solve(rhs)
+    def _solve_prefactor(factor, rhs, runtime_args=None):
+        if runtime_args is None:
+            return factor.solve(rhs)
+        solve_runtime = getattr(factor, "solve_with_runtime_args", None)
+        if solve_runtime is not None:
+            return solve_runtime(rhs, runtime_args)
+        if len(runtime_args) != 1:
+            raise ValueError("non-wavenumber factor requires one runtime argument")
+        return runtime_args[0].solve(rhs)
 
     def _build_pressure_cache(self) -> dict[str, Array]:
         """Assemble radial matrices for optional KMM pressure recovery."""
@@ -353,13 +439,31 @@ class KMM:
         """Return recovered pressure on the standard quadrature mesh."""
         return self.TC.backward(self.compute_pressure_coefficients(state, H))
 
+    def _ensure_flow_history(self, state: KMMState) -> KMMState:
+        if not self._cnab2 or state.nonlinear_old is not None:
+            return state
+        nonlinear_old = (
+            jnp.zeros_like(state.u[0]),
+            jnp.zeros_like(state.g),
+            jnp.zeros_like(jnp.real(state.u[1][:, 0, 0])),
+            jnp.zeros_like(jnp.real(state.u[2][:, 0, 0])),
+        )
+        return KMMState(
+            u=state.u,
+            g=state.g,
+            nonlinear_old=nonlinear_old,
+            have_old=jnp.zeros_like(state.have_old),
+            previous_dt=jnp.asarray(0.0, dtype=jnp.real(state.g).dtype),
+        )
+
     def zero_state(self) -> KMMState:
         u = (
             jnp.zeros(self.TB.num_dofs, dtype=complex),
             jnp.zeros(self.TD.num_dofs, dtype=complex),
             jnp.zeros(self.TD.num_dofs, dtype=complex),
         )
-        return KMMState(u=u, g=jnp.zeros(self.TD.num_dofs, dtype=complex))
+        state = KMMState(u=u, g=jnp.zeros(self.TD.num_dofs, dtype=complex))
+        return self._ensure_flow_history(state)
 
     def state_from_physical(self, u_phys: Velocity) -> KMMState:
         """Transform physical velocity samples into a KMM coefficient state."""
@@ -367,14 +471,17 @@ class KMM:
         u1 = self.TD.mask_nyquist(self.TD.forward(u_phys[1]))
         u2 = self.TD.mask_nyquist(self.TD.forward(u_phys[2]))
         g = self.TD.mask_nyquist(1j * self.K[1] * u2 - 1j * self.K[2] * u1)
-        return KMMState(u=(u0, u1, u2), g=g)
+        return self._ensure_flow_history(KMMState(u=(u0, u1, u2), g=g))
 
     def _backward_velocity(self, u: Velocity, padded: bool = False) -> Velocity:
         counts = self.padding_counts if padded else None
+        transverse = jax.vmap(
+            lambda coefficients: self.TD.backward(coefficients, N=counts)
+        )(jnp.stack(u[1:]))
         return (
             self.TB.backward(u[0], N=counts),
-            self.TD.backward(u[1], N=counts),
-            self.TD.backward(u[2], N=counts),
+            transverse[0],
+            transverse[1],
         )
 
     def velocity_vorticity_physical(
@@ -396,16 +503,28 @@ class KMM:
 
     def _velocity_gradients(self, u: Velocity) -> dict[str, Array]:
         counts = self.padding_counts
+        transverse = jnp.stack(u[1:])
+
+        def transverse_derivative(order: tuple[int, int, int]) -> Array:
+            return jax.vmap(
+                lambda coefficients: self.TD.backward_primitive(
+                    coefficients, order, N=counts
+                )
+            )(transverse)
+
+        dx = transverse_derivative((1, 0, 0))
+        dy = transverse_derivative((0, 1, 0))
+        dz = transverse_derivative((0, 0, 1))
         return {
             "dudx": self.TB.backward_primitive(u[0], (1, 0, 0), N=counts),
             "dudy": self.TB.backward_primitive(u[0], (0, 1, 0), N=counts),
             "dudz": self.TB.backward_primitive(u[0], (0, 0, 1), N=counts),
-            "dvdx": self.TD.backward_primitive(u[1], (1, 0, 0), N=counts),
-            "dvdy": self.TD.backward_primitive(u[1], (0, 1, 0), N=counts),
-            "dvdz": self.TD.backward_primitive(u[1], (0, 0, 1), N=counts),
-            "dwdx": self.TD.backward_primitive(u[2], (1, 0, 0), N=counts),
-            "dwdy": self.TD.backward_primitive(u[2], (0, 1, 0), N=counts),
-            "dwdz": self.TD.backward_primitive(u[2], (0, 0, 1), N=counts),
+            "dvdx": dx[0],
+            "dvdy": dy[0],
+            "dvdz": dz[0],
+            "dwdx": dx[1],
+            "dwdy": dy[1],
+            "dwdz": dz[1],
         }
 
     def _add_base_convection(
@@ -427,7 +546,10 @@ class KMM:
             up[0] * g["dwdx"] + up[1] * g["dwdy"] + up[2] * g["dwdz"],
         )
         n = self._add_base_convection(n, up, g)
-        return tuple(self.TD.mask_nyquist(self.TDp.forward(ni)) for ni in n)
+        transformed = jax.vmap(
+            lambda values: self.TD.mask_nyquist(self.TDp.forward(values))
+        )(jnp.stack(n))
+        return transformed[0], transformed[1], transformed[2]
 
     def _nonlinear_rhs(self, H: Velocity) -> tuple[Array, Array, Array, Array]:
         counts = self.TD.num_quad_points
@@ -461,9 +583,12 @@ class KMM:
             self.TD.mask_nyquist(u2),
         )
 
-    def _step_imexrk3(self, state: KMMState) -> KMMState:
+    def _step_imexrk3(self, state: KMMState, dt: Array, factor_args=None) -> KMMState:
         """Advance one Spalart low-storage IMEXRK3 step."""
         a, b, _ = self.timestepper.stages()
+        su_args, sg_args, s00_args = (
+            self._runtime_factor_args() if factor_args is None else factor_args
+        )
         u_stage = state.u
         g_stage = state.g
         previous = (
@@ -479,7 +604,7 @@ class KMM:
         for rk in range(self.timestepper.steps()):
             H = self.convection(KMMState(u=u_stage, g=g_stage))
             current = self._nonlinear_rhs(H)
-            gamma = (a[rk] + b[rk]) * self.dt / 2.0
+            gamma = (a[rk] + b[rk]) * dt / 2.0
             rhs_u = self.Mu @ u_stage[0] + gamma * (self.Lu @ u_stage[0])
             rhs_g = self.Mg @ g_stage + gamma * (self.Lg @ g_stage)
             rhs_v = self.M00 @ jnp.real(u_stage[1][:, 0, 0]) + gamma * (
@@ -488,29 +613,102 @@ class KMM:
             rhs_w = self.M00 @ jnp.real(u_stage[2][:, 0, 0]) + gamma * (
                 self.L00 @ jnp.real(u_stage[2][:, 0, 0])
             )
-            rhs_u = rhs_u + self.dt * (a[rk] * current[0] + b[rk] * previous[0])
-            rhs_g = rhs_g + self.dt * (a[rk] * current[1] + b[rk] * previous[1])
-            rhs_v = rhs_v + self.dt * (a[rk] * current[2] + b[rk] * previous[2])
-            rhs_w = rhs_w + self.dt * (a[rk] * current[3] + b[rk] * previous[3])
+            rhs_u = rhs_u + dt * (a[rk] * current[0] + b[rk] * previous[0])
+            rhs_g = rhs_g + dt * (a[rk] * current[1] + b[rk] * previous[1])
+            rhs_v = rhs_v + dt * (a[rk] * current[2] + b[rk] * previous[2])
+            rhs_w = rhs_w + dt * (a[rk] * current[3] + b[rk] * previous[3])
 
             u0_new = self._solve_prefactor(
-                self.Su_factor[rk], self.TB.mask_nyquist(rhs_u)
+                self.Su_factor[rk], self.TB.mask_nyquist(rhs_u), su_args[rk]
             )
             g_new = self.TD.mask_nyquist(
-                self._solve_prefactor(self.Sg_factor[rk], self.TD.mask_nyquist(rhs_g))
+                self._solve_prefactor(
+                    self.Sg_factor[rk], self.TD.mask_nyquist(rhs_g), sg_args[rk]
+                )
             )
-            v00_new = jnp.real(self._solve_prefactor(self.S00_factor[rk], rhs_v))
-            w00_new = jnp.real(self._solve_prefactor(self.S00_factor[rk], rhs_w))
+            v00_new = jnp.real(
+                self._solve_prefactor(self.S00_factor[rk], rhs_v, s00_args[rk])
+            )
+            w00_new = jnp.real(
+                self._solve_prefactor(self.S00_factor[rk], rhs_w, s00_args[rk])
+            )
             u_stage = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
             g_stage = g_new
             previous = current
-        return KMMState(u=u_stage, g=g_stage)
+        return KMMState(
+            u=u_stage,
+            g=g_stage,
+            nonlinear_old=state.nonlinear_old,
+            have_old=state.have_old,
+            previous_dt=state.previous_dt,
+        )
 
-    def step(self, state: KMMState) -> KMMState:
-        """Advance one IMEX-RK step."""
+    def _cnab2_flow_update(
+        self,
+        state: KMMState,
+        H: Velocity,
+        dt: Array,
+        factor_args=None,
+    ) -> KMMState:
+        state = self._ensure_flow_history(state)
+        assert state.nonlinear_old is not None
+        current = self._nonlinear_rhs(H)
+        extrapolated = variable_ab2_extrapolate(
+            current,
+            state.nonlinear_old,
+            state.have_old,
+            dt,
+            state.previous_dt,
+        )
+        su_args, sg_args, s00_args = (
+            self._runtime_factor_args() if factor_args is None else factor_args
+        )
+        u0, g = state.u[0], state.g
+        v00 = jnp.real(state.u[1][:, 0, 0])
+        w00 = jnp.real(state.u[2][:, 0, 0])
+        half_dt = 0.5 * dt
+        rhs_u = self.Mu @ u0 + half_dt * (self.Lu @ u0) + dt * extrapolated[0]
+        rhs_g = self.Mg @ g + half_dt * (self.Lg @ g) + dt * extrapolated[1]
+        rhs_v = self.M00 @ v00 + half_dt * (self.L00 @ v00) + dt * extrapolated[2]
+        rhs_w = self.M00 @ w00 + half_dt * (self.L00 @ w00) + dt * extrapolated[3]
+        u0_new = self._solve_prefactor(
+            self.Su_factor, self.TB.mask_nyquist(rhs_u), su_args
+        )
+        g_new = self.TD.mask_nyquist(
+            self._solve_prefactor(self.Sg_factor, self.TD.mask_nyquist(rhs_g), sg_args)
+        )
+        v00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_v, s00_args))
+        w00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_w, s00_args))
+        return KMMState(
+            u=self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new),
+            g=g_new,
+            nonlinear_old=current,
+            have_old=jnp.ones_like(state.have_old),
+            previous_dt=dt,
+        )
+
+    def _step_cnab2(self, state: KMMState, dt: Array, factor_args=None) -> KMMState:
+        state = self._ensure_flow_history(state)
+        return self._cnab2_flow_update(state, self.convection(state), dt, factor_args)
+
+    def step(
+        self, state: KMMState, dt: Array | None = None, factor_args=None
+    ) -> KMMState:
+        """Advance one second-order IMEX step."""
+        if self._cnab2:
+            return self._step_cnab2(
+                state, self._dt_array if dt is None else dt, factor_args
+            )
         if self._low_storage_imexrk3:
-            return self._step_imexrk3(state)
+            return self._step_imexrk3(
+                state, self._dt_array if dt is None else dt, factor_args
+            )
         a, b, _ = self.timestepper.stages()
+        if dt is None:
+            dt = self._dt_array
+        su_args, sg_args, s00_args = (
+            self._runtime_factor_args() if factor_args is None else factor_args
+        )
         steps = self.timestepper.steps()
         u0_initial = state.u[0]
         g_initial = state.g
@@ -542,18 +740,32 @@ class KMM:
                 )
 
             rhs_u, rhs_g, rhs_v, rhs_w = ars_stage_rhs(
-                base_rhs, nonlinear_history, linear_history, a, b, self.dt, rk
+                base_rhs, nonlinear_history, linear_history, a, b, dt, rk
             )
-            u0_new = self._solve_prefactor(self.Su_factor, self.TB.mask_nyquist(rhs_u))
+            u0_new = self._solve_prefactor(
+                self.Su_factor, self.TB.mask_nyquist(rhs_u), su_args
+            )
             g_new = self.TD.mask_nyquist(
-                self._solve_prefactor(self.Sg_factor, self.TD.mask_nyquist(rhs_g))
+                self._solve_prefactor(
+                    self.Sg_factor, self.TD.mask_nyquist(rhs_g), sg_args
+                )
             )
-            v00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_v))
-            w00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_w))
+            v00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_v, s00_args))
+            w00_new = jnp.real(self._solve_prefactor(self.S00_factor, rhs_w, s00_args))
             u_stage = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
             g_stage = g_new
 
-        return KMMState(u=u_stage, g=g_stage)
+        return KMMState(
+            u=u_stage,
+            g=g_stage,
+            nonlinear_old=state.nonlinear_old,
+            have_old=state.have_old,
+            previous_dt=state.previous_dt,
+        )
+
+    def _step_with_dt(self, state: KMMState, dt: Array, factor_args) -> KMMState:
+        """Advance one compiled rollout step with runtime dt and factors."""
+        return self.step(state, dt, factor_args)
 
     def set_dt(self, dt: float) -> None:
         """Rebuild the dt-dependent implicit factorizations for a new step.
@@ -562,11 +774,11 @@ class KMM:
         independent, so only the implicit operators are reassembled.
         """
         self.dt = float(dt)
+        self._dt_array = jnp.asarray(self.dt)
         self._build_operators()
-        self._rollout_cache.rebind(self.step)
 
     def solve(self, state: KMMState, steps: int) -> KMMState:
-        return self._rollout_cache(state, int(steps))
+        return self._rollout_cache(self._ensure_flow_history(state), int(steps))
 
     def rollout_cache_info(self) -> ScanRolloutCacheInfo:
         """Return bounded executable-cache lifecycle counters."""

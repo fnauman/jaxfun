@@ -23,7 +23,6 @@ except ModuleNotFoundError:  # direct script execution from examples/
     from channelflow_kmm import KMM, KMMState, Velocity
 
 from jaxfun.galerkin.inner import integrate
-from jaxfun.integrators import IMEXRK222
 from jaxfun.io import Cadence
 
 
@@ -47,7 +46,8 @@ class PlaneCouetteFluctuationJax(KMM):
         family: str = "C",
         padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         perturbation_amplitude: float = 0.05,
-        timestepper: type = IMEXRK222,
+        timestepper: type | None = None,
+        time_integrator: str | None = None,
     ) -> None:
         self.Re = float(Re)
         self.U_wall = float(U_wall)
@@ -62,6 +62,7 @@ class PlaneCouetteFluctuationJax(KMM):
             padding_factor=padding_factor,
             dpdy=0.0,
             timestepper=timestepper,
+            time_integrator=time_integrator,
         )
         self.Ub = self.U_wall * self.X[0]
         self.Ubp = self.U_wall * self.Xp[0]

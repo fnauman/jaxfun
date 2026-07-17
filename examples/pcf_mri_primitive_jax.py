@@ -40,7 +40,12 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo, cnab2_rhs
+from jaxfun.integrators.cnab2 import (
+    ScanRolloutCache,
+    ScanRolloutCacheInfo,
+    batch_components,
+    cnab2_rhs,
+)
 from jaxfun.io import Cadence, run_with_cadence
 from jaxfun.la import TPMatrices, TPMatrix
 
@@ -83,14 +88,14 @@ class AxisymmetricPCFState:
     x: MHDFields
     p: Array
     nonlinear_old: MHDFields
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
 
     def tree_flatten(self):
         return (
             self.x,
             self.p,
             self.nonlinear_old,
-            jnp.asarray(self.have_old, dtype=jnp.float32),
+            self.have_old,
         ), None
 
     @classmethod
@@ -200,7 +205,10 @@ class AxisymmetricPCFMRIDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._rollout_cache = ScanRolloutCache(
+            self._step_with_operators,
+            dynamic_args=lambda: (self.Lexp_modes, *self.Limp_lu),
+        )
 
     @staticmethod
     def _family_class(family: str):
@@ -372,11 +380,13 @@ class AxisymmetricPCFMRIDNSJax:
         modes = modes.at[0, pressure_row, :].set(0)
         return modes.at[0, pressure_row, pressure_row].set(1)
 
-    def _solve_limp(self, rhs: Array) -> Array:
+    def _solve_limp(
+        self, rhs: Array, Limp_lu: tuple[Array, Array] | None = None
+    ) -> Array:
         rhs_modes = rhs[self.VQ_mode_indices]
         pressure_row = sum(int(space.num_dofs[-1]) for space in self.VQ[:3])
         rhs_modes = rhs_modes.at[0, pressure_row].set(0)
-        lu, piv = self.Limp_lu
+        lu, piv = self.Limp_lu if Limp_lu is None else Limp_lu
         sol_modes = jax.vmap(
             lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve((lu_i, piv_i), b_i)
         )(lu, piv, rhs_modes)
@@ -386,7 +396,7 @@ class AxisymmetricPCFMRIDNSJax:
         x = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VE)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: MHDFields) -> AxisymmetricPCFState:
         spaces = (self.TD, self.TD, self.TD, self.TD, self.TN, self.TN)
@@ -395,7 +405,7 @@ class AxisymmetricPCFMRIDNSJax:
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=x[0].dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def _phys_mhd(self, coeff: Array, space) -> tuple[Array, Array, Array]:
         N = self.padded_counts
@@ -416,12 +426,18 @@ class AxisymmetricPCFMRIDNSJax:
         return self.T0.backward(coeff)
 
     def nonlinear(self, state: AxisymmetricPCFState) -> MHDFields:
-        ux, uxx, uxz = self._phys_mhd(state.x[0], self.TD)
-        uy, uyx, uyz = self._phys_mhd(state.x[1], self.TD)
-        uz, uzx, uzz = self._phys_mhd(state.x[2], self.TD)
-        bx, bxx, bxz = self._phys_mhd(state.x[3], self.TD)
-        by, byx, byz = self._phys_mhd(state.x[4], self.TN)
-        bz, bzx, bzz = self._phys_mhd(state.x[5], self.TN)
+        td_values, td_dx, td_dz = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:4]
+        )
+        ux, uy, uz, bx = td_values
+        uxx, uyx, uzx, bxx = td_dx
+        uxz, uyz, uzz, bxz = td_dz
+        tangential, tangential_dx, tangential_dz = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TN), state.x[4:]
+        )
+        by, bz = tangential
+        byx, bzx = tangential_dx
+        byz, bzz = tangential_dz
         nu_x = self._dealias_to_standard(ux * uxx + uz * uxz - bx * bxx - bz * bxz)
         nu_y = self._dealias_to_standard(ux * uyx + uz * uyz - bx * byx - bz * byz)
         nu_z = self._dealias_to_standard(ux * uzx + uz * uzz - bx * bzx - bz * bzz)
@@ -446,22 +462,31 @@ class AxisymmetricPCFMRIDNSJax:
             self.TN.mask_nyquist(self.TN.scalar_product(nb_z)),
         )
 
-    def _apply_lexp(self, x: MHDFields) -> MHDFields:
+    def _apply_lexp(self, x: MHDFields, Lexp_modes: Array | None = None) -> MHDFields:
         flat = self.VE.flatten(x)
         modes = flat[self.VE_mode_indices]
-        out_modes = jnp.einsum("kij,kj->ki", self.Lexp_modes, modes)
+        if Lexp_modes is None:
+            Lexp_modes = self.Lexp_modes
+        out_modes = jnp.einsum("kij,kj->ki", Lexp_modes, modes)
         out = self._scatter_modes(out_modes, self.VE_mode_indices, self.VE.dim)
         return self.VE.unflatten(out)  # ty: ignore[return-value]
 
-    def step(self, state: AxisymmetricPCFState) -> AxisymmetricPCFState:
+    def step(
+        self,
+        state: AxisymmetricPCFState,
+        Lexp_modes: Array | None = None,
+        Limp_lu: tuple[Array, Array] | None = None,
+    ) -> AxisymmetricPCFState:
         n_hat = self.nonlinear(state)
-        rhs_e = self._apply_lexp(state.x)
+        rhs_e = self._apply_lexp(state.x, Lexp_modes)
         rhs_x = cnab2_rhs(rhs_e, n_hat, state.nonlinear_old, state.have_old)
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
-        sol = self.VQ.unflatten(self._solve_limp(rhs))
+        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
-        return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
+        return AxisymmetricPCFState(
+            x=x, p=sol[3], nonlinear_old=n_hat, have_old=jnp.ones_like(state.have_old)
+        )
 
     def set_dt(self, dt: float) -> None:
         """Adopt a new timestep and retire obsolete compiled rollouts."""
@@ -472,7 +497,15 @@ class AxisymmetricPCFMRIDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache.rebind(self.step)
+
+    def _step_with_operators(
+        self,
+        state: AxisymmetricPCFState,
+        Lexp_modes: Array,
+        lu: Array,
+        piv: Array,
+    ) -> AxisymmetricPCFState:
+        return self.step(state, Lexp_modes, (lu, piv))
 
     def solve(self, state: AxisymmetricPCFState, steps: int) -> AxisymmetricPCFState:
         return self._rollout_cache(state, int(steps))
@@ -742,7 +775,10 @@ class PCFMRIDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._rollout_cache = ScanRolloutCache(
+            self._step_with_operators,
+            dynamic_args=lambda: (self.Lexp_modes, *self.Limp_lu),
+        )
 
     @staticmethod
     def _operator_dtype() -> jnp.dtype:
@@ -969,11 +1005,13 @@ class PCFMRIDNSJax:
         modes = modes.at[0, pressure_row, :].set(0)
         return modes.at[0, pressure_row, pressure_row].set(1)
 
-    def _solve_limp(self, rhs: Array) -> Array:
+    def _solve_limp(
+        self, rhs: Array, Limp_lu: tuple[Array, Array] | None = None
+    ) -> Array:
         rhs_modes = rhs[self.VQ_mode_indices]
         pressure_row = sum(int(space.num_dofs[-1]) for space in self.VQ[:3])
         rhs_modes = rhs_modes.at[0, pressure_row].set(0)
-        lu, piv = self.Limp_lu
+        lu, piv = self.Limp_lu if Limp_lu is None else Limp_lu
         sol_modes = jax.vmap(
             lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve((lu_i, piv_i), b_i)
         )(lu, piv, rhs_modes)
@@ -985,7 +1023,7 @@ class PCFMRIDNSJax:
         x = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VE)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: MHDFields) -> AxisymmetricPCFState:
         spaces = (self.TD, self.TD, self.TD, self.Tbx, self.Tby, self.Tbz)
@@ -994,7 +1032,7 @@ class PCFMRIDNSJax:
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=x[0].dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def _phys_mhd(self, coeff: Array, space) -> tuple[Array, Array, Array, Array]:
         N = self.padded_counts
@@ -1016,12 +1054,25 @@ class PCFMRIDNSJax:
         return self.T0.backward(coeff)
 
     def nonlinear(self, state: AxisymmetricPCFState) -> MHDFields:
-        ux, uxx, uxy, uxz = self._phys_mhd(state.x[0], self.TD)
-        uy, uyx, uyy, uyz = self._phys_mhd(state.x[1], self.TD)
-        uz, uzx, uzy, uzz = self._phys_mhd(state.x[2], self.TD)
+        u_values, u_dx, u_dy, u_dz = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:3]
+        )
+        ux, uy, uz = u_values
+        uxx, uyx, uzx = u_dx
+        uxy, uyy, uzy = u_dy
+        uxz, uyz, uzz = u_dz
         bx, bxx, bxy, bxz = self._phys_mhd(state.x[3], self.Tbx)
-        by, byx, byy, byz = self._phys_mhd(state.x[4], self.Tby)
-        bz, bzx, bzy, bzz = self._phys_mhd(state.x[5], self.Tbz)
+        if self.Tby is self.Tbz:
+            b_values, b_dx, b_dy, b_dz = batch_components(
+                lambda coeff: self._phys_mhd(coeff, self.Tby), state.x[4:]
+            )
+            by, bz = b_values
+            byx, bzx = b_dx
+            byy, bzy = b_dy
+            byz, bzz = b_dz
+        else:
+            by, byx, byy, byz = self._phys_mhd(state.x[4], self.Tby)
+            bz, bzx, bzy, bzz = self._phys_mhd(state.x[5], self.Tbz)
         nu_x = self._dealias_to_standard(
             ux * uxx + uy * uxy + uz * uxz - bx * bxx - by * bxy - bz * bxz
         )
@@ -1055,24 +1106,33 @@ class PCFMRIDNSJax:
             self.Tbz.mask_nyquist(self.Tbz.scalar_product(nb_z)),
         )
 
-    def _apply_lexp(self, x: MHDFields) -> MHDFields:
+    def _apply_lexp(self, x: MHDFields, Lexp_modes: Array | None = None) -> MHDFields:
         flat = self.VE.flatten(x)
         modes = flat[self.VE_mode_indices]
-        out_modes = jnp.einsum("kij,kj->ki", self.Lexp_modes, modes)
+        if Lexp_modes is None:
+            Lexp_modes = self.Lexp_modes
+        out_modes = jnp.einsum("kij,kj->ki", Lexp_modes, modes)
         out = AxisymmetricPCFMRIDNSJax._scatter_modes(
             out_modes, self.VE_mode_indices, self.VE.dim
         )
         return self.VE.unflatten(out)  # ty: ignore[return-value]
 
-    def step(self, state: AxisymmetricPCFState) -> AxisymmetricPCFState:
+    def step(
+        self,
+        state: AxisymmetricPCFState,
+        Lexp_modes: Array | None = None,
+        Limp_lu: tuple[Array, Array] | None = None,
+    ) -> AxisymmetricPCFState:
         n_hat = self.nonlinear(state)
-        rhs_e = self._apply_lexp(state.x)
+        rhs_e = self._apply_lexp(state.x, Lexp_modes)
         rhs_x = cnab2_rhs(rhs_e, n_hat, state.nonlinear_old, state.have_old)
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
-        sol = self.VQ.unflatten(self._solve_limp(rhs))
+        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
-        return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
+        return AxisymmetricPCFState(
+            x=x, p=sol[3], nonlinear_old=n_hat, have_old=jnp.ones_like(state.have_old)
+        )
 
     def set_dt(self, dt: float) -> None:
         """Adopt a new timestep and retire obsolete compiled rollouts."""
@@ -1081,7 +1141,15 @@ class PCFMRIDNSJax:
         self.Limp_lu = jax.vmap(jsp_linalg.lu_factor)(
             self._pin_pressure_modes(self.Limp_modes)
         )
-        self._rollout_cache.rebind(self.step)
+
+    def _step_with_operators(
+        self,
+        state: AxisymmetricPCFState,
+        Lexp_modes: Array,
+        lu: Array,
+        piv: Array,
+    ) -> AxisymmetricPCFState:
+        return self.step(state, Lexp_modes, (lu, piv))
 
     def solve(self, state: AxisymmetricPCFState, steps: int) -> AxisymmetricPCFState:
         return self._rollout_cache(state, int(steps))

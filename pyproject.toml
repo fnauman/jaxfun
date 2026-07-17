@@ -87,6 +87,9 @@ exclude_also = [
   "@(abc\\.)?abstractmethod",
 ]
 
+[tool.uv.build-backend]
+module-name = [ "jaxfun", "_jaxfun_bootstrap" ]
+
 [tool.ty.src]
 exclude = [ "sandbox", "examples/notebooks", "**/*.ipynb" ]
 

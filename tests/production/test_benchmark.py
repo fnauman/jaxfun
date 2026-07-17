@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from production.benchmark import (
@@ -55,6 +57,50 @@ class _MockSolver:
         return state + 1
 
 
+class _MockProductionSolver(_MockSolver):
+    def __init__(self):
+        self.solve_calls = 0
+
+    def step(self, state):  # pragma: no cover - production rollout must be used
+        raise AssertionError("benchmark bypassed solver.solve")
+
+    def solve(self, state, steps):
+        self.solve_calls += 1
+        return state + steps
+
+
+@dataclass(frozen=True)
+class _MockCacheInfo:
+    hits: int
+    misses: int
+    live_entries: int
+
+
+class _MockCachedProductionSolver(_MockProductionSolver):
+    def __init__(self):
+        super().__init__()
+        self.hits = 0
+        self.misses = 0
+        self.live_entries = 0
+        self.solve_inputs = []
+
+    def solve(self, state, steps):
+        self.solve_calls += 1
+        self.solve_inputs.append(state)
+        if self.live_entries:
+            self.hits += 1
+        else:
+            self.misses += 1
+            self.live_entries = 1
+        return state + steps
+
+    def set_dt(self, dt):
+        self.dt = float(dt)
+
+    def rollout_cache_info(self):
+        return _MockCacheInfo(self.hits, self.misses, self.live_entries)
+
+
 def test_benchmark_step_separates_compile_and_warm():
     timing = benchmark_step(_MockSolver, label="mock", warmup_steps=1, timed_steps=5)
     assert timing.label == "mock"
@@ -64,3 +110,65 @@ def test_benchmark_step_separates_compile_and_warm():
     assert timing.cost_per_shear_time_s == pytest.approx(timing.warm_step_s / 0.01)
     d = timing.to_dict()
     assert "cost_per_shear_time_s" in d
+
+
+def test_benchmark_step_times_compiled_production_rollout():
+    built = []
+
+    def build():
+        solver = _MockProductionSolver()
+        built.append(solver)
+        return solver
+
+    timing = benchmark_step(
+        build,
+        label="production-mock",
+        warmup_steps=2,
+        timed_steps=4,
+        rollout_steps=7,
+    )
+
+    assert built[0].solve_calls == 1 + 2 + 4
+    assert timing.rollout_steps == 7
+    assert timing.to_dict()["timed_blocks"] == 4
+    assert timing.to_dict()["total_timed_steps"] == 28
+
+
+def test_benchmark_rejects_nonpositive_rollout_length():
+    with pytest.raises(ValueError, match="rollout_steps"):
+        benchmark_step(_MockSolver, label="bad", rollout_steps=0)
+
+
+def test_benchmark_probes_dt_transitions_without_new_rollout_variant():
+    built = []
+
+    def build():
+        solver = _MockCachedProductionSolver()
+        built.append(solver)
+        return solver
+
+    timing = benchmark_step(
+        build,
+        label="cached-production-mock",
+        warmup_steps=0,
+        timed_steps=1,
+        rollout_steps=2,
+        dt_transition_probes=3,
+    )
+
+    probe = timing.dt_transition_probe
+    assert probe is not None
+    assert probe["rollout_cache_hits_delta"] == 3
+    assert probe["rollout_cache_misses_delta"] == 0
+    assert probe["reused_compiled_variant"] is True
+    assert timing.rollout_cache_info == {"hits": 4, "misses": 1, "live_entries": 1}
+    assert built[0].solve_inputs[-3:] == [4, 4, 4]
+
+
+def test_benchmark_rejects_negative_dt_transition_probes():
+    with pytest.raises(ValueError, match="dt_transition_probes"):
+        benchmark_step(
+            _MockSolver,
+            label="bad-dt-probe",
+            dt_transition_probes=-1,
+        )

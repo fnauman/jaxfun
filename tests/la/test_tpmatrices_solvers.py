@@ -1,5 +1,6 @@
 from typing import cast
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -32,6 +33,8 @@ from jaxfun.la.tpmatrix import (
     TPMatricesDenseLUFactors,
     TPMatricesLUFactors,
     TPMatricesWavenumberSolver,
+    _make_wavenumber_batched_solve,
+    _make_wavenumber_vmap_solve,
     tpmats_dense_lu_factor,
     tpmats_lu_factor,
     tpmats_wavenumber_factor,
@@ -186,6 +189,23 @@ def test_wavenumber_solver_pivot_handles_zero_diagonal():
     ref = jnp.linalg.solve(dense_batch, rhs[..., None])[..., 0]
     actual = solver.solve(rhs)
     assert jnp.allclose(actual, ref, rtol=1.0e-13, atol=1.0e-13)
+
+
+@pytest.mark.spmd
+def test_batched_wavenumber_solver_rejects_nondivisible_fourier_modes():
+    if jax.device_count() < 2:
+        pytest.skip("requires --num-devices=2")
+
+    dense = jnp.asarray([[2.0, 1.0], [1.0, 2.0]])
+    dia = DiaMatrix.from_dense(dense, offsets=(-1, 0, 1))
+    data = jnp.broadcast_to(dia.data, (3, *dia.data.shape))
+    with pytest.raises(ValueError, match="must be divisible"):
+        TPMatricesWavenumberSolver(
+            poly_axis=1,
+            shape=(3, 2),
+            B_data_batch=data,
+            poly_offsets=dia.offsets,
+        )
 
 
 def test_wavenumber_solver_constraints_pin_matrix_row_and_rhs():
@@ -465,6 +485,48 @@ def test_blockmatrix_rcm_reduces_bandwidth(poly):
     bw_before = max(abs(k) for k in sparse.offsets)
     bw_after = max(abs(k) for k in A_perm.offsets)
     assert bw_after <= bw_before
+
+
+@pytest.mark.parametrize("dtype", [jnp.float64, jnp.complex128])
+def test_compact_wavenumber_recurrence_matches_legacy_vmap(dtype):
+    n_fourier, n_poly = 7, 11
+    l_offsets = (-3, -1)
+    u_offsets = (0, 2, 3)
+    rng = np.random.default_rng(92017)
+
+    def values(shape):
+        real = rng.normal(size=shape)
+        if jnp.issubdtype(dtype, jnp.complexfloating):
+            real = real + 1j * rng.normal(size=shape)
+        return jnp.asarray(real, dtype=dtype)
+
+    lower = 0.03 * values((n_fourier, len(l_offsets), n_poly))
+    upper = 0.03 * values((n_fourier, len(u_offsets), n_poly))
+    upper = upper.at[:, 0, :].set(2.0 + jnp.abs(upper[:, 0, :]))
+    rhs = values((n_fourier, n_poly))
+
+    legacy = _make_wavenumber_vmap_solve(l_offsets, u_offsets, n_poly, dtype)(
+        lower, upper, rhs
+    )
+    compact = jax.jit(
+        _make_wavenumber_batched_solve(l_offsets, u_offsets, n_poly, dtype)
+    )(lower, upper, rhs)
+
+    assert jnp.allclose(compact, legacy, rtol=2.0e-14, atol=2.0e-14)
+
+
+def test_compact_wavenumber_recurrence_handles_diagonal_system():
+    n_fourier, n_poly = 5, 9
+    lower = jnp.empty((n_fourier, 0, n_poly), dtype=jnp.float64)
+    diagonal = jnp.arange(1, n_fourier * n_poly + 1, dtype=jnp.float64).reshape(
+        n_fourier, 1, n_poly
+    )
+    rhs = jnp.ones((n_fourier, n_poly), dtype=jnp.float64)
+
+    compact = _make_wavenumber_batched_solve((), (0,), n_poly, jnp.float64)
+    actual = jax.jit(compact)(lower, diagonal, rhs)
+
+    assert jnp.allclose(actual, rhs / diagonal[:, 0, :])
 
 
 @POLY_SPACES

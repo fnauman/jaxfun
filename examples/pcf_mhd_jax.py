@@ -26,24 +26,26 @@ except ModuleNotFoundError:  # direct script execution from examples/
 
 from jaxfun.galerkin import TestFunction, TrialFunction, inner
 from jaxfun.galerkin.inner import integrate
+from jaxfun.integrators.cnab2 import variable_ab2_extrapolate
 from jaxfun.integrators.nonlinear import physical_cross
 
 
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class MHDState:
-    """Coefficient-space state for PCF MHD."""
+    """Coefficient-space state for PCF MHD with optional CNAB2 history."""
 
     flow: KMMState
     A: Velocity
+    nonlinear_A_old: Velocity | None = None
 
     def tree_flatten(self):
-        return (self.flow, self.A), None
+        return (self.flow, self.A, self.nonlinear_A_old), None
 
     @classmethod
     def tree_unflatten(cls, _aux_data, children):
-        flow, A = children
-        return cls(flow=flow, A=A)
+        flow, A, nonlinear_A_old = children
+        return cls(flow=flow, A=A, nonlinear_A_old=nonlinear_A_old)
 
 
 class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
@@ -69,6 +71,7 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
         padding_factor: tuple[float, float, float] = (1.0, 1.5, 1.5),
         perturbation_amplitude: float = 0.1,
         magnetic_amplitude: float = 0.05,
+        time_integrator: str | None = None,
     ) -> None:
         self.Rm = float(Re if Rm is None else Rm)
         self.eta = float(U_wall) / self.Rm
@@ -82,6 +85,7 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
             family=family,
             padding_factor=padding_factor,
             perturbation_amplitude=perturbation_amplitude,
+            time_integrator=time_integrator,
         )
         self._build_A_operators()
 
@@ -121,14 +125,26 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
 
     def _A_forward_emf(self, emf: Velocity) -> Velocity:
         """Forward-transform the physical EMF into per-component A forcings."""
-        return tuple(self.TD.mask_nyquist(self.TDp.forward(ei)) for ei in emf)
+        transformed = jax.vmap(
+            lambda values: self.TD.mask_nyquist(self.TDp.forward(values))
+        )(jnp.stack(emf))
+        return transformed[0], transformed[1], transformed[2]
 
-    def _A_solve(self, rhs: list) -> Velocity:
+    def _A_solve(self, rhs: list, runtime_args=None) -> Velocity:
         """Solve the implicit A stage system from accumulated RHS rows."""
+        runtime_args = self._A_runtime_args() if runtime_args is None else runtime_args
         return tuple(
-            self.TD.mask_nyquist(self._solve_prefactor(self.SA_factor, rhs[i]))
+            self.TD.mask_nyquist(
+                self._solve_prefactor(self.SA_factor, rhs[i], runtime_args)
+            )
             for i in range(3)
         )
+
+    def _A_runtime_args(self):
+        return self._factor_runtime_args(self.SA_factor)
+
+    def _runtime_factor_args(self):
+        return (*super()._runtime_factor_args(), self._A_runtime_args())
 
     def _A_state_from_physical(self, a_phys: Velocity) -> Velocity:
         """Forward-transform physical A samples into the family's A spaces."""
@@ -136,6 +152,22 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
             space.mask_nyquist(space.forward(ai))
             for space, ai in zip(self.a_coeff_spaces, a_phys, strict=True)
         )
+
+    def _ensure_mhd_history(self, state: MHDState) -> MHDState:
+        flow = self._ensure_flow_history(state.flow)
+        if not self._cnab2:
+            if flow is state.flow:
+                return state
+            return MHDState(flow=flow, A=state.A, nonlinear_A_old=state.nonlinear_A_old)
+        nonlinear_A_old = state.nonlinear_A_old
+        if nonlinear_A_old is None:
+            nonlinear_A_old = tuple(jnp.zeros_like(Ai) for Ai in state.A)
+        if flow is state.flow and nonlinear_A_old is state.nonlinear_A_old:
+            return state
+        return MHDState(flow=flow, A=state.A, nonlinear_A_old=nonlinear_A_old)
+
+    def _new_mhd_state(self, flow: KMMState, A: Velocity) -> MHDState:
+        return self._ensure_mhd_history(MHDState(flow=flow, A=A))
 
     def initial_state(self) -> MHDState:
         flow = super().initial_state()
@@ -151,61 +183,71 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
             ky = 2.0 * jnp.pi / Ly
             kz = 2.0 * jnp.pi / Lz
             ax = amp * wall * (1.0 / kz) * jnp.sin(ky * y) * jnp.sin(kz * z)
-        return MHDState(flow=flow, A=self._A_state_from_physical((ax, ay, az)))
+        return self._new_mhd_state(flow, self._A_state_from_physical((ax, ay, az)))
 
     def update_B_from_A(self, A: Velocity) -> Velocity:
-        """Compute B=curl(A) in the family's ``b_coeff_spaces``."""
-        counts = self.TD.num_quad_points
+        """Compute projected ``B=curl(A)`` without a physical round trip."""
         SA = self.a_coeff_spaces
         SB = self.b_coeff_spaces
-        bx_phys = SA[2].backward_primitive(A[2], (0, 1, 0), N=counts) - SA[
+        bx_orth = SA[2].derivative_orthogonal_coeffs(A[2], (0, 1, 0)) - SA[
             1
-        ].backward_primitive(A[1], (0, 0, 1), N=counts)
-        by_phys = SA[0].backward_primitive(A[0], (0, 0, 1), N=counts) - SA[
+        ].derivative_orthogonal_coeffs(A[1], (0, 0, 1))
+        by_orth = SA[0].derivative_orthogonal_coeffs(A[0], (0, 0, 1)) - SA[
             2
-        ].backward_primitive(A[2], (1, 0, 0), N=counts)
-        bz_phys = SA[1].backward_primitive(A[1], (1, 0, 0), N=counts) - SA[
+        ].derivative_orthogonal_coeffs(A[2], (1, 0, 0))
+        bz_orth = SA[1].derivative_orthogonal_coeffs(A[1], (1, 0, 0)) - SA[
             0
-        ].backward_primitive(A[0], (0, 1, 0), N=counts)
+        ].derivative_orthogonal_coeffs(A[0], (0, 1, 0))
         return (
-            SB[0].mask_nyquist(SB[0].forward(bx_phys)),
-            SB[1].mask_nyquist(SB[1].forward(by_phys)),
-            SB[2].mask_nyquist(SB[2].forward(bz_phys)),
+            SB[0].mask_nyquist(SB[0].project_from_orthogonal(bx_orth)),
+            SB[1].mask_nyquist(SB[1].project_from_orthogonal(by_orth)),
+            SB[2].mask_nyquist(SB[2].project_from_orthogonal(bz_orth)),
         )
 
     def update_J_from_B(self, B: Velocity) -> Velocity:
-        """Compute J=curl(B) in the family's ``j_coeff_spaces``."""
-        counts = self.TD.num_quad_points
+        """Compute projected ``J=curl(B)`` without a physical round trip."""
         SB = self.b_coeff_spaces
         SJ = self.j_coeff_spaces
-        jx_phys = SB[2].backward_primitive(B[2], (0, 1, 0), N=counts) - SB[
+        jx_orth = SB[2].derivative_orthogonal_coeffs(B[2], (0, 1, 0)) - SB[
             1
-        ].backward_primitive(B[1], (0, 0, 1), N=counts)
-        jy_phys = SB[0].backward_primitive(B[0], (0, 0, 1), N=counts) - SB[
+        ].derivative_orthogonal_coeffs(B[1], (0, 0, 1))
+        jy_orth = SB[0].derivative_orthogonal_coeffs(B[0], (0, 0, 1)) - SB[
             2
-        ].backward_primitive(B[2], (1, 0, 0), N=counts)
-        jz_phys = SB[1].backward_primitive(B[1], (1, 0, 0), N=counts) - SB[
+        ].derivative_orthogonal_coeffs(B[2], (1, 0, 0))
+        jz_orth = SB[1].derivative_orthogonal_coeffs(B[1], (1, 0, 0)) - SB[
             0
-        ].backward_primitive(B[0], (0, 1, 0), N=counts)
+        ].derivative_orthogonal_coeffs(B[0], (0, 1, 0))
         return (
-            SJ[0].mask_nyquist(SJ[0].forward(jx_phys)),
-            SJ[1].mask_nyquist(SJ[1].forward(jy_phys)),
-            SJ[2].mask_nyquist(SJ[2].forward(jz_phys)),
+            SJ[0].mask_nyquist(SJ[0].project_from_orthogonal(jx_orth)),
+            SJ[1].mask_nyquist(SJ[1].project_from_orthogonal(jy_orth)),
+            SJ[2].mask_nyquist(SJ[2].project_from_orthogonal(jz_orth)),
+        )
+
+    @staticmethod
+    def _backward_vector(
+        fields: Velocity, spaces: tuple, counts: tuple[int, ...] | None
+    ) -> Velocity:
+        if spaces[1] is spaces[2]:
+            tangential = jax.vmap(
+                lambda coefficients: spaces[1].backward(coefficients, N=counts)
+            )(jnp.stack(fields[1:]))
+            return (
+                spaces[0].backward(fields[0], N=counts),
+                tangential[0],
+                tangential[1],
+            )
+        return tuple(
+            space.backward(coefficients, N=counts)
+            for space, coefficients in zip(spaces, fields, strict=True)
         )
 
     def _backward_B(self, B: Velocity, padded: bool = False) -> Velocity:
         counts = self.padding_counts if padded else None
-        SB = self.b_coeff_spaces
-        return tuple(
-            space.backward(Bi, N=counts) for space, Bi in zip(SB, B, strict=True)
-        )
+        return self._backward_vector(B, self.b_coeff_spaces, counts)
 
     def _backward_J(self, J: Velocity, padded: bool = False) -> Velocity:
         counts = self.padding_counts if padded else None
-        SJ = self.j_coeff_spaces
-        return tuple(
-            space.backward(Ji, N=counts) for space, Ji in zip(SJ, J, strict=True)
-        )
+        return self._backward_vector(J, self.j_coeff_spaces, counts)
 
     def _mhd_convection(self, state: MHDState) -> tuple[Velocity, Velocity]:
         flow = state.flow
@@ -224,15 +266,59 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
         jp = self._backward_J(J, padded=True)
         lorentz = physical_cross(jp, bp)
         n = tuple(ni - li for ni, li in zip(n, lorentz, strict=True))
-        H = tuple(self.TD.mask_nyquist(self.TDp.forward(ni)) for ni in n)
+        transformed = jax.vmap(
+            lambda values: self.TD.mask_nyquist(self.TDp.forward(values))
+        )(jnp.stack(n))
+        H = (transformed[0], transformed[1], transformed[2])
 
         utotal = (up[0], up[1] + self.Ubp, up[2])
         emf = physical_cross(utotal, bp)
         HA = self._A_forward_emf(emf)
         return H, HA
 
-    def step(self, state: MHDState) -> MHDState:
+    def _step_cnab2_mhd(self, state: MHDState, dt: Array, factor_args=None) -> MHDState:
+        state = self._ensure_mhd_history(state)
+        assert state.nonlinear_A_old is not None
+        su_args, sg_args, s00_args, a_args = (
+            self._runtime_factor_args() if factor_args is None else factor_args
+        )
+        H, HA = self._mhd_convection(state)
+        current_A = self._A_mass_rhs(HA)
+        extrapolated_A = variable_ab2_extrapolate(
+            current_A,
+            state.nonlinear_A_old,
+            state.flow.have_old,
+            dt,
+            state.flow.previous_dt,
+        )
+        flow_new = self._cnab2_flow_update(
+            state.flow, H, dt, (su_args, sg_args, s00_args)
+        )
+        half_dt = 0.5 * dt
+        mass_A = self._A_mass_rhs(state.A)
+        linear_A = self._A_eta_lap(state.A)
+        rhs_A = [
+            mass_A[i] + half_dt * linear_A[i] + dt * extrapolated_A[i] for i in range(3)
+        ]
+        return MHDState(
+            flow=flow_new,
+            A=self._A_solve(rhs_A, a_args),
+            nonlinear_A_old=current_A,
+        )
+
+    def step(
+        self, state: MHDState, dt: Array | None = None, factor_args=None
+    ) -> MHDState:
+        if self._cnab2:
+            return self._step_cnab2_mhd(
+                state, self._dt_array if dt is None else dt, factor_args
+            )
         a, b, _ = self.timestepper.stages()
+        if dt is None:
+            dt = self._dt_array
+        su_args, sg_args, s00_args, a_args = (
+            self._runtime_factor_args() if factor_args is None else factor_args
+        )
         steps = self.timestepper.steps()
         flow0 = state.flow
         A0 = state.A
@@ -270,13 +356,12 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
             rhs_w = w00_rhs0
             rhs_A = list(A0_rhs)
             for j in range(rk + 1):
-                rhs_u = rhs_u + self.dt * b[rk + 1, j] * nonlinear_u[j]
-                rhs_g = rhs_g + self.dt * b[rk + 1, j] * nonlinear_g[j]
-                rhs_v = rhs_v + self.dt * b[rk + 1, j] * nonlinear_v[j]
-                rhs_w = rhs_w + self.dt * b[rk + 1, j] * nonlinear_w[j]
+                rhs_u = rhs_u + dt * b[rk + 1, j] * nonlinear_u[j]
+                rhs_g = rhs_g + dt * b[rk + 1, j] * nonlinear_g[j]
+                rhs_v = rhs_v + dt * b[rk + 1, j] * nonlinear_v[j]
+                rhs_w = rhs_w + dt * b[rk + 1, j] * nonlinear_w[j]
                 rhs_A = [
-                    rhs_A[i] + self.dt * b[rk + 1, j] * nonlinear_A[j][i]
-                    for i in range(3)
+                    rhs_A[i] + dt * b[rk + 1, j] * nonlinear_A[j][i] for i in range(3)
                 ]
 
             if rk > 0:
@@ -286,31 +371,46 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
                 linear_w.append(self.L00 @ flow_stage.u[2][:, 0, 0])
                 linear_A.append(self._A_eta_lap(A_stage))
                 for j in range(rk):
-                    rhs_u = rhs_u + self.dt * a[rk + 1, j + 1] * linear_u[j]
-                    rhs_g = rhs_g + self.dt * a[rk + 1, j + 1] * linear_g[j]
-                    rhs_v = rhs_v + self.dt * a[rk + 1, j + 1] * linear_v[j]
-                    rhs_w = rhs_w + self.dt * a[rk + 1, j + 1] * linear_w[j]
+                    rhs_u = rhs_u + dt * a[rk + 1, j + 1] * linear_u[j]
+                    rhs_g = rhs_g + dt * a[rk + 1, j + 1] * linear_g[j]
+                    rhs_v = rhs_v + dt * a[rk + 1, j + 1] * linear_v[j]
+                    rhs_w = rhs_w + dt * a[rk + 1, j + 1] * linear_w[j]
                     rhs_A = [
-                        rhs_A[i] + self.dt * a[rk + 1, j + 1] * linear_A[j][i]
+                        rhs_A[i] + dt * a[rk + 1, j + 1] * linear_A[j][i]
                         for i in range(3)
                     ]
 
-            u0_new = self._solve_prefactor(self.Su_factor, self.TB.mask_nyquist(rhs_u))
-            g_new = self._solve_prefactor(self.Sg_factor, self.TD.mask_nyquist(rhs_g))
-            v00_new = self._solve_prefactor(self.S00_factor, rhs_v)
-            w00_new = self._solve_prefactor(self.S00_factor, rhs_w)
+            u0_new = self._solve_prefactor(
+                self.Su_factor, self.TB.mask_nyquist(rhs_u), su_args
+            )
+            g_new = self._solve_prefactor(
+                self.Sg_factor, self.TD.mask_nyquist(rhs_g), sg_args
+            )
+            v00_new = self._solve_prefactor(self.S00_factor, rhs_v, s00_args)
+            w00_new = self._solve_prefactor(self.S00_factor, rhs_w, s00_args)
             u_new = self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new)
-            A_stage = self._A_solve(rhs_A)
+            A_stage = self._A_solve(rhs_A, a_args)
             flow_stage = KMMState(u=u_new, g=g_new)
 
-        return MHDState(flow=flow_stage, A=A_stage)
+        flow_stage = KMMState(
+            u=flow_stage.u,
+            g=flow_stage.g,
+            nonlinear_old=state.flow.nonlinear_old,
+            have_old=state.flow.have_old,
+            previous_dt=state.flow.previous_dt,
+        )
+        return MHDState(
+            flow=flow_stage,
+            A=A_stage,
+            nonlinear_A_old=state.nonlinear_A_old,
+        )
 
     def set_dt(self, dt: float) -> None:
         super().set_dt(dt)
         self._build_A_operators()
 
     def solve(self, state: MHDState, steps: int) -> MHDState:
-        return self._rollout_cache(state, int(steps))
+        return self._rollout_cache(self._ensure_mhd_history(state), int(steps))
 
     def magnetic_divergence_l2(self, state: MHDState) -> Array:
         B = self.update_B_from_A(state.A)
