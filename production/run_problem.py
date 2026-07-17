@@ -62,7 +62,9 @@ try:
     )
     from .wandb_sink import WandbUnavailableError
 except ImportError:  # pragma: no cover - direct script mode
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    _repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(_repo_root / "src"))
+    sys.path.insert(0, str(_repo_root))
     from production.adapters import ProductionConfig, load_config  # type: ignore
     from production.adaptive import adaptive_cfl_from_spec  # type: ignore
     from production.compare_goldens import (

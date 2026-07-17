@@ -32,14 +32,20 @@ class ProductionOracleNotImplementedError(NotImplementedError):
 
 
 _PCF_KMM_TIME_INTEGRATORS = frozenset({"IMEXRK222", "IMEXRK3", "CNAB2"})
+_PCF_VECTOR_POTENTIAL_TIME_INTEGRATORS = frozenset({"IMEXRK222", "CNAB2"})
 
 
-def _pcf_kmm_time_integrator(spec: dict[str, Any], *, solver_family: str) -> str:
+def _pcf_kmm_time_integrator(
+    spec: dict[str, Any],
+    *,
+    solver_family: str,
+    supported_integrators: frozenset[str] = _PCF_KMM_TIME_INTEGRATORS,
+) -> str:
     """Return a KMM integrator or reject the spec before solver allocation."""
 
     integrator = str(spec["time"]["integrator"])
-    if integrator not in _PCF_KMM_TIME_INTEGRATORS:
-        supported = ", ".join(sorted(_PCF_KMM_TIME_INTEGRATORS))
+    if integrator not in supported_integrators:
+        supported = ", ".join(sorted(supported_integrators))
         raise ProductionOracleNotImplementedError(
             f"{solver_family} requires a time-stepping integrator "
             f"({supported}); got time.integrator={integrator!r}"
@@ -480,12 +486,14 @@ def run_supported_spec(
     stationarity/classification analysis window.
     """
 
-    uses_pcf_kmm = spec["geometry"] == "pcf" and (
-        spec.get("representation") == "vector_potential"
-        or spec.get("problem_id") == "pcf_fluct_re400"
-    )
-    if uses_pcf_kmm:
-        _pcf_kmm_time_integrator(spec, solver_family="PCF KMM production DNS")
+    if spec["geometry"] == "pcf" and spec.get("representation") == "vector_potential":
+        _pcf_kmm_time_integrator(
+            spec,
+            solver_family="PCF vector-potential MHD/MRI",
+            supported_integrators=_PCF_VECTOR_POTENTIAL_TIME_INTEGRATORS,
+        )
+    elif spec["geometry"] == "pcf" and spec.get("problem_id") == "pcf_fluct_re400":
+        _pcf_kmm_time_integrator(spec, solver_family="PCF hydrodynamic KMM")
 
     validate_quench_duration_request(
         quench=quench,
@@ -1702,7 +1710,9 @@ def _curl_solver_from_spec(spec: dict[str, Any]):
     """Construct the vector-potential workhorse exactly as the oracle does."""
 
     time_integrator = _pcf_kmm_time_integrator(
-        spec, solver_family="PCF vector-potential MHD/MRI"
+        spec,
+        solver_family="PCF vector-potential MHD/MRI",
+        supported_integrators=_PCF_VECTOR_POTENTIAL_TIME_INTEGRATORS,
     )
     from examples.pcf_mhd_mri_shearpy_jax import (
         PlaneCouetteMRIShearpyInsulatingJax,

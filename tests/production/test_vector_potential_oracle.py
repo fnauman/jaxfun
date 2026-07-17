@@ -555,7 +555,7 @@ def test_vector_potential_snapshot_writes_fields(tmp_path):
             assert field in joined
 
 
-@pytest.mark.parametrize("integrator", ["analytic", "linear_eigenproblem"])
+@pytest.mark.parametrize("integrator", ["analytic", "linear_eigenproblem", "IMEXRK3"])
 def test_vector_potential_rejects_non_time_stepping_integrator_early(
     integrator,
 ) -> None:
@@ -564,6 +564,6 @@ def test_vector_potential_rejects_non_time_stepping_integrator_early(
 
     with pytest.raises(
         ProductionOracleNotImplementedError,
-        match=r"PCF KMM production DNS requires a time-stepping integrator",
+        match=r"PCF vector-potential MHD/MRI requires a time-stepping integrator",
     ):
         run_supported_spec(spec, steps=0)

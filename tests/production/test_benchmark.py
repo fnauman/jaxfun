@@ -82,9 +82,11 @@ class _MockCachedProductionSolver(_MockProductionSolver):
         self.hits = 0
         self.misses = 0
         self.live_entries = 0
+        self.solve_inputs = []
 
     def solve(self, state, steps):
         self.solve_calls += 1
+        self.solve_inputs.append(state)
         if self.live_entries:
             self.hits += 1
         else:
@@ -138,8 +140,15 @@ def test_benchmark_rejects_nonpositive_rollout_length():
 
 
 def test_benchmark_probes_dt_transitions_without_new_rollout_variant():
+    built = []
+
+    def build():
+        solver = _MockCachedProductionSolver()
+        built.append(solver)
+        return solver
+
     timing = benchmark_step(
-        _MockCachedProductionSolver,
+        build,
         label="cached-production-mock",
         warmup_steps=0,
         timed_steps=1,
@@ -153,6 +162,7 @@ def test_benchmark_probes_dt_transitions_without_new_rollout_variant():
     assert probe["rollout_cache_misses_delta"] == 0
     assert probe["reused_compiled_variant"] is True
     assert timing.rollout_cache_info == {"hits": 4, "misses": 1, "live_entries": 1}
+    assert built[0].solve_inputs[-3:] == [4, 4, 4]
 
 
 def test_benchmark_rejects_negative_dt_transition_probes():

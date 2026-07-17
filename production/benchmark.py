@@ -138,7 +138,13 @@ def _persistent_cache_delta(
 def _probe_dt_transitions(
     solver: Any, state: Any, *, rollout_steps: int, transitions: int
 ) -> tuple[Any, dict[str, Any] | None]:
-    """Exercise same-shape factor updates and report rollout-cache reuse."""
+    """Exercise same-shape factor updates and report rollout-cache reuse.
+
+    Each transition starts from the same immutable input state. This keeps the
+    probe valid for fixed-step multistep solvers: their first probe block can
+    bootstrap its history at the new ``dt`` instead of consuming history from
+    a different timestep. The production state is returned unchanged.
+    """
 
     set_dt = getattr(solver, "set_dt", None)
     before = _rollout_cache_info(solver)
@@ -148,8 +154,8 @@ def _probe_dt_transitions(
     dt_values = [base_dt * (0.80 + 0.05 * index) for index in range(transitions)]
     for dt_value in dt_values:
         set_dt(dt_value)
-        state = _advance(solver, state, rollout_steps)
-        _block_until_ready(state)
+        probe_state = _advance(solver, state, rollout_steps)
+        _block_until_ready(probe_state)
     set_dt(base_dt)
     after = _rollout_cache_info(solver)
     assert after is not None
