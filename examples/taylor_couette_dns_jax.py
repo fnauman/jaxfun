@@ -109,7 +109,7 @@ class AxisymmetricTCState:
     u: Velocity
     p: Array
     nonlinear_old: Velocity
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
 
     def tree_flatten(self):
         return (
@@ -136,7 +136,7 @@ class AxisymmetricMRIState:
     x: MHDFields
     p: Array
     nonlinear_old: MHDFields
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
 
     def tree_flatten(self):
         return (
@@ -405,13 +405,13 @@ class AxisymmetricTCDNSJax:
         u = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VV)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(ui) for ui in u)
-        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: Velocity) -> AxisymmetricTCState:
         u = tuple(self.TD.forward(value) for value in values)
         p = jnp.zeros(self.TP.num_dofs, dtype=u[0].dtype)
         nold = tuple(jnp.zeros_like(ui) for ui in u)
-        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricTCState(u=u, p=p, nonlinear_old=nold, have_old=0.0)
 
     def initial_state(
         self, amp: float = 1.0e-3, kz_mode: int = 1
@@ -529,7 +529,7 @@ class AxisymmetricTCDNSJax:
             u=(sol[0], sol[1], sol[2]),
             p=sol[3],
             nonlinear_old=n_hat,
-            have_old=True,
+            have_old=jnp.ones_like(state.have_old),
         )
 
     def set_dt(self, dt: float) -> None:
@@ -1124,7 +1124,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         x = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VE)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: MHDFields) -> AxisymmetricMRIState:
         spaces = (self.TD, self.TD, self.TD, self.TD, self.Tbt, self.Tbz)
@@ -1133,7 +1133,7 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=x[0].dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricMRIState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def _phys_mhd(self, coeff: Array, space) -> tuple[Array, Array, Array]:
         N = self.padded_counts
@@ -1222,7 +1222,9 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
         sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
-        return AxisymmetricMRIState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
+        return AxisymmetricMRIState(
+            x=x, p=sol[3], nonlinear_old=n_hat, have_old=jnp.ones_like(state.have_old)
+        )
 
     def solve(self, state: AxisymmetricMRIState, steps: int) -> AxisymmetricMRIState:
         return self._rollout_cache(state, int(steps))

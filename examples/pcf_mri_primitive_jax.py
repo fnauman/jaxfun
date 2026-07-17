@@ -88,7 +88,7 @@ class AxisymmetricPCFState:
     x: MHDFields
     p: Array
     nonlinear_old: MHDFields
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
 
     def tree_flatten(self):
         return (
@@ -396,7 +396,7 @@ class AxisymmetricPCFMRIDNSJax:
         x = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VE)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: MHDFields) -> AxisymmetricPCFState:
         spaces = (self.TD, self.TD, self.TD, self.TD, self.TN, self.TN)
@@ -405,7 +405,7 @@ class AxisymmetricPCFMRIDNSJax:
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=x[0].dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def _phys_mhd(self, coeff: Array, space) -> tuple[Array, Array, Array]:
         N = self.padded_counts
@@ -484,7 +484,9 @@ class AxisymmetricPCFMRIDNSJax:
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
         sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
-        return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
+        return AxisymmetricPCFState(
+            x=x, p=sol[3], nonlinear_old=n_hat, have_old=jnp.ones_like(state.have_old)
+        )
 
     def set_dt(self, dt: float) -> None:
         """Adopt a new timestep and retire obsolete compiled rollouts."""
@@ -1021,7 +1023,7 @@ class PCFMRIDNSJax:
         x = tuple(jnp.zeros(space.num_dofs, dtype=self.Limp.dtype) for space in self.VE)
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, values: MHDFields) -> AxisymmetricPCFState:
         spaces = (self.TD, self.TD, self.TD, self.Tbx, self.Tby, self.Tbz)
@@ -1030,7 +1032,7 @@ class PCFMRIDNSJax:
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=x[0].dtype)
         nold = tuple(jnp.zeros_like(xi) for xi in x)
-        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=False)
+        return AxisymmetricPCFState(x=x, p=p, nonlinear_old=nold, have_old=0.0)
 
     def _phys_mhd(self, coeff: Array, space) -> tuple[Array, Array, Array, Array]:
         N = self.padded_counts
@@ -1128,7 +1130,9 @@ class PCFMRIDNSJax:
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
         sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
-        return AxisymmetricPCFState(x=x, p=sol[3], nonlinear_old=n_hat, have_old=True)
+        return AxisymmetricPCFState(
+            x=x, p=sol[3], nonlinear_old=n_hat, have_old=jnp.ones_like(state.have_old)
+        )
 
     def set_dt(self, dt: float) -> None:
         """Adopt a new timestep and retire obsolete compiled rollouts."""

@@ -49,7 +49,7 @@ class KMMState:
     u: Velocity
     g: Array
     nonlinear_old: KMMNonlinear | None = None
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
     previous_dt: float | Array = 0.0
 
     def tree_flatten(self):
@@ -452,7 +452,7 @@ class KMM:
             u=state.u,
             g=state.g,
             nonlinear_old=nonlinear_old,
-            have_old=False,
+            have_old=jnp.zeros_like(state.have_old),
             previous_dt=jnp.asarray(0.0, dtype=jnp.real(state.g).dtype),
         )
 
@@ -683,7 +683,7 @@ class KMM:
             u=self._reconstruct_velocity(u0_new, g_new, v00_new, w00_new),
             g=g_new,
             nonlinear_old=current,
-            have_old=True,
+            have_old=jnp.ones_like(state.have_old),
             previous_dt=dt,
         )
 

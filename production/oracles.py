@@ -318,7 +318,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
                 if "nonlinear_old" not in payload
                 else tuple(payload["nonlinear_old"])
             ),
-            have_old=jnp.asarray(payload.get("have_old", False), dtype=jnp.bool_),
+            have_old=jnp.asarray(payload.get("have_old", 0.0), dtype=jnp.float32),
             previous_dt=payload.get("previous_dt", 0.0),
         )
     if state_kind in {"axisymmetric_tc_hydro", "axisymmetric_tc_hydro_saturation"}:
@@ -328,7 +328,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             u=tuple(payload["u"]),
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.float32),
         )
     if state_kind in {"axisymmetric_tc_mhd", "axisymmetric_tc_mhd_saturation"}:
         from examples.taylor_couette_dns_jax import AxisymmetricMRIState
@@ -337,7 +337,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             x=tuple(payload["x"]),
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.float32),
         )
     if state_kind in {"axisymmetric_pcf_primitive", "pcf_primitive_mhd_saturation"}:
         from examples.pcf_mri_primitive_jax import AxisymmetricPCFState
@@ -346,7 +346,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             x=tuple(payload["x"]),
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.float32),
         )
     if state_kind == "pcf_vector_potential_mhd_saturation":
         from examples.channelflow_kmm import KMMState
@@ -362,7 +362,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
                     else tuple(payload["flow_nonlinear_old"])
                 ),
                 have_old=jnp.asarray(
-                    payload.get("flow_have_old", False), dtype=jnp.bool_
+                    payload.get("flow_have_old", 0.0), dtype=jnp.float32
                 ),
                 previous_dt=payload.get("flow_previous_dt", 0.0),
             ),
@@ -381,7 +381,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             p=payload["p"],
             A=tuple(payload["A"]),
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.float32),
         )
     raise ValueError(f"unsupported resume state_kind {state_kind!r}")
 
@@ -4283,7 +4283,7 @@ def _pcf_state_from_components(template: Any, x: tuple[Any, ...]) -> Any:
         x=x,
         p=jnp.zeros_like(template.p),
         nonlinear_old=tuple(jnp.zeros_like(component) for component in x),
-        have_old=False,
+        have_old=0.0,
     )
 
 

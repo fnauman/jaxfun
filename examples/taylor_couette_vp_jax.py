@@ -143,7 +143,7 @@ class TCVPState:
     p: Array
     A: Velocity
     nonlinear_old: tuple[Array, ...]
-    have_old: bool | Array = False
+    have_old: float | Array = 0.0
 
     def tree_flatten(self):
         return (
@@ -684,7 +684,7 @@ class TaylorCouetteVPMRIDNSJax:
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp_modes.dtype)
         nold = tuple(jnp.zeros_like(x) for x in (*u, *A))
-        return TCVPState(u=u, p=p, A=A, nonlinear_old=nold, have_old=False)
+        return TCVPState(u=u, p=p, A=A, nonlinear_old=nold, have_old=0.0)
 
     def state_from_physical(self, u_phys: Velocity, a_phys: Velocity) -> TCVPState:
         u = tuple(self.TD.forward(v) for v in u_phys)
@@ -694,7 +694,7 @@ class TaylorCouetteVPMRIDNSJax:
         )
         p = jnp.zeros(self.TP.num_dofs, dtype=u[0].dtype)
         nold = tuple(jnp.zeros_like(x) for x in (*u, *A))
-        return TCVPState(u=u, p=p, A=A, nonlinear_old=nold, have_old=False)
+        return TCVPState(u=u, p=p, A=A, nonlinear_old=nold, have_old=0.0)
 
     # ------------------------------------------------------------------
     # physics evaluation
@@ -881,7 +881,7 @@ class TaylorCouetteVPMRIDNSJax:
             p=sol[3],
             A=(sol[4], sol[5], sol[6]),
             nonlinear_old=n_hat,
-            have_old=True,
+            have_old=jnp.ones_like(state.have_old),
         )
 
     def _step_with_operators(
@@ -1216,7 +1216,7 @@ class TaylorCouetteVPMRIDNSJax:
                 p=state.p,
                 A=tuple(comps_a),
                 nonlinear_old=nold,
-                have_old=False,
+                have_old=0.0,
             ),
             complex(w[which]),
         )
@@ -1257,7 +1257,7 @@ class TaylorCouetteVPMRIDNSJax:
             p=state.p,
             A=A,
             nonlinear_old=state.nonlinear_old,
-            have_old=False,
+            have_old=0.0,
         )
 
 

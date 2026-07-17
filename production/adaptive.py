@@ -90,7 +90,7 @@ def _reset_multistep_history(state: Any) -> Any:
     if hasattr(previous_dt_owner, "previous_dt"):
         return state
     if dataclasses.is_dataclass(state) and hasattr(state, "have_old"):
-        return dataclasses.replace(state, have_old=False)
+        return dataclasses.replace(state, have_old=0.0)
     return state
 
 
