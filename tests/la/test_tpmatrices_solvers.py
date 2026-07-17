@@ -191,6 +191,23 @@ def test_wavenumber_solver_pivot_handles_zero_diagonal():
     assert jnp.allclose(actual, ref, rtol=1.0e-13, atol=1.0e-13)
 
 
+@pytest.mark.spmd
+def test_batched_wavenumber_solver_rejects_nondivisible_fourier_modes():
+    if jax.device_count() < 2:
+        pytest.skip("requires --num-devices=2")
+
+    dense = jnp.asarray([[2.0, 1.0], [1.0, 2.0]])
+    dia = DiaMatrix.from_dense(dense, offsets=(-1, 0, 1))
+    data = jnp.broadcast_to(dia.data, (3, *dia.data.shape))
+    with pytest.raises(ValueError, match="must be divisible"):
+        TPMatricesWavenumberSolver(
+            poly_axis=1,
+            shape=(3, 2),
+            B_data_batch=data,
+            poly_offsets=dia.offsets,
+        )
+
+
 def test_wavenumber_solver_constraints_pin_matrix_row_and_rhs():
     dense = jnp.asarray([[2.0, 1.0], [1.0, 2.0]])
     dia = DiaMatrix.from_dense(dense, offsets=(-1, 0, 1))

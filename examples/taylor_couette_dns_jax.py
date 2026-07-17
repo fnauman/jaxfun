@@ -52,7 +52,12 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo, cnab2_rhs
+from jaxfun.integrators.cnab2 import (
+    ScanRolloutCache,
+    ScanRolloutCacheInfo,
+    batch_components,
+    cnab2_rhs,
+)
 from jaxfun.io import Cadence, run_with_cadence
 
 type Velocity = tuple[Array, Array, Array]
@@ -478,7 +483,7 @@ class AxisymmetricTCDNSJax:
 
         Reference: ``couette/taylor_couette_dns.py:251-272``.
         """
-        values, radial, axial = jax.vmap(self._phys)(jnp.stack(state.u))
+        values, radial, axial = batch_components(self._phys, state.u)
         ur, ut, uz = values
         urr, utr, uzr = radial
         urz, utz, uzz = axial
@@ -789,7 +794,7 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         return value, radial, theta, axial
 
     def nonlinear(self, state: AxisymmetricTCState) -> Velocity:
-        values, radial, theta, axial = jax.vmap(self._phys)(jnp.stack(state.u))
+        values, radial, theta, axial = batch_components(self._phys, state.u)
         ur, ut, uz = values
         urr, utr, uzr = radial
         urt, utt, uzt = theta
@@ -1146,16 +1151,16 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         return self._dealias_to_standard(values)
 
     def nonlinear(self, state: AxisymmetricMRIState) -> MHDFields:
-        td_values, td_radial, td_axial = jax.vmap(
-            lambda coeff: self._phys_mhd(coeff, self.TD)
-        )(jnp.stack(state.x[:4]))
+        td_values, td_radial, td_axial = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:4]
+        )
         ur, ut, uz, br = td_values
         urr, utr, uzr, brr = td_radial
         urz, utz, uzz, brz = td_axial
         if self.Tbt is self.Tbz:
-            b_values, b_radial, b_axial = jax.vmap(
-                lambda coeff: self._phys_mhd(coeff, self.Tbt)
-            )(jnp.stack(state.x[4:]))
+            b_values, b_radial, b_axial = batch_components(
+                lambda coeff: self._phys_mhd(coeff, self.Tbt), state.x[4:]
+            )
             bt, bz = b_values
             btr, bzr = b_radial
             btz, bzz = b_axial
@@ -1558,17 +1563,17 @@ class TaylorCouetteMRIDNSJax(AxisymmetricMRIDNSJax):
         return value, radial, theta, axial
 
     def nonlinear(self, state: AxisymmetricMRIState) -> MHDFields:
-        td_values, td_radial, td_theta, td_axial = jax.vmap(
-            lambda coeff: self._phys_mhd(coeff, self.TD)
-        )(jnp.stack(state.x[:4]))
+        td_values, td_radial, td_theta, td_axial = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:4]
+        )
         ur, ut, uz, br = td_values
         urr, utr, uzr, brr = td_radial
         urt, utt, uzt, brt = td_theta
         urz, utz, uzz, brz = td_axial
         if self.Tbt is self.Tbz:
-            b_values, b_radial, b_theta, b_axial = jax.vmap(
-                lambda coeff: self._phys_mhd(coeff, self.Tbt)
-            )(jnp.stack(state.x[4:]))
+            b_values, b_radial, b_theta, b_axial = batch_components(
+                lambda coeff: self._phys_mhd(coeff, self.Tbt), state.x[4:]
+            )
             bt, bz = b_values
             btr, bzr = b_radial
             btt, bzt = b_theta

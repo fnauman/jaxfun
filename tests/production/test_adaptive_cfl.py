@@ -10,6 +10,7 @@ time is accounted exactly, and every adaptation is recorded.
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import jax
@@ -33,6 +34,17 @@ from production.oracles import (
 from production.quench import QuenchError
 
 SOLENOIDAL_CEIL = 1.0e-12
+
+
+@dataclass(frozen=True)
+class _FixedStepHistory:
+    have_old: bool
+
+
+@dataclass(frozen=True)
+class _VariableStepHistory:
+    have_old: bool
+    previous_dt: float
 
 
 def _vp_spec(time_block):
@@ -102,6 +114,47 @@ def test_proposed_dt_shrinks_grows_and_holds():
     assert _proposed_dt(1.0e-2, 0.05, config2) == pytest.approx(1.2e-2)
     # Nonfinite CFL: hold rather than act on garbage.
     assert _proposed_dt(1.0e-2, float("nan"), config) is None
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_have_old"),
+    [
+        (_FixedStepHistory(have_old=True), False),
+        (_VariableStepHistory(have_old=True, previous_dt=0.75), True),
+    ],
+    ids=["fixed-step-resets", "variable-step-preserves"],
+)
+def test_adaptive_dt_change_reconciles_multistep_history(
+    state, expected_have_old
+) -> None:
+    class Solver:
+        def __init__(self):
+            self.dt = 1.0
+            self.seen_have_old = []
+
+        def set_dt(self, dt):
+            self.dt = float(dt)
+
+        def solve(self, current_state, _steps):
+            self.seen_have_old.append(current_state.have_old)
+            return current_state
+
+    solver = Solver()
+    run_adaptive_cfl(
+        solver,
+        state,
+        elapsed_target=0.5625,
+        config=AdaptiveCFLConfig(
+            target=0.5,
+            safety=0.9,
+            dt_min=0.1,
+            dt_max=2.0,
+            check_every=1,
+        ),
+        health_scalars_fn=lambda _solver, _state: {"cfl_total": 0.8},
+    )
+
+    assert solver.seen_have_old == [expected_have_old]
 
 
 def test_adaptive_horizon_uses_final_time_without_initial_dt_quantization():

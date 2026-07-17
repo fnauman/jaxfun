@@ -1128,6 +1128,12 @@ class TPMatricesWavenumberSolver:
                     )
                 n_total = len(jax.devices())
                 n_local = jax.local_device_count()
+                if n_F % n_total != 0:
+                    raise ValueError(
+                        "Number of Fourier modes (n_F) must be divisible by total "
+                        "number of devices for multi-process solve. "
+                        f"Got n_F={n_F}, n_total={n_total}."
+                    )
                 n_F_per_device = n_F // n_total
                 proc_dev_offset = jax.process_index() * n_local
                 k_start = proc_dev_offset * n_F_per_device

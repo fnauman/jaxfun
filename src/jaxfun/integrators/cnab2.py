@@ -83,7 +83,7 @@ class ScanRolloutCache[T]:
         if steps == 0:
             return state
         dynamic_args = tuple(self._dynamic_args())
-        if jax.device_count() > 1 or _has_concrete_multi_device_leaf(state):
+        if jax.device_count() > 1 or has_concrete_multi_device_leaf(state):
             return scan_steps(self._step, state, steps, *dynamic_args)
 
         rollout = self._rollouts.pop(steps, None)
@@ -136,7 +136,7 @@ class ScanRolloutCache[T]:
         if (
             steps == 0
             or jax.device_count() > 1
-            or _has_concrete_multi_device_leaf(state)
+            or has_concrete_multi_device_leaf(state)
         ):
             return None
         rollout = self._rollouts.get(steps)
@@ -151,7 +151,9 @@ class ScanRolloutCache[T]:
         )
 
 
-def _has_concrete_multi_device_leaf(tree: object) -> bool:
+def has_concrete_multi_device_leaf(tree: object) -> bool:
+    """Return whether a concrete pytree leaf spans multiple JAX devices."""
+
     for leaf in jax.tree.leaves(tree):
         devices = getattr(leaf, "devices", None)
         if devices is None:
@@ -162,6 +164,24 @@ def _has_concrete_multi_device_leaf(tree: object) -> bool:
         except (jax.errors.ConcretizationTypeError, TypeError, AttributeError):
             continue
     return False
+
+
+def batch_components(
+    fn: Callable[[object], object], values: tuple[object, ...]
+) -> object:
+    """Batch component transforms without collapsing concrete sharding.
+
+    Vmap is the fast single-device path. For concrete multi-device arrays,
+    applying the transform component-by-component preserves each transform's
+    explicit sharding. Transposing the result pytrees into tuples avoids
+    introducing a leading component axis that would change which axis a
+    spectral NamedSharding partitions.
+    """
+
+    if jax.device_count() > 1 or has_concrete_multi_device_leaf(values):
+        transformed = tuple(fn(value) for value in values)
+        return jax.tree.map(lambda *leaves: tuple(leaves), *transformed)
+    return jax.vmap(fn)(jnp.stack(values))
 
 
 def ab2_extrapolate(current: T, previous: T, have_previous: bool | jax.Array) -> T:
@@ -250,7 +270,7 @@ def scan_steps(
         raise ValueError("steps must be non-negative")
     if steps == 0:
         return state
-    if jax.device_count() > 1 or _has_concrete_multi_device_leaf(state):
+    if jax.device_count() > 1 or has_concrete_multi_device_leaf(state):
         out = state
         for _ in range(steps):
             out = step(out, *dynamic_args)

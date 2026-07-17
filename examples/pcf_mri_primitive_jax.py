@@ -40,7 +40,12 @@ from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.inner import integrate
 from jaxfun.galerkin.Legendre import Legendre
-from jaxfun.integrators.cnab2 import ScanRolloutCache, ScanRolloutCacheInfo, cnab2_rhs
+from jaxfun.integrators.cnab2 import (
+    ScanRolloutCache,
+    ScanRolloutCacheInfo,
+    batch_components,
+    cnab2_rhs,
+)
 from jaxfun.io import Cadence, run_with_cadence
 from jaxfun.la import TPMatrices, TPMatrix
 
@@ -421,15 +426,15 @@ class AxisymmetricPCFMRIDNSJax:
         return self.T0.backward(coeff)
 
     def nonlinear(self, state: AxisymmetricPCFState) -> MHDFields:
-        td_values, td_dx, td_dz = jax.vmap(
-            lambda coeff: self._phys_mhd(coeff, self.TD)
-        )(jnp.stack(state.x[:4]))
+        td_values, td_dx, td_dz = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:4]
+        )
         ux, uy, uz, bx = td_values
         uxx, uyx, uzx, bxx = td_dx
         uxz, uyz, uzz, bxz = td_dz
-        tangential, tangential_dx, tangential_dz = jax.vmap(
-            lambda coeff: self._phys_mhd(coeff, self.TN)
-        )(jnp.stack(state.x[4:]))
+        tangential, tangential_dx, tangential_dz = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TN), state.x[4:]
+        )
         by, bz = tangential
         byx, bzx = tangential_dx
         byz, bzz = tangential_dz
@@ -1047,18 +1052,18 @@ class PCFMRIDNSJax:
         return self.T0.backward(coeff)
 
     def nonlinear(self, state: AxisymmetricPCFState) -> MHDFields:
-        u_values, u_dx, u_dy, u_dz = jax.vmap(
-            lambda coeff: self._phys_mhd(coeff, self.TD)
-        )(jnp.stack(state.x[:3]))
+        u_values, u_dx, u_dy, u_dz = batch_components(
+            lambda coeff: self._phys_mhd(coeff, self.TD), state.x[:3]
+        )
         ux, uy, uz = u_values
         uxx, uyx, uzx = u_dx
         uxy, uyy, uzy = u_dy
         uxz, uyz, uzz = u_dz
         bx, bxx, bxy, bxz = self._phys_mhd(state.x[3], self.Tbx)
         if self.Tby is self.Tbz:
-            b_values, b_dx, b_dy, b_dz = jax.vmap(
-                lambda coeff: self._phys_mhd(coeff, self.Tby)
-            )(jnp.stack(state.x[4:]))
+            b_values, b_dx, b_dy, b_dz = batch_components(
+                lambda coeff: self._phys_mhd(coeff, self.Tby), state.x[4:]
+            )
             by, bz = b_values
             byx, bzx = b_dx
             byy, bzy = b_dy
