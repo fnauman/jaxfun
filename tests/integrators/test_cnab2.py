@@ -7,6 +7,7 @@ from jaxfun.integrators.cnab2 import (
     ab2_extrapolate,
     cnab2_rhs,
     scan_steps,
+    variable_ab2_extrapolate,
 )
 
 
@@ -110,3 +111,33 @@ def test_scan_rollout_cache_rebind_drops_obsolete_variants():
     state = cache(state, 3)
     assert int(state) == 10
     assert cache.info().live_entries == 1
+
+
+def test_scan_rollout_cache_passes_runtime_arguments_without_new_variant():
+    runtime = {"increment": jnp.asarray(1)}
+    cache = ScanRolloutCache(
+        lambda value, increment: value + increment,
+        dynamic_args=lambda: (runtime["increment"],),
+    )
+
+    state = cache(jnp.asarray(0), 2)
+    assert int(state) == 2
+
+    runtime["increment"] = jnp.asarray(3)
+    state = cache(state, 2)
+    assert int(state) == 8
+
+    info = cache.info()
+    assert info.live_entries == 1
+    assert info.misses == 1
+
+
+def test_variable_ab2_extrapolate_uses_step_ratio_and_safe_bootstrap() -> None:
+    current = jnp.asarray([2.0, 4.0])
+    previous = jnp.asarray([1.0, 3.0])
+
+    bootstrap = variable_ab2_extrapolate(current, previous, False, 0.5, 0.0)
+    unequal = variable_ab2_extrapolate(current, previous, True, 0.5, 0.25)
+
+    assert jnp.array_equal(bootstrap, current)
+    assert jnp.allclose(unequal, 2.0 * current - previous)

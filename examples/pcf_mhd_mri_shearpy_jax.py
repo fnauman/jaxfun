@@ -53,6 +53,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         magnetic_amplitude: float = 0.0,
         magnetic_seed: str = "ax_yz",
         solenoidal_velocity_seed: bool = False,
+        time_integrator: str | None = None,
     ) -> None:
         self.omega = float(omega)
         self.shear_rate = float(shear_rate)
@@ -77,6 +78,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             padding_factor=padding_factor,
             perturbation_amplitude=perturbation_amplitude,
             magnetic_amplitude=magnetic_amplitude,
+            time_integrator=time_integrator,
         )
         self.Ub = -self.shear_rate * self.X[0]
         self.Ubp = -self.shear_rate * self.Xp[0]
@@ -136,7 +138,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             ay = ay - (mag_amp * self.x_half_width / jnp.pi) * (
                 jnp.cos(jnp.pi * xi) + 1.0
             )
-        return MHDState(flow=flow, A=self._A_state_from_physical((ax, ay, az)))
+        return self._new_mhd_state(flow, self._A_state_from_physical((ax, ay, az)))
 
     def _total_B_physical(self, B, padded: bool = False):
         bp = self._backward_B(B, padded=padded)
@@ -164,7 +166,10 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         jp = self._backward_J(J, padded=True)
         lorentz = physical_cross(jp, bp_total)
         n = tuple(ni - li for ni, li in zip(n, lorentz, strict=True))
-        H = tuple(self.TD.mask_nyquist(self.TDp.forward(ni)) for ni in n)
+        transformed = jax.vmap(
+            lambda values: self.TD.mask_nyquist(self.TDp.forward(values))
+        )(jnp.stack(n))
+        H = (transformed[0], transformed[1], transformed[2])
 
         utotal = (up[0], up[1] + self.Ubp, up[2])
         emf = physical_cross(utotal, bp_total)
@@ -648,14 +653,26 @@ class PlaneCouetteMRIShearpyInsulatingJax(PlaneCouetteMRIShearpyJax):
         )(lu_mat, piv, modes)
         return jnp.moveaxis(sol, 0, 1).reshape(n, ny, nz)
 
-    def _A_solve(self, rhs):
-        ax = self.TD.mask_nyquist(self._solve_prefactor(self.SA_factor, rhs[0]))
+    def _A_runtime_args(self):
+        return (
+            self._factor_runtime_args(self.SA_factor),
+            self._A_P_lu,
+            self._A_Q_lu,
+        )
+
+    def _A_solve(self, rhs, runtime_args=None):
+        sa_args, p_lu, q_lu = (
+            self._A_runtime_args() if runtime_args is None else runtime_args
+        )
+        ax = self.TD.mask_nyquist(
+            self._solve_prefactor(self.SA_factor, rhs[0], sa_args)
+        )
         cy = self._A_cy[None, :, :]
         cz = self._A_cz[None, :, :]
         rhs_p = cy * rhs[1] + cz * rhs[2]
         rhs_q = cz * rhs[1] - cy * rhs[2]
-        p_new = self._A_bordered_solve(self._A_P_lu, rhs_p)
-        q_new = self._A_bordered_solve(self._A_Q_lu, rhs_q)
+        p_new = self._A_bordered_solve(p_lu, rhs_p)
+        q_new = self._A_bordered_solve(q_lu, rhs_q)
         ay = self.TC.mask_nyquist(cy * p_new + cz * q_new)
         az = self.TC.mask_nyquist(cz * p_new - cy * q_new)
         return (ax, ay, az)
@@ -746,7 +763,7 @@ class PlaneCouetteMRIShearpyInsulatingJax(PlaneCouetteMRIShearpyJax):
 
         flow = self.state_from_physical(tuple(field3d(p) for p in u_prof))
         A = self._A_state_from_physical(tuple(field3d(p) for p in (a_x, a_y, a_z)))
-        return MHDState(flow=flow, A=A), complex(w[which])
+        return self._new_mhd_state(flow, A), complex(w[which])
 
     def insulating_bc_residual(self, state: MHDState) -> jnp.ndarray:
         """Max wall residual of the vacuum-matching rows on b = curl(A).

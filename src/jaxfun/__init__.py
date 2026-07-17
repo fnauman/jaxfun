@@ -1,7 +1,11 @@
 # ruff: noqa: E402
 import os
 
+from _jaxfun_bootstrap import configure_simplified_jaxpr_constants
+
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+configure_simplified_jaxpr_constants()
+
 
 import jax
 
@@ -19,6 +23,25 @@ jax.config.update(
         default=True,
     ),
 )
+
+# Hoist closed-over array constants to executable arguments. Wall-bounded
+# solvers capture timestep-dependent banded factors; legacy lowering embeds
+# and constant-folds those arrays into multi-gigabyte executables. The JAX
+# setting preserves numerical semantics while keeping compilation/cache size
+# proportional to the program rather than the factor values. The environment
+# is set above before importing JAX because this lowering is initialized early.
+if hasattr(jax.config, "jax_use_simplified_jaxpr_constants"):
+    jax.config.update(
+        "jax_use_simplified_jaxpr_constants",
+        _env_truthy(
+            os.environ.get(
+                "JAXFUN_USE_SIMPLIFIED_JAXPR_CONSTANTS",
+                os.environ.get("JAX_USE_SIMPLIFIED_JAXPR_CONSTANTS"),
+            ),
+            default=True,
+        ),
+    )
+
 
 from . import galerkin as galerkin, integrators as integrators, pinns as pinns
 from .basespace import BaseSpace as BaseSpace

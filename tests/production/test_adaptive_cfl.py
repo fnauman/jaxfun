@@ -297,12 +297,13 @@ def test_exact_horizon_shorter_than_dt_min_is_rejected_before_solving():
 
 
 @pytest.mark.integration
-def test_adaptive_cadences_checkpoint_controller_and_resume(tmp_path):
+@pytest.mark.parametrize("integrator", ["IMEXRK222", "CNAB2"])
+def test_adaptive_cadences_checkpoint_controller_and_resume(tmp_path, integrator):
     import h5py
 
     spec = _vp_spec(
         {
-            "integrator": "IMEXRK222",
+            "integrator": integrator,
             "dt": 1.0e-3,
             "final_time": 0.01,
             "adaptive_cfl": {
@@ -333,6 +334,13 @@ def test_adaptive_cadences_checkpoint_controller_and_resume(tmp_path):
         int(np.asarray(checkpoint.fields["adaptive_controller"]["steps_until_check"]))
         == 1
     )
+    if integrator == "CNAB2":
+        assert {
+            "flow_nonlinear_old",
+            "flow_have_old",
+            "flow_previous_dt",
+            "nonlinear_A_old",
+        } <= set(checkpoint.fields["state"])
 
     out = run_supported_spec(
         spec,

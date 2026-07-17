@@ -12,6 +12,7 @@ its SHA256 are archived with the run.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -119,7 +120,33 @@ def _cuda_versions() -> dict[str, Any]:
     smi = _run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"])
     if smi:
         versions["nvidia_driver"] = smi.splitlines()[0].strip()
+
     return versions
+
+
+def _jax_runtime_config() -> dict[str, Any]:
+    """Capture compiler settings that affect executable identity and caching."""
+    try:
+        import jax
+
+        simplified = bool(
+            getattr(jax.config, "jax_use_simplified_jaxpr_constants", False)
+        )
+        return {
+            "jax_enable_x64": bool(jax.config.read("jax_enable_x64")),
+            "jax_use_simplified_jaxpr_constants": simplified,
+            "jax_use_simplified_jaxpr_constants_env": os.environ.get(
+                "JAX_USE_SIMPLIFIED_JAXPR_CONSTANTS"
+            ),
+            "jaxfun_use_simplified_jaxpr_constants": os.environ.get(
+                "JAXFUN_USE_SIMPLIFIED_JAXPR_CONSTANTS"
+            ),
+            "jaxfun_wavenumber_solver": os.environ.get(
+                "JAXFUN_WAVENUMBER_SOLVER", "jax"
+            ),
+        }
+    except Exception:  # pragma: no cover - provenance must remain best effort
+        return {}
 
 
 def _run(cmd: list[str]) -> str | None:
@@ -162,6 +189,7 @@ def capture_provenance() -> dict[str, Any]:
         ),
         "lockfile_sha256": _lockfile_sha256(),
         "versions": _cuda_versions(),
+        "jax_config": _jax_runtime_config(),
     }
 
 

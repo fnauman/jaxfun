@@ -38,32 +38,40 @@ class ScanRolloutCache[T]:
     Each distinct block length needs a static lax.scan executable for
     reverse-mode compatibility. The small LRU bounds those variants, while
     rebind clears every compiled executable when a solver rebuilds
-    timestep-dependent factors.
+    timestep-dependent factors. Runtime controller values may be supplied by
+    ``dynamic_args`` so adaptive changes do not alter the compiled program.
     """
 
-    def __init__(self, step: Callable[[T], T], *, max_entries: int = 8) -> None:
+    def __init__(
+        self,
+        step: Callable[..., T],
+        *,
+        max_entries: int = 8,
+        dynamic_args: Callable[[], tuple[object, ...]] | None = None,
+    ) -> None:
         if max_entries <= 0:
             raise ValueError("max_entries must be positive")
         self._step = step
         self._scan_step = jax.checkpoint(step)
+        self._dynamic_args = dynamic_args or tuple
         self._max_entries = int(max_entries)
-        self._rollouts: OrderedDict[int, Callable[[T], T]] = OrderedDict()
+        self._rollouts: OrderedDict[int, Callable[..., T]] = OrderedDict()
         self._generation = 0
         self._hits = 0
         self._misses = 0
         self._evictions = 0
 
-    def _compile_for_steps(self, steps: int) -> Callable[[T], T]:
+    def _compile_for_steps(self, steps: int) -> Callable[..., T]:
         step = self._scan_step
 
         @jax.jit
-        def rollout(state: T) -> T:
-            return scan_steps(step, state, steps)
+        def rollout(state: T, dynamic_args: tuple[object, ...]) -> T:
+            return scan_steps(step, state, steps, *dynamic_args)
 
         return rollout
 
     @staticmethod
-    def _clear_compiled(rollout: Callable[[T], T]) -> None:
+    def _clear_compiled(rollout: Callable[..., T]) -> None:
         clear_cache = getattr(rollout, "clear_cache", None)
         if clear_cache is not None:
             clear_cache()
@@ -74,8 +82,9 @@ class ScanRolloutCache[T]:
             raise ValueError("steps must be non-negative")
         if steps == 0:
             return state
+        dynamic_args = tuple(self._dynamic_args())
         if jax.device_count() > 1 or _has_concrete_multi_device_leaf(state):
-            return scan_steps(self._step, state, steps)
+            return scan_steps(self._step, state, steps, *dynamic_args)
 
         rollout = self._rollouts.pop(steps, None)
         if rollout is None:
@@ -88,9 +97,9 @@ class ScanRolloutCache[T]:
         else:
             self._hits += 1
         self._rollouts[steps] = rollout
-        return rollout(state)
+        return rollout(state, dynamic_args)
 
-    def rebind(self, step: Callable[[T], T]) -> None:
+    def rebind(self, step: Callable[..., T]) -> None:
         """Drop obsolete executables and bind a rebuilt solver step."""
         for rollout in self._rollouts.values():
             self._clear_compiled(rollout)
@@ -109,6 +118,36 @@ class ScanRolloutCache[T]:
             hits=self._hits,
             misses=self._misses,
             evictions=self._evictions,
+        )
+
+    def compiled_memory_analysis(self, state: T, steps: int) -> object | None:
+        """Return XLA memory analysis for an already-cached rollout.
+
+        Benchmarking production must inspect the same compiled ``solve`` graph
+        used by the time integrator. Reconstructing a separate jitted scan can
+        hide constant-capture and executable-size regressions, so expose this
+        narrow read-only hook while keeping the cached callable private.
+
+        ``None`` is returned for zero-step and concrete multi-device rollouts,
+        which do not use the single-device executable cache.
+        """
+
+        steps = int(steps)
+        if (
+            steps == 0
+            or jax.device_count() > 1
+            or _has_concrete_multi_device_leaf(state)
+        ):
+            return None
+        rollout = self._rollouts.get(steps)
+        if rollout is None:
+            raise ValueError(
+                f"rollout for {steps} steps is not cached; execute it before analysis"
+            )
+        return (
+            rollout.lower(state, tuple(self._dynamic_args()))
+            .compile()
+            .memory_analysis()
         )
 
 
@@ -149,6 +188,37 @@ def ab2_extrapolate(current: T, previous: T, have_previous: bool | jax.Array) ->
     )
 
 
+def variable_ab2_extrapolate(
+    current: T,
+    previous: T,
+    have_previous: bool | jax.Array,
+    dt: float | jax.Array,
+    previous_dt: float | jax.Array,
+) -> T:
+    """Extrapolate a nonlinear term to the midpoint of a variable step.
+
+    For r = dt / previous_dt the second-order coefficients are
+    (1 + r/2) * current - (r/2) * previous. The bootstrap returns
+    current and uses a safe denominator so an unset zero previous_dt
+    cannot contaminate traced-but-masked branches.
+    """
+
+    have = jnp.asarray(have_previous) != 0
+    dt_array = jnp.asarray(dt)
+    previous_dt_array = jnp.asarray(previous_dt, dtype=dt_array.dtype)
+    denominator = jnp.where(have, previous_dt_array, dt_array)
+    ratio = dt_array / denominator
+    return jax.tree.map(
+        lambda c, p: jnp.where(
+            have,
+            (1.0 + 0.5 * ratio) * c - 0.5 * ratio * p,
+            c,
+        ),
+        current,
+        previous,
+    )
+
+
 def cnab2_rhs(
     explicit_linear: T,
     nonlinear_current: T,
@@ -164,7 +234,9 @@ def cnab2_rhs(
     return jax.tree.map(lambda rhs, n: rhs - n, explicit_linear, nonlinear)
 
 
-def scan_steps(step: Callable[[T], T], state: T, steps: int) -> T:
+def scan_steps(
+    step: Callable[..., T], state: T, steps: int, *dynamic_args: object
+) -> T:
     """Advance ``state`` with ``step`` using ``jax.lax.scan``.
 
     This keeps Couette time loops staged as one JAX loop while preserving the
@@ -181,11 +253,11 @@ def scan_steps(step: Callable[[T], T], state: T, steps: int) -> T:
     if jax.device_count() > 1 or _has_concrete_multi_device_leaf(state):
         out = state
         for _ in range(steps):
-            out = step(out)
+            out = step(out, *dynamic_args)
         return out
 
     def body(carry: T, _unused: None) -> tuple[T, None]:
-        return step(carry), None
+        return step(carry, *dynamic_args), None
 
     final, _ = jax.lax.scan(body, state, xs=None, length=steps)
     return final

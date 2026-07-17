@@ -4,7 +4,7 @@ import pytest
 
 from examples.channelflow_kmm import KMMState
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
-from jaxfun.integrators import IMEXRK3
+from jaxfun.integrators import IMEXRK3, IMEXRK222
 from jaxfun.io import Cadence
 
 
@@ -136,3 +136,44 @@ def test_pcf_solve_with_cadence_matches_direct_solve() -> None:
     assert events[0][1] == 2
     assert all(jnp.allclose(a, b) for a, b in zip(out.u, direct.u, strict=True))
     assert jnp.allclose(out.g, direct.g)
+
+
+def test_pcf_time_integrator_string_dispatches_imexrk3() -> None:
+    kwargs = {
+        "N": (9, 4, 4),
+        "Re": 200.0,
+        "dt": 1.0e-3,
+        "padding_factor": (1.0, 1.0, 1.0),
+    }
+    by_name = PlaneCouetteFluctuationJax(**kwargs, time_integrator="IMEXRK3")
+    by_class = PlaneCouetteFluctuationJax(**kwargs, timestepper=IMEXRK3)
+
+    assert by_name.time_integrator == "IMEXRK3"
+    assert by_name.timestepper is IMEXRK3
+    named_state = by_name.step(by_name.initial_state())
+    class_state = by_class.step(by_class.initial_state())
+    for actual, expected in zip(
+        (*named_state.u, named_state.g),
+        (*class_state.u, class_state.g),
+        strict=True,
+    ):
+        assert jnp.allclose(actual, expected, rtol=1.0e-13, atol=1.0e-13)
+
+
+@pytest.mark.parametrize(
+    ("timestepper", "time_integrator"),
+    [
+        (IMEXRK3, "IMEXRK222"),
+        (IMEXRK222, "IMEXRK3"),
+        (IMEXRK3, "CNAB2"),
+    ],
+)
+def test_pcf_rejects_conflicting_timestepper_and_integrator(
+    timestepper, time_integrator
+) -> None:
+    with pytest.raises(ValueError, match="conflicts|requires"):
+        PlaneCouetteFluctuationJax(
+            N=(9, 4, 4),
+            timestepper=timestepper,
+            time_integrator=time_integrator,
+        )

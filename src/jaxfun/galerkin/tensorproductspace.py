@@ -615,6 +615,64 @@ class TensorProductSpace:
                 pass
         return z
 
+    def derivative_orthogonal_coeffs(self, c: Array, k: tuple[int, ...]) -> Array:
+        """Return physical-coordinate derivative coefficients in the orthogonal basis.
+
+        This is the coefficient-space counterpart of
+        :meth:`backward_primitive`. It first expands constrained coefficients
+        into the underlying orthogonal tensor basis, differentiates each axis,
+        and applies the true-domain scaling. The result can be evaluated
+        directly or projected into another compatible tensor-product space via
+        :meth:`from_orthogonal`, avoiding a physical quadrature round trip.
+
+        Args:
+            c: Coefficients represented in this tensor-product space.
+            k: Derivative order along every tensor axis.
+
+        Returns:
+            Derivative coefficients in the underlying orthogonal tensor basis.
+        """
+
+        orders = tuple(int(order) for order in k)
+        if len(orders) != len(self):
+            raise ValueError(
+                f"expected {len(self)} derivative orders, received {len(orders)}"
+            )
+        if any(order < 0 for order in orders):
+            raise ValueError("derivative orders must be non-negative")
+
+        z = self.to_orthogonal(c)
+        cache_key = ("derivative_orthogonal_coeffs", orders)
+        if cache_key not in self._spmd_local_fn_cache:
+            functions = []
+            for axis, order in enumerate(orders):
+                space = self.basespaces[axis]
+                basis = getattr(space, "orthogonal", space)
+                scale = float(space.domain_factor**order)
+
+                def scaled_derivative(
+                    values: Array,
+                    *,
+                    basis=basis,
+                    order=order,
+                    scale=scale,
+                ) -> Array:
+                    return scale * basis.derivative_coeffs(values, order)
+
+                functions.append(
+                    _build_local_apply_fn(len(self), axis, scaled_derivative)
+                )
+            self._spmd_local_fn_cache[cache_key] = tuple(functions)
+
+        functions = self._spmd_local_fn_cache[cache_key]
+        if self._spectral_sharding and _has_multiple_devices(z):
+            return _apply_separable_spmd_shard_map(
+                z, functions, spectral_sharding, self._spmd_local_fn_cache
+            )
+        return _apply_separable_replicated(
+            z, functions, spectral_sharding, self._spmd_local_fn_cache
+        )
+
     def from_orthogonal(self, c: Array) -> Array:
         """Return coefficients c mapped from underlying orthogonal basis.
 
@@ -636,6 +694,30 @@ class TensorProductSpace:
             except IndivisibleError:
                 pass
         return z
+
+    def project_from_orthogonal(self, c: Array) -> Array:
+        """Galerkin-project orthogonal tensor coefficients into this space.
+
+        Unlike :meth:`from_orthogonal`, this method is defined for fields that
+        do not already satisfy the target space's constraints. It reproduces
+        ``forward(backward(c))`` using separable coefficient-space mass and
+        stencil operations.
+        """
+
+        cache_key = ("project_from_orthogonal",)
+        if cache_key not in self._spmd_local_fn_cache:
+            self._spmd_local_fn_cache[cache_key] = tuple(
+                _build_local_apply_fn(len(self), axis, basis.project_orthogonal_coeffs)
+                for axis, basis in enumerate(self.basespaces)
+            )
+        functions = self._spmd_local_fn_cache[cache_key]
+        if self._spectral_sharding and _has_multiple_devices(c):
+            return _apply_separable_spmd_shard_map(
+                c, functions, spectral_sharding, self._spmd_local_fn_cache
+            )
+        return _apply_separable_replicated(
+            c, functions, spectral_sharding, self._spmd_local_fn_cache
+        )
 
 
 class CoupledSpace:

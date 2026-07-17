@@ -107,6 +107,16 @@ def capture_device_record(
         "degraded": mode == "cpu_smoke",
         "mode": mode,
         "jax_enable_x64": bool(jax.config.read("jax_enable_x64")),
+        "jax_use_simplified_jaxpr_constants": bool(
+            getattr(jax.config, "jax_use_simplified_jaxpr_constants", False)
+        ),
+        "jaxfun_use_simplified_jaxpr_constants": os.environ.get(
+            "JAXFUN_USE_SIMPLIFIED_JAXPR_CONSTANTS"
+        ),
+        "jaxfun_wavenumber_solver": os.environ.get("JAXFUN_WAVENUMBER_SOLVER", "jax"),
+        "jax_use_simplified_jaxpr_constants_env": os.environ.get(
+            "JAX_USE_SIMPLIFIED_JAXPR_CONSTANTS"
+        ),
         "jax_default_scalar_dtype": str(jnp.asarray(1.0).dtype),
         "production_run_dtype": live_production_dtype,
         "requested_production_dtype": requested_production_dtype,

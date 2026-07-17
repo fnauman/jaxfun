@@ -8,7 +8,11 @@ import jax
 import numpy as np
 import pytest
 
-from production.oracles import load_resume_checkpoint, run_supported_spec
+from production.oracles import (
+    ProductionOracleNotImplementedError,
+    load_resume_checkpoint,
+    run_supported_spec,
+)
 
 # Solenoidal ceiling for the vector-potential (B = B0 + curl A) family. div B is
 # analytically zero, so the oracle holds it at roundoff for the whole horizon
@@ -549,3 +553,17 @@ def test_vector_potential_snapshot_writes_fields(tmp_path):
         joined = " ".join(names)
         for field in ("u_x", "u_y", "u_z", "b_x", "b_y", "b_z"):
             assert field in joined
+
+
+@pytest.mark.parametrize("integrator", ["analytic", "linear_eigenproblem"])
+def test_vector_potential_rejects_non_time_stepping_integrator_early(
+    integrator,
+) -> None:
+    spec = _vp_spec()
+    spec["time"]["integrator"] = integrator
+
+    with pytest.raises(
+        ProductionOracleNotImplementedError,
+        match=r"PCF KMM production DNS requires a time-stepping integrator",
+    ):
+        run_supported_spec(spec, steps=0)

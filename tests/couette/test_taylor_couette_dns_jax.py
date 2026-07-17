@@ -30,9 +30,21 @@ def _assert_rollout_lifecycle(solver, state) -> None:
     assert info.hits == 1
 
     solver.set_dt(0.5 * solver.dt)
-    rebound = solver.rollout_cache_info()
-    assert rebound.generation == 1
-    assert rebound.live_entries == 0
+    retained = solver.rollout_cache_info()
+    assert retained.generation == 0
+    assert retained.live_entries == 1
+    expected = solver.step(state)
+    state = solver.solve(state, 1)
+    jax.block_until_ready((expected, state))
+    assert all(
+        bool(jnp.allclose(actual, reference, rtol=1.0e-12, atol=1.0e-12))
+        for actual, reference in zip(
+            jax.tree.leaves(state), jax.tree.leaves(expected), strict=True
+        )
+    )
+    reused = solver.rollout_cache_info()
+    assert reused.misses == 1
+    assert reused.hits == 2
 
 
 def test_tc_dns_zero_state_stays_zero() -> None:
@@ -342,7 +354,7 @@ def test_tc_mri_dns_3d_zero_state_stays_zero() -> None:
     assert float(diag["wall_u"]) < 1.0e-18
 
 
-def test_tc_mhd_rollout_caches_rebind_for_axisymmetric_and_3d() -> None:
+def test_tc_mhd_rollout_caches_survive_dt_changes_axisymmetric_and_3d() -> None:
     axisymmetric = AxisymmetricMRIDNSJax(
         _keplerian_tc_base(),
         Nr=8,

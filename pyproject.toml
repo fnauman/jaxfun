@@ -38,6 +38,9 @@ optional-dependencies.wandb = [
   "wandb>=0.17",
 ]
 
+[tool.uv.build-backend]
+module-name = [ "jaxfun", "_jaxfun_bootstrap" ]
+
 [tool.pytest.ini_options]
 testpaths = [
   "tests",

@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -34,6 +35,14 @@ class StepTiming:
     timed_steps: int
     dt: float
     peak_bytes: int | None
+    rollout_steps: int = 1
+    generated_code_bytes: int | None = None
+    temp_bytes: int | None = None
+    argument_bytes: int | None = None
+    output_bytes: int | None = None
+    rollout_cache_info: dict[str, Any] | None = None
+    compilation_cache_info: dict[str, Any] | None = None
+    dt_transition_probe: dict[str, Any] | None = None
 
     @property
     def cost_per_shear_time_s(self) -> float:
@@ -44,6 +53,8 @@ class StepTiming:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        d["timed_blocks"] = self.timed_steps
+        d["total_timed_steps"] = self.timed_steps * self.rollout_steps
         d["cost_per_shear_time_s"] = self.cost_per_shear_time_s
         return d
 
@@ -70,6 +81,126 @@ def _peak_bytes() -> int | None:
     return None
 
 
+def _advance(solver: Any, state: Any, steps: int) -> Any:
+    """Advance through the production rollout when one is available."""
+
+    solve = getattr(solver, "solve", None)
+    if callable(solve):
+        return solve(state, int(steps))
+    for _ in range(int(steps)):
+        state = solver.step(state)
+    return state
+
+
+def _rollout_cache_info(solver: Any) -> dict[str, Any] | None:
+    info_fn = getattr(solver, "rollout_cache_info", None)
+    if not callable(info_fn):
+        return None
+    try:
+        return asdict(info_fn())
+    except (AttributeError, TypeError):
+        return None
+
+
+def _persistent_cache_snapshot() -> dict[str, Any]:
+    """Return a best-effort snapshot of JAX persistent cache artifacts."""
+
+    try:
+        import jax
+
+        configured = getattr(jax.config, "jax_compilation_cache_dir", None)
+        if not configured:
+            return {"enabled": False, "path": None, "artifact_count": 0, "bytes": 0}
+        path = Path(str(configured))
+        files = [entry for entry in path.rglob("*") if entry.is_file()]
+        return {
+            "enabled": True,
+            "path": str(path),
+            "artifact_count": len(files),
+            "bytes": sum(entry.stat().st_size for entry in files),
+        }
+    except (OSError, TypeError, ValueError):  # pragma: no cover - best effort
+        return {"enabled": False, "path": None, "artifact_count": 0, "bytes": 0}
+
+
+def _persistent_cache_delta(
+    before: dict[str, Any], after: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        **after,
+        "new_artifact_count": max(
+            0, int(after["artifact_count"]) - int(before["artifact_count"])
+        ),
+        "new_bytes": max(0, int(after["bytes"]) - int(before["bytes"])),
+    }
+
+
+def _probe_dt_transitions(
+    solver: Any, state: Any, *, rollout_steps: int, transitions: int
+) -> tuple[Any, dict[str, Any] | None]:
+    """Exercise same-shape factor updates and report rollout-cache reuse."""
+
+    set_dt = getattr(solver, "set_dt", None)
+    before = _rollout_cache_info(solver)
+    if transitions <= 0 or not callable(set_dt) or before is None:
+        return state, None
+    base_dt = float(solver.dt)
+    dt_values = [base_dt * (0.80 + 0.05 * index) for index in range(transitions)]
+    for dt_value in dt_values:
+        set_dt(dt_value)
+        state = _advance(solver, state, rollout_steps)
+        _block_until_ready(state)
+    set_dt(base_dt)
+    after = _rollout_cache_info(solver)
+    assert after is not None
+    misses_delta = int(after["misses"]) - int(before["misses"])
+    hits_delta = int(after["hits"]) - int(before["hits"])
+    return state, {
+        "transitions": int(transitions),
+        "dt_values": dt_values,
+        "rollout_cache_hits_delta": hits_delta,
+        "rollout_cache_misses_delta": misses_delta,
+        "live_entries_before": int(before["live_entries"]),
+        "live_entries_after": int(after["live_entries"]),
+        "reused_compiled_variant": misses_delta == 0,
+    }
+
+
+def _compiled_memory_analysis(
+    solver: Any, state: Any, rollout_steps: int
+) -> dict[str, int | None]:
+    empty = {
+        "generated_code_bytes": None,
+        "temp_bytes": None,
+        "argument_bytes": None,
+        "output_bytes": None,
+    }
+    cache = getattr(solver, "_rollout_cache", None)
+    analyse = getattr(cache, "compiled_memory_analysis", None)
+    if not callable(analyse):
+        return empty
+    try:
+        analysis = analyse(state, rollout_steps)
+    except (RuntimeError, TypeError, ValueError):
+        return empty
+    if analysis is None:
+        return empty
+    return {
+        "generated_code_bytes": _optional_int(
+            getattr(analysis, "generated_code_size_in_bytes", None)
+        ),
+        "temp_bytes": _optional_int(getattr(analysis, "temp_size_in_bytes", None)),
+        "argument_bytes": _optional_int(
+            getattr(analysis, "argument_size_in_bytes", None)
+        ),
+        "output_bytes": _optional_int(getattr(analysis, "output_size_in_bytes", None)),
+    }
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
 def benchmark_step(
     build_solver: Callable[[], Any],
     *,
@@ -77,33 +208,52 @@ def benchmark_step(
     warmup_steps: int = 2,
     timed_steps: int = 10,
     seed_state: Callable[[Any], Any] | None = None,
+    rollout_steps: int = 1,
+    dt_transition_probes: int = 3,
 ) -> StepTiming:
-    """Benchmark a solver's compile vs warm-cache steady-state per-step cost.
+    """Benchmark compile and cached production-rollout cost per timestep.
 
-    ``build_solver()`` returns a solver exposing ``step(state)`` and ``dt``. If given,
-    ``seed_state(solver)`` builds the initial state; otherwise ``solver.zero_state()``.
+    ``timed_steps`` is retained as the number of independently timed blocks for
+    API compatibility. Each block advances ``rollout_steps`` physical
+    timesteps through ``solver.solve`` when available, and reported warm times
+    are divided by that block length. This measures the compiled scan used in
+    production rather than Python dispatch around ``solver.step``.
     """
 
+    if rollout_steps <= 0:
+        raise ValueError("rollout_steps must be positive")
+    if dt_transition_probes < 0:
+        raise ValueError("dt_transition_probes must be non-negative")
+
+    persistent_cache_before = _persistent_cache_snapshot()
     t0 = time.perf_counter()
     solver = build_solver()
     state = seed_state(solver) if seed_state is not None else solver.zero_state()
-    # First step includes tracing/compilation and operator factorization.
-    state = solver.step(state)
+    # First block includes tracing/compilation and operator factorization.
+    state = _advance(solver, state, rollout_steps)
     _block_until_ready(state)
     compile_s = time.perf_counter() - t0
 
     for _ in range(max(0, warmup_steps)):
-        state = solver.step(state)
+        state = _advance(solver, state, rollout_steps)
     _block_until_ready(state)
 
     per_step: list[float] = []
     for _ in range(max(1, timed_steps)):
         s = time.perf_counter()
-        state = solver.step(state)
+        state = _advance(solver, state, rollout_steps)
         _block_until_ready(state)
-        per_step.append(time.perf_counter() - s)
+        per_step.append((time.perf_counter() - s) / rollout_steps)
 
     arr = np.asarray(per_step)
+    state, dt_probe = _probe_dt_transitions(
+        solver,
+        state,
+        rollout_steps=rollout_steps,
+        transitions=dt_transition_probes,
+    )
+    memory = _compiled_memory_analysis(solver, state, rollout_steps)
+    persistent_cache_after = _persistent_cache_snapshot()
     return StepTiming(
         label=label,
         compile_s=float(compile_s),
@@ -113,6 +263,13 @@ def benchmark_step(
         timed_steps=int(arr.size),
         dt=float(getattr(solver, "dt", float("nan"))),
         peak_bytes=_peak_bytes(),
+        rollout_steps=int(rollout_steps),
+        rollout_cache_info=_rollout_cache_info(solver),
+        compilation_cache_info=_persistent_cache_delta(
+            persistent_cache_before, persistent_cache_after
+        ),
+        dt_transition_probe=dt_probe,
+        **memory,
     )
 
 
@@ -192,6 +349,158 @@ def _solver_and_seed_builders(spec: dict[str, Any]):
             return _pcf_mhd_perturbation_state(solver, spec)[0]
 
         return (lambda: _primitive_solver_from_spec(spec)), seed
+    if geometry == "pcf" and physics == "hydro":
+        from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
+        from production.oracles import (
+            DEFAULT_FLOW_BASIS_FAMILY,
+            _padding_factor,
+            _pcf_kmm_time_integrator,
+            _selected_resolution,
+        )
+
+        resolution = _selected_resolution(spec)
+        groups = spec["nondimensional_groups"]
+        time_integrator = _pcf_kmm_time_integrator(
+            spec, solver_family="PCF hydrodynamic KMM benchmark"
+        )
+        domain = (
+            tuple(float(value) for value in spec["domain"]["x"]),
+            (0.0, float(spec["domain"]["y_period"])),
+            (0.0, float(spec["domain"]["z_period"])),
+        )
+
+        def build_pcf_hydro() -> Any:
+            return PlaneCouetteFluctuationJax(
+                N=(
+                    int(resolution.get("Nx", resolution.get("N", 32))),
+                    int(resolution.get("Ny", 64)),
+                    int(resolution.get("Nz", 32)),
+                ),
+                domain=domain,
+                Re=float(groups["Re"]),
+                U_wall=float(groups.get("U_wall", 1.0)),
+                dt=float(spec["time"]["dt"]),
+                family=resolution.get("family", DEFAULT_FLOW_BASIS_FAMILY),
+                padding_factor=_padding_factor(resolution, solver_family="pcf_kmm"),
+                perturbation_amplitude=float(
+                    spec["initial_condition"].get("amplitude", 0.1)
+                ),
+                time_integrator=time_integrator,
+            )
+
+        return build_pcf_hydro, lambda solver: solver.initial_state()
+    if geometry == "taylor_couette":
+        from examples.taylor_couette_dns_jax import (
+            AxisymmetricMRIDNSJax,
+            AxisymmetricTCDNSJax,
+            CircularCouette,
+            TaylorCouetteDNSJax,
+            TaylorCouetteMRIDNSJax,
+        )
+        from production.oracles import (
+            DEFAULT_FLOW_BASIS_FAMILY,
+            _kz_mode_from_spec,
+            _resolved_physics,
+            _selected_resolution,
+            _tc_vp_solver_from_spec,
+        )
+
+        resolution = _selected_resolution(spec)
+        groups = spec["nondimensional_groups"]
+        resolved = _resolved_physics(spec)
+        base_args = (
+            float(groups["R1"]),
+            float(groups["R2"]),
+            float(groups["Omega1"]),
+            float(groups["Omega2"]),
+        )
+        nr = int(resolution.get("Nr", resolution.get("N", 40)))
+        nz = int(resolution.get("Nz", 16))
+        ntheta = resolution.get("Ntheta")
+        family = spec["resolution"].get(
+            "family", resolution.get("family", DEFAULT_FLOW_BASIS_FAMILY)
+        )
+        dealias = float(spec["resolution"].get("dealias", 1.0))
+        lz = float(spec["domain"]["z_period"])
+        dt = float(spec["time"]["dt"])
+        amplitude = float(spec["initial_condition"].get("amplitude", 1.0e-4))
+
+        if representation == "vector_potential":
+            initial = spec["initial_condition"]
+
+            def seed_tc_vp(solver: Any) -> Any:
+                if "seeded_kz_mode" in initial:
+                    kz_mode = int(initial["seeded_kz_mode"])
+                elif "mode" in spec:
+                    kz_mode = _kz_mode_from_spec(spec, solver.Lz, strict=False)
+                else:
+                    kz_mode = 1
+                state, _eigenvalue = solver.seed_linear_eigenmode(
+                    m=int(initial.get("azimuthal_mode", 0)),
+                    kz_mode=kz_mode,
+                    amp=amplitude,
+                )
+                symmetry_amp = float(initial.get("symmetry_break_amplitude", 0.0))
+                if symmetry_amp > 0.0:
+                    state = solver.add_symmetry_breaking_perturbation(
+                        state,
+                        symmetry_amp,
+                        m=int(initial.get("symmetry_break_m", 1)),
+                        kz_mode=kz_mode,
+                    )
+                return state
+
+            return (lambda: _tc_vp_solver_from_spec(spec)), seed_tc_vp
+
+        if physics == "hydro":
+            solver_cls = AxisymmetricTCDNSJax if ntheta is None else TaylorCouetteDNSJax
+
+            def build_tc_hydro() -> Any:
+                kwargs = dict(
+                    base=CircularCouette(*base_args),
+                    nu=resolved.nu,
+                    Nr=nr,
+                    Nz=nz,
+                    Lz=lz,
+                    dt=dt,
+                    family=family,
+                    dealias=dealias,
+                )
+                if ntheta is not None:
+                    kwargs["Ntheta"] = int(ntheta)
+                return solver_cls(**kwargs)
+
+            return (
+                build_tc_hydro,
+                lambda solver: solver.initial_state(amp=amplitude),
+            )
+
+        solver_cls = AxisymmetricMRIDNSJax if ntheta is None else TaylorCouetteMRIDNSJax
+
+        def build_tc_mhd() -> Any:
+            kwargs = dict(
+                base=CircularCouette(*base_args),
+                B0=resolved.B0,
+                nu=resolved.nu,
+                eta_mag=resolved.eta if resolved.eta is not None else resolved.nu,
+                Nr=nr,
+                Nz=nz,
+                Lz=lz,
+                dt=dt,
+                family=family,
+                dealias=dealias,
+            )
+            if ntheta is not None:
+                kwargs["Ntheta"] = int(ntheta)
+            return solver_cls(**kwargs)
+
+        return (
+            build_tc_mhd,
+            lambda solver: solver.seed_linear_eigenmode(
+                kz_mode=_kz_mode_from_spec(spec, solver.Lz, strict=False),
+                amp=amplitude,
+            )[0],
+        )
     raise ValueError(
         f"no benchmark solver factory for {spec.get('problem_id')!r} "
         f"(geometry={geometry!r}, physics={physics!r}, "
@@ -205,8 +514,14 @@ def _spec_dof(spec: dict[str, Any]) -> float:
     from production.oracles import _selected_resolution
 
     resolution = _selected_resolution(spec)
+    if "Nr" in resolution:
+        dimension_keys = ("Nr", "Ntheta", "Nz")
+    elif "Nx" in resolution:
+        dimension_keys = ("Nx", "Ny", "Nz")
+    else:
+        dimension_keys = ("N",)
     cells = 1.0
-    for key in ("Nx", "Ny", "Nz", "N", "Nr"):
+    for key in dimension_keys:
         value = resolution.get(key)
         if value is not None:
             cells *= float(int(value))
@@ -222,6 +537,8 @@ def measure_spec(
     warmup_steps: int = 2,
     shear_times: float | None = None,
     holdout_tier: str | None = None,
+    rollout_steps: int = 25,
+    dt_transition_probes: int = 3,
 ) -> dict[str, Any]:
     """FJ-12: measure the real production solver at materialized resolution tiers.
 
@@ -247,6 +564,8 @@ def measure_spec(
             warmup_steps=warmup_steps,
             timed_steps=timed_steps,
             seed_state=seed_state,
+            rollout_steps=rollout_steps,
+            dt_transition_probes=dt_transition_probes,
         )
         horizon = (
             float(shear_times)
@@ -268,12 +587,14 @@ def measure_spec(
         times.append(timing.warm_step_s)
 
     artifact: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 3,
         "problem_id": spec.get("problem_id"),
         "spec_hash": spec.get("spec_hash"),
         "backend": _backend_name(),
         "timed_steps": int(timed_steps),
         "warmup_steps": int(warmup_steps),
+        "rollout_steps": int(rollout_steps),
+        "dt_transition_probes": int(dt_transition_probes),
         "measurements": measurements,
         "provenance": _provenance_safe(),
     }
@@ -347,6 +668,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tiers", default="smoke", help="comma-separated tiers")
     parser.add_argument("--timed-steps", type=int, default=10)
     parser.add_argument("--warmup-steps", type=int, default=2)
+    parser.add_argument(
+        "--rollout-steps",
+        type=int,
+        default=25,
+        help="Physical timesteps per compiled production scan block.",
+    )
+    parser.add_argument(
+        "--dt-transition-probes",
+        type=int,
+        default=3,
+        help="Same-shape set_dt/rollout transitions used to detect recompilation.",
+    )
     parser.add_argument("--shear-times", type=float, default=None)
     parser.add_argument(
         "--holdout-tier",
@@ -363,6 +696,8 @@ def main(argv: list[str] | None = None) -> int:
         warmup_steps=args.warmup_steps,
         shear_times=args.shear_times,
         holdout_tier=args.holdout_tier,
+        rollout_steps=args.rollout_steps,
+        dt_transition_probes=args.dt_transition_probes,
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

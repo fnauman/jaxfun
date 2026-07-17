@@ -31,6 +31,22 @@ class ProductionOracleNotImplementedError(NotImplementedError):
     """Raised when a spec has no wired jaxfun production execution path yet."""
 
 
+_PCF_KMM_TIME_INTEGRATORS = frozenset({"IMEXRK222", "IMEXRK3", "CNAB2"})
+
+
+def _pcf_kmm_time_integrator(spec: dict[str, Any], *, solver_family: str) -> str:
+    """Return a KMM integrator or reject the spec before solver allocation."""
+
+    integrator = str(spec["time"]["integrator"])
+    if integrator not in _PCF_KMM_TIME_INTEGRATORS:
+        supported = ", ".join(sorted(_PCF_KMM_TIME_INTEGRATORS))
+        raise ProductionOracleNotImplementedError(
+            f"{solver_family} requires a time-stepping integrator "
+            f"({supported}); got time.integrator={integrator!r}"
+        )
+    return integrator
+
+
 def load_resume_checkpoint(run_dir: str | Path, *, step: int | None = None):
     """Read a production checkpoint from a run directory or HDF5 file.
 
@@ -288,7 +304,17 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
     if state_kind == "pcf_fluctuation_saturation":
         from examples.channelflow_kmm import KMMState
 
-        return KMMState(u=tuple(payload["u"]), g=payload["g"])
+        return KMMState(
+            u=tuple(payload["u"]),
+            g=payload["g"],
+            nonlinear_old=(
+                None
+                if "nonlinear_old" not in payload
+                else tuple(payload["nonlinear_old"])
+            ),
+            have_old=jnp.asarray(payload.get("have_old", False), dtype=jnp.bool_),
+            previous_dt=payload.get("previous_dt", 0.0),
+        )
     if state_kind in {"axisymmetric_tc_hydro", "axisymmetric_tc_hydro_saturation"}:
         from examples.taylor_couette_dns_jax import AxisymmetricTCState
 
@@ -296,7 +322,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             u=tuple(payload["u"]),
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=payload["have_old"],
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
         )
     if state_kind in {"axisymmetric_tc_mhd", "axisymmetric_tc_mhd_saturation"}:
         from examples.taylor_couette_dns_jax import AxisymmetricMRIState
@@ -305,7 +331,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             x=tuple(payload["x"]),
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=payload["have_old"],
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
         )
     if state_kind in {"axisymmetric_pcf_primitive", "pcf_primitive_mhd_saturation"}:
         from examples.pcf_mri_primitive_jax import AxisymmetricPCFState
@@ -314,15 +340,32 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             x=tuple(payload["x"]),
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=payload["have_old"],
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
         )
     if state_kind == "pcf_vector_potential_mhd_saturation":
         from examples.channelflow_kmm import KMMState
         from examples.pcf_mhd_jax import MHDState
 
         return MHDState(
-            flow=KMMState(u=tuple(payload["flow_u"]), g=payload["flow_g"]),
+            flow=KMMState(
+                u=tuple(payload["flow_u"]),
+                g=payload["flow_g"],
+                nonlinear_old=(
+                    None
+                    if "flow_nonlinear_old" not in payload
+                    else tuple(payload["flow_nonlinear_old"])
+                ),
+                have_old=jnp.asarray(
+                    payload.get("flow_have_old", False), dtype=jnp.bool_
+                ),
+                previous_dt=payload.get("flow_previous_dt", 0.0),
+            ),
             A=tuple(payload["A"]),
+            nonlinear_A_old=(
+                None
+                if "nonlinear_A_old" not in payload
+                else tuple(payload["nonlinear_A_old"])
+            ),
         )
     if state_kind == "tc_vector_potential_mhd_saturation":
         from examples.taylor_couette_vp_jax import TCVPState
@@ -332,7 +375,7 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             p=payload["p"],
             A=tuple(payload["A"]),
             nonlinear_old=tuple(payload["nonlinear_old"]),
-            have_old=payload["have_old"],
+            have_old=jnp.asarray(payload["have_old"], dtype=jnp.bool_),
         )
     raise ValueError(f"unsupported resume state_kind {state_kind!r}")
 
@@ -436,6 +479,13 @@ def run_supported_spec(
     ``burn_in_steps`` excludes the first steps after a resume/quench from the
     stationarity/classification analysis window.
     """
+
+    uses_pcf_kmm = spec["geometry"] == "pcf" and (
+        spec.get("representation") == "vector_potential"
+        or spec.get("problem_id") == "pcf_fluct_re400"
+    )
+    if uses_pcf_kmm:
+        _pcf_kmm_time_integrator(spec, solver_family="PCF KMM production DNS")
 
     validate_quench_duration_request(
         quench=quench,
@@ -1292,6 +1342,9 @@ def _run_pcf_fluctuation_saturation(
         (0.0, float(spec["domain"]["z_period"])),
     )
     groups = spec["nondimensional_groups"]
+    time_integrator = _pcf_kmm_time_integrator(
+        spec, solver_family="PCF hydrodynamic KMM"
+    )
     solver = PlaneCouetteFluctuationJax(
         N=(
             int(resolution.get("Nx", resolution.get("N", 32))),
@@ -1305,6 +1358,7 @@ def _run_pcf_fluctuation_saturation(
         family=resolution.get("family", DEFAULT_FLOW_BASIS_FAMILY),
         padding_factor=_padding_factor(resolution, solver_family="pcf_kmm"),
         perturbation_amplitude=float(spec["initial_condition"].get("amplitude", 0.1)),
+        time_integrator=time_integrator,
     )
     state = solver.initial_state()
     initial = _pcf_fluctuation_scalars(solver, state)
@@ -1647,6 +1701,9 @@ def _primitive_solver_from_spec(spec: dict[str, Any]):
 def _curl_solver_from_spec(spec: dict[str, Any]):
     """Construct the vector-potential workhorse exactly as the oracle does."""
 
+    time_integrator = _pcf_kmm_time_integrator(
+        spec, solver_family="PCF vector-potential MHD/MRI"
+    )
     from examples.pcf_mhd_mri_shearpy_jax import (
         PlaneCouetteMRIShearpyInsulatingJax,
         PlaneCouetteMRIShearpyJax,
@@ -1693,6 +1750,7 @@ def _curl_solver_from_spec(spec: dict[str, Any]):
             )
         ),
         solenoidal_velocity_seed=bool(initial.get("solenoidal_velocity_seed", False)),
+        time_integrator=time_integrator,
     )
 
 
@@ -3680,7 +3738,20 @@ def _write_bank_checkpoint(
 def _checkpoint_payload(state: Any) -> dict[str, Any]:
     if hasattr(state, "flow") and hasattr(state, "A"):
         # MHDState (curl / vector-potential family): KMM flow block + A coefficients.
-        return {"flow_u": state.flow.u, "flow_g": state.flow.g, "A": state.A}
+        payload = {"flow_u": state.flow.u, "flow_g": state.flow.g, "A": state.A}
+        if state.flow.nonlinear_old is not None:
+            payload.update(
+                {
+                    "flow_nonlinear_old": state.flow.nonlinear_old,
+                    "flow_have_old": jnp.asarray(
+                        state.flow.have_old, dtype=jnp.float32
+                    ),
+                    "flow_previous_dt": jnp.asarray(state.flow.previous_dt),
+                }
+            )
+        if state.nonlinear_A_old is not None:
+            payload["nonlinear_A_old"] = state.nonlinear_A_old
+        return payload
     if hasattr(state, "u") and hasattr(state, "A"):
         # TCVPState (vector-potential Taylor-Couette family).
         return {
@@ -3691,7 +3762,16 @@ def _checkpoint_payload(state: Any) -> dict[str, Any]:
             "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
         }
     if hasattr(state, "u") and hasattr(state, "g"):
-        return {"u": state.u, "g": state.g}
+        payload = {"u": state.u, "g": state.g}
+        if getattr(state, "nonlinear_old", None) is not None:
+            payload.update(
+                {
+                    "nonlinear_old": state.nonlinear_old,
+                    "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
+                    "previous_dt": jnp.asarray(state.previous_dt),
+                }
+            )
+        return payload
     if hasattr(state, "u"):
         return {
             "u": state.u,

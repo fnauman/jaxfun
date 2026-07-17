@@ -151,7 +151,7 @@ class TCVPState:
             self.p,
             self.A,
             self.nonlinear_old,
-            jnp.asarray(self.have_old, dtype=jnp.float32),
+            self.have_old,
         ), None
 
     @classmethod
@@ -197,6 +197,7 @@ class TaylorCouetteVPMRIDNSJax:
         self.Ntheta = int(Ntheta)
         self.Nz = int(Nz)
         self.dt = float(dt)
+        self._dt_array = jnp.asarray(self.dt)
         self.family = family.upper()
         self.dealias = float(dealias)
         self.magnetic_bc = magnetic_bc
@@ -278,7 +279,14 @@ class TaylorCouetteVPMRIDNSJax:
         self._mass_e_modes = extract(mass_e, self.VE_mode_indices)
         self._phys_e_modes = extract(phys_e, self.VE_mode_indices)
         self._refresh_dt_operators()
-        self._rollout_cache = ScanRolloutCache(self.step)
+        self._rollout_cache = ScanRolloutCache(
+            self._step_with_operators,
+            dynamic_args=lambda: (
+                self._dt_array,
+                self.Lexp_modes,
+                *self.Limp_lu,
+            ),
+        )
 
     def _refresh_dt_operators(self) -> None:
         """(Re)combine the dt-independent operator parts and refactorize.
@@ -301,8 +309,8 @@ class TaylorCouetteVPMRIDNSJax:
     def set_dt(self, dt: float) -> None:
         """Adopt a new time step (adaptive-CFL support) and refactorize."""
         self.dt = float(dt)
+        self._dt_array = jnp.asarray(self.dt)
         self._refresh_dt_operators()
-        self._rollout_cache.rebind(self.step)
 
     # ------------------------------------------------------------------
     # assembly helpers (mirroring the primitive TC DNS class)
@@ -707,11 +715,22 @@ class TaylorCouetteVPMRIDNSJax:
         )
         Ar_t = self.TAr.backward_primitive(A[0], (1, 0, 0), N=N)
         Ar_z = self.TAr.backward_primitive(A[0], (0, 1, 0), N=N)
-        At_v = self.TAt.backward(A[1], N=N)
-        At_r = self.TAt.backward_primitive(A[1], (0, 0, 1), N=N)
-        At_z = self.TAt.backward_primitive(A[1], (0, 1, 0), N=N)
-        Az_t = self.TAz.backward_primitive(A[2], (1, 0, 0), N=N)
-        Az_r = self.TAz.backward_primitive(A[2], (0, 0, 1), N=N)
+        if self.TAt is self.TAz:
+            tangential_value, tangential_radial, tangential_theta, tangential_axial = (
+                jax.vmap(lambda coeff: self._phys4(coeff, self.TAt, padded=padded))(
+                    jnp.stack(A[1:])
+                )
+            )
+            At_v = tangential_value[0]
+            At_r, Az_r = tangential_radial
+            Az_t = tangential_theta[1]
+            At_z = tangential_axial[0]
+        else:
+            At_v = self.TAt.backward(A[1], N=N)
+            At_r = self.TAt.backward_primitive(A[1], (0, 0, 1), N=N)
+            At_z = self.TAt.backward_primitive(A[1], (0, 1, 0), N=N)
+            Az_t = self.TAz.backward_primitive(A[2], (1, 0, 0), N=N)
+            Az_r = self.TAz.backward_primitive(A[2], (0, 0, 1), N=N)
         br = invr * Az_t - At_z
         bt = Ar_z - Az_r
         bz = At_r + invr * At_v - invr * Ar_t
@@ -728,6 +747,30 @@ class TaylorCouetteVPMRIDNSJax:
             self.T0.mask_nyquist(self.T0.forward(bz)),
         )
 
+    def _current_physical(self, B: Velocity, *, padded: bool = True) -> Velocity:
+        """Evaluate ``curl(B)`` with only the seven required transforms."""
+
+        N = self.padded_counts if padded else None
+        invr = (
+            self.inv_r_p if (padded and self.padded_counts is not None) else self.inv_r
+        )
+        br, bt, bz = B
+        bt_value = self.T0.backward(bt, N=N)
+        bt_r, bz_r = jax.vmap(
+            lambda coeff: self.T0.backward_primitive(coeff, (0, 0, 1), N=N)
+        )(jnp.stack((bt, bz)))
+        br_t, bz_t = jax.vmap(
+            lambda coeff: self.T0.backward_primitive(coeff, (1, 0, 0), N=N)
+        )(jnp.stack((br, bz)))
+        br_z, bt_z = jax.vmap(
+            lambda coeff: self.T0.backward_primitive(coeff, (0, 1, 0), N=N)
+        )(jnp.stack((br, bt)))
+        return (
+            invr * bz_t - bt_z,
+            br_z - bz_r,
+            bt_r + invr * bt_value - invr * br_t,
+        )
+
     def _dealias_to_standard(self, values: Array) -> Array:
         if self.T0p is None:
             return values
@@ -736,9 +779,13 @@ class TaylorCouetteVPMRIDNSJax:
 
     def nonlinear(self, state: TCVPState) -> tuple[Array, ...]:
         """Explicit nonlinear rows: advection - j_f x b_f for u, u x b for A."""
-        ur, urr, urt, urz = self._phys4(state.u[0], self.TD)
-        ut, utr, utt, utz = self._phys4(state.u[1], self.TD)
-        uz, uzr, uzt, uzz = self._phys4(state.u[2], self.TD)
+        velocity, velocity_radial, velocity_theta, velocity_axial = jax.vmap(
+            lambda coeff: self._phys4(coeff, self.TD)
+        )(jnp.stack(state.u))
+        ur, ut, uz = velocity
+        urr, utr, uzr = velocity_radial
+        urt, utt, uzt = velocity_theta
+        urz, utz, uzz = velocity_axial
         invr = self.inv_r_p
         au_r = ur * urr + (ut * invr) * urt + uz * urz - ut * ut * invr
         au_t = ur * utr + (ut * invr) * utt + uz * utz + ur * ut * invr
@@ -746,16 +793,7 @@ class TaylorCouetteVPMRIDNSJax:
 
         br, bt, bz = self.b_physical(state.A, padded=True)
         Bc = self.b_coefficients(state.A)
-        jr_ = self.T0.backward_primitive(Bc[2], (1, 0, 0), N=self.padded_counts)
-        jz_t = self.T0.backward_primitive(Bc[2], (0, 0, 1), N=self.padded_counts)
-        jt_z = self.T0.backward_primitive(Bc[1], (0, 1, 0), N=self.padded_counts)
-        jr_z = self.T0.backward_primitive(Bc[0], (0, 1, 0), N=self.padded_counts)
-        jt_v = self.T0.backward(Bc[1], N=self.padded_counts)
-        jr_t = self.T0.backward_primitive(Bc[0], (1, 0, 0), N=self.padded_counts)
-        jt_r = self.T0.backward_primitive(Bc[1], (0, 0, 1), N=self.padded_counts)
-        j_r = invr * jr_ - jt_z
-        j_t = jr_z - jz_t
-        j_z = jt_r + invr * jt_v - invr * jr_t
+        j_r, j_t, j_z = self._current_physical(Bc)
         lor_r = j_t * bz - j_z * bt
         lor_t = j_z * br - j_r * bz
         lor_z = j_r * bt - j_t * br
@@ -778,14 +816,18 @@ class TaylorCouetteVPMRIDNSJax:
             self.TAz.mask_nyquist(self.TAz.scalar_product(-emf_z)),
         )
 
-    def _apply_lexp(self, x: tuple[Array, ...]) -> tuple[Array, ...]:
+    def _apply_lexp(
+        self, x: tuple[Array, ...], Lexp_modes: Array | None = None
+    ) -> tuple[Array, ...]:
         flat = self.VE.flatten(x)
         modes = flat[self.VE_mode_indices]
-        out_modes = jnp.einsum("kij,kj->ki", self.Lexp_modes, modes)
+        if Lexp_modes is None:
+            Lexp_modes = self.Lexp_modes
+        out_modes = jnp.einsum("kij,kj->ki", Lexp_modes, modes)
         out = self._scatter_modes(out_modes, self.VE_mode_indices, self.VE.dim)
         return self.VE.unflatten(out)
 
-    def _dyn_row_rhs(self, state: TCVPState) -> Array:
+    def _dyn_row_rhs(self, state: TCVPState, dt: Array) -> Array:
         """Right-hand side of the trapped-flux Faraday row (insulating (0,0))."""
         R1 = self.base.R1
         d0 = jnp.asarray(self._wall_d0[0])
@@ -796,9 +838,15 @@ class TaylorCouetteVPMRIDNSJax:
         at00 = state.A[1][0, 0, :]
         bz_wall = jnp.sum(e_bz * at00)
         dbz_wall = jnp.sum(e_dbz * at00)
-        return (R1 / (2.0 * self.dt)) * bz_wall + 0.5 * self.eta_mag * dbz_wall
+        return (R1 / (2.0 * dt)) * bz_wall + 0.5 * self.eta_mag * dbz_wall
 
-    def _solve_limp(self, rhs: Array, state: TCVPState) -> Array:
+    def _solve_limp(
+        self,
+        rhs: Array,
+        state: TCVPState,
+        dt: Array,
+        Limp_lu: tuple[Array, Array] | None = None,
+    ) -> Array:
         rhs_modes = rhs[self.VQ_mode_indices]
         pressure_row = sum(int(space.num_dofs[-1]) for space in self.VQ[:3])
         rhs_modes = rhs_modes.at[0, pressure_row].set(0)
@@ -806,20 +854,28 @@ class TaylorCouetteVPMRIDNSJax:
             rhs_modes = rhs_modes.at[:, self._tau_row_positions].set(0.0)
             rhs_modes = rhs_modes.at[
                 self._insulating_dyn_mode, self._insulating_dyn_row
-            ].set(self._dyn_row_rhs(state))
-        lu, piv = self.Limp_lu
+            ].set(self._dyn_row_rhs(state, dt))
+        lu, piv = self.Limp_lu if Limp_lu is None else Limp_lu
         sol_modes = jax.vmap(
             lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve((lu_i, piv_i), b_i)
         )(lu, piv, rhs_modes)
         return self._scatter_modes(sol_modes, self.VQ_mode_indices, self.VQ.dim)
 
-    def step(self, state: TCVPState) -> TCVPState:
+    def step(
+        self,
+        state: TCVPState,
+        dt: Array | None = None,
+        Lexp_modes: Array | None = None,
+        Limp_lu: tuple[Array, Array] | None = None,
+    ) -> TCVPState:
+        if dt is None:
+            dt = self._dt_array
         n_hat = self.nonlinear(state)
-        rhs_e = self._apply_lexp((*state.u, *state.A))
+        rhs_e = self._apply_lexp((*state.u, *state.A), Lexp_modes)
         rhs_x = cnab2_rhs(rhs_e, n_hat, state.nonlinear_old, state.have_old)
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp_modes.dtype)
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
-        sol = self.VQ.unflatten(self._solve_limp(rhs, state))
+        sol = self.VQ.unflatten(self._solve_limp(rhs, state, dt, Limp_lu))
         return TCVPState(
             u=(sol[0], sol[1], sol[2]),
             p=sol[3],
@@ -827,6 +883,12 @@ class TaylorCouetteVPMRIDNSJax:
             nonlinear_old=n_hat,
             have_old=True,
         )
+
+    def _step_with_operators(
+        self, state: TCVPState, dt: Array, Lexp_modes: Array, lu: Array, piv: Array
+    ) -> TCVPState:
+        """Advance one compiled rollout step with runtime operator data."""
+        return self.step(state, dt, Lexp_modes, (lu, piv))
 
     def solve(self, state: TCVPState, steps: int) -> TCVPState:
         return self._rollout_cache(state, int(steps))
