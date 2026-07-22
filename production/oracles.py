@@ -50,6 +50,10 @@ def _pcf_kmm_time_integrator(
             f"{solver_family} requires a time-stepping integrator "
             f"({supported}); got time.integrator={integrator!r}"
         )
+    if integrator == "SBDF3" and adaptive_cfl_from_spec(spec) is not None:
+        raise ProductionOracleNotImplementedError(
+            f"{solver_family} does not support adaptive_cfl with fixed-step SBDF3"
+        )
     return integrator
 
 

@@ -618,19 +618,7 @@ class KMM:
                 and state.solution_older is not None
             ):
                 return state
-            primary = self._flow_primary(state)
-            zero_primary = jax.tree.map(jnp.zeros_like, primary)
-            zero_nonlinear = jax.tree.map(jnp.zeros_like, primary)
-            return replace(
-                state,
-                nonlinear_old=zero_nonlinear,
-                nonlinear_older=zero_nonlinear,
-                solution_old=zero_primary,
-                solution_older=zero_primary,
-                history_steps=jnp.zeros_like(state.history_steps),
-                have_old=jnp.zeros_like(state.have_old),
-                previous_dt=jnp.asarray(0.0, dtype=jnp.real(state.g).dtype),
-            )
+            return self._reset_flow_history(state)
         if not self._cnab2 or state.nonlinear_old is not None:
             return state
         nonlinear_old = (
@@ -642,6 +630,23 @@ class KMM:
         return replace(
             state,
             nonlinear_old=nonlinear_old,
+            have_old=jnp.zeros_like(state.have_old),
+            previous_dt=jnp.asarray(0.0, dtype=jnp.real(state.g).dtype),
+        )
+
+    def _reset_flow_history(self, state: KMMState) -> KMMState:
+        """Discard all multistep levels while preserving the primary fields."""
+
+        primary = self._flow_primary(state)
+        zero_primary = jax.tree.map(jnp.zeros_like, primary)
+        zero_nonlinear = jax.tree.map(jnp.zeros_like, primary)
+        return replace(
+            state,
+            nonlinear_old=zero_nonlinear,
+            nonlinear_older=zero_nonlinear,
+            solution_old=zero_primary,
+            solution_older=zero_primary,
+            history_steps=jnp.zeros_like(state.history_steps),
             have_old=jnp.zeros_like(state.have_old),
             previous_dt=jnp.asarray(0.0, dtype=jnp.real(state.g).dtype),
         )

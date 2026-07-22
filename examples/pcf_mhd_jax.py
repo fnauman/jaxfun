@@ -224,6 +224,9 @@ class PlaneCouetteMHDJax(PlaneCouetteFluctuationJax):
                 and state.A_older is not None
             ):
                 return replace(state, flow=flow)
+            # Flow and magnetic histories form one coupled SBDF3 timeline.
+            # If either half is incomplete, restart both halves together.
+            flow = self._reset_flow_history(flow)
             zero_A = tuple(jnp.zeros_like(Ai) for Ai in state.A)
             return replace(
                 state,

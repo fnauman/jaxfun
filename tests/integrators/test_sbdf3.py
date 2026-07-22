@@ -26,8 +26,10 @@ def test_sbdf3_rhs_supports_matching_pytrees() -> None:
         0.2,
     )
     expected = jax.tree.map(
-        lambda m, n: (18.0 * m - 9.0 * 0.5 * m + 2.0 * 0.25 * m) / 11.0
-        + 0.2 * (18.0 * n - 18.0 * 0.5 * n + 6.0 * 0.25 * n) / 11.0,
+        lambda m, n: (
+            (18.0 * m - 9.0 * 0.5 * m + 2.0 * 0.25 * m) / 11.0
+            + 0.2 * (18.0 * n - 18.0 * 0.5 * n + 6.0 * 0.25 * n) / 11.0
+        ),
         mass,
         nonlinear,
     )

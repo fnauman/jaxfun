@@ -340,6 +340,18 @@ def test_vector_potential_guard_reaches_adaptive_block_endpoints(monkeypatch):
         oracles._run_pcf_vector_potential_mhd_saturation(spec, steps=1)
 
 
+def test_vector_potential_rejects_adaptive_sbdf3_before_solver_allocation() -> None:
+    spec = _vp_spec()
+    spec["time"]["integrator"] = "SBDF3"
+    spec["time"]["adaptive_cfl"] = {"check_every": 1}
+
+    with pytest.raises(
+        ProductionOracleNotImplementedError,
+        match="does not support adaptive_cfl with fixed-step SBDF3",
+    ):
+        run_supported_spec(spec, steps=1)
+
+
 def test_vector_potential_guard_certifies_returned_final_state(monkeypatch):
     import production.oracles as oracles
 

@@ -635,9 +635,7 @@ class TensorProductSpace:
 
         return self.differentiate_orthogonal_coeffs(self.to_orthogonal(c), k)
 
-    def differentiate_orthogonal_coeffs(
-        self, c: Array, k: tuple[int, ...]
-    ) -> Array:
+    def differentiate_orthogonal_coeffs(self, c: Array, k: tuple[int, ...]) -> Array:
         """Differentiate coefficients already in the orthogonal basis.
 
         This lower-level variant lets callers reuse one ``to_orthogonal``

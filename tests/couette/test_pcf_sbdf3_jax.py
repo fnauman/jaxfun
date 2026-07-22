@@ -187,6 +187,33 @@ def test_sbdf3_checkpoint_preserves_two_level_history_exactly() -> None:
     )
 
 
+def test_partial_mhd_restart_resets_coupled_sbdf3_history() -> None:
+    solver = _mhd()
+    complete = solver.solve(solver.initial_state(), 2)
+    partial = replace(
+        complete,
+        nonlinear_A_old=None,
+        nonlinear_A_older=None,
+        A_old=None,
+        A_older=None,
+    )
+
+    restored = solver._ensure_mhd_history(partial)
+
+    assert int(restored.flow.history_steps) == 0
+    assert float(restored.flow.have_old) == 0.0
+    assert all(
+        bool(jnp.array_equal(actual, expected))
+        for actual, expected in zip(
+            (*restored.flow.u, restored.flow.g, *restored.A),
+            (*complete.flow.u, complete.flow.g, *complete.A),
+            strict=True,
+        )
+    )
+    advanced = solver.step(restored)
+    assert int(advanced.flow.history_steps) == 1
+
+
 def _state_l2(left, right, *, mhd: bool) -> float:
     a = (*left.flow.u, left.flow.g, *left.A) if mhd else (*left.u, left.g)
     b = (*right.flow.u, right.flow.g, *right.A) if mhd else (*right.u, right.g)
