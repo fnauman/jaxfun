@@ -16,3 +16,9 @@ from .imex_rk import (
     PDEIMEXRK as PDEIMEXRK,
 )
 from .rk4 import RK4 as RK4
+from .sbdf3 import (
+    IMPLICIT_SCALE as SBDF3_IMPLICIT_SCALE,  # noqa: F401 - public renamed export
+    sbdf3_explicit_history as sbdf3_explicit_history,
+    sbdf3_mass_history as sbdf3_mass_history,
+    sbdf3_rhs as sbdf3_rhs,
+)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -100,7 +101,7 @@ def _lockfile_sha256() -> dict[str, str]:
 
 
 def _cuda_versions() -> dict[str, Any]:
-    versions: dict[str, Any] = {}
+    versions: dict[str, Any] = {"python": platform.python_version()}
     try:
         import jax
 
@@ -115,6 +116,12 @@ def _cuda_versions() -> dict[str, Any]:
             versions["jax_backend"] = jax.default_backend()
         except Exception:  # pragma: no cover
             versions["jax_backend"] = None
+        try:
+            device = jax.devices()[0]
+            versions["gpu"] = getattr(device, "device_kind", None)
+            versions["cuda_runtime"] = getattr(device.client, "platform_version", None)
+        except Exception:  # pragma: no cover
+            pass
     except Exception:  # pragma: no cover - jax always present in prod
         pass
     smi = _run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"])

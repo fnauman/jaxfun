@@ -8,6 +8,32 @@ from examples.pcf_mhd_mri_shearpy_jax import (
 )
 
 
+@pytest.mark.parametrize(
+    "solver_type",
+    [PlaneCouetteMHDJax, PlaneCouetteMRIShearpyInsulatingJax],
+    ids=["conducting", "insulating"],
+)
+def test_standalone_imexrk3_mhd_constructs_and_steps(solver_type) -> None:
+    solver = solver_type(
+        N=(9, 4, 4),
+        Re=200.0,
+        Rm=200.0,
+        dt=1.0e-3,
+        time_integrator="IMEXRK3",
+        padding_factor=(1.0, 1.0, 1.0),
+        perturbation_amplitude=0.01,
+        magnetic_amplitude=0.005,
+    )
+
+    state = solver.step(solver.initial_state())
+
+    assert len(solver.SA_factor) == 3
+    assert all(bool(jnp.isfinite(leaf).all()) for leaf in jax.tree.leaves(state))
+    assert float(solver.magnetic_divergence_l2(state)) < 1.0e-11
+    if solver_type is PlaneCouetteMRIShearpyInsulatingJax:
+        assert float(solver.insulating_bc_residual(state)) < 1.0e-10
+
+
 def test_pcf_mhd_cnab2_evaluates_nonlinearity_once_per_step() -> None:
     solver = PlaneCouetteMHDJax(
         N=(9, 8, 8),
@@ -71,6 +97,46 @@ def test_pcf_mhd_divergence_free_magnetic_field_float64() -> None:
     state = solver.step(solver.initial_state())
 
     assert float(solver.magnetic_divergence_l2(state)) < 1.0e-12
+
+
+@pytest.mark.parametrize(
+    "solver_type",
+    [PlaneCouetteMHDJax, PlaneCouetteMRIShearpyInsulatingJax],
+    ids=["conducting", "insulating-mri"],
+)
+def test_mhd_rotational_form_matches_gradient_oracle_and_constraints(
+    solver_type,
+) -> None:
+    kwargs = dict(
+        N=(9, 8, 8),
+        family="C",
+        dt=1.0e-4,
+        padding_factor=(1.0, 1.5, 1.5),
+        perturbation_amplitude=0.01,
+        magnetic_amplitude=0.002,
+        time_integrator="CNAB2",
+    )
+    gradient = solver_type(**kwargs, nonlinear_form="gradient")
+    rotational = solver_type(**kwargs, nonlinear_form="rotational")
+    gradient_state = gradient.initial_state()
+    rotational_state = rotational.initial_state()
+
+    grad_h, grad_ha = gradient._mhd_convection(gradient_state)
+    rot_h, rot_ha = rotational._mhd_convection(rotational_state)
+    grad_rhs = gradient._nonlinear_rhs(grad_h)
+    rot_rhs = rotational._nonlinear_rhs(rot_h)
+    relative = jnp.linalg.norm(grad_rhs[0] - rot_rhs[0]) / jnp.maximum(
+        jnp.linalg.norm(grad_rhs[0]), 1.0e-300
+    )
+    assert float(relative) < 2.0e-4
+    assert jnp.allclose(rot_rhs[1], grad_rhs[1], rtol=2.0e-10, atol=2.0e-11)
+    for actual, expected in zip(rot_ha, grad_ha, strict=True):
+        assert jnp.allclose(actual, expected, rtol=2.0e-12, atol=2.0e-12)
+
+    stepped = rotational.step(rotational_state)
+    assert all(jnp.isfinite(value).all() for value in stepped.flow.u)
+    assert all(jnp.isfinite(value).all() for value in stepped.A)
+    assert float(rotational.magnetic_divergence_l2(stepped)) < 1.0e-10
 
 
 def _physical_projection_curl(fields, source_spaces, target_spaces, counts):

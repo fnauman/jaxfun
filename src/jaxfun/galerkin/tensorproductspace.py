@@ -633,6 +633,15 @@ class TensorProductSpace:
             Derivative coefficients in the underlying orthogonal tensor basis.
         """
 
+        return self.differentiate_orthogonal_coeffs(self.to_orthogonal(c), k)
+
+    def differentiate_orthogonal_coeffs(self, c: Array, k: tuple[int, ...]) -> Array:
+        """Differentiate coefficients already in the orthogonal basis.
+
+        This lower-level variant lets callers reuse one ``to_orthogonal``
+        conversion when several derivative directions are needed.
+        """
+
         orders = tuple(int(order) for order in k)
         if len(orders) != len(self):
             raise ValueError(
@@ -641,7 +650,6 @@ class TensorProductSpace:
         if any(order < 0 for order in orders):
             raise ValueError("derivative orders must be non-negative")
 
-        z = self.to_orthogonal(c)
         cache_key = ("derivative_orthogonal_coeffs", orders)
         if cache_key not in self._spmd_local_fn_cache:
             functions = []
@@ -665,12 +673,12 @@ class TensorProductSpace:
             self._spmd_local_fn_cache[cache_key] = tuple(functions)
 
         functions = self._spmd_local_fn_cache[cache_key]
-        if self._spectral_sharding and _has_multiple_devices(z):
+        if self._spectral_sharding and _has_multiple_devices(c):
             return _apply_separable_spmd_shard_map(
-                z, functions, spectral_sharding, self._spmd_local_fn_cache
+                c, functions, spectral_sharding, self._spmd_local_fn_cache
             )
         return _apply_separable_replicated(
-            z, functions, spectral_sharding, self._spmd_local_fn_cache
+            c, functions, spectral_sharding, self._spmd_local_fn_cache
         )
 
     def from_orthogonal(self, c: Array) -> Array:
@@ -708,6 +716,32 @@ class TensorProductSpace:
         if cache_key not in self._spmd_local_fn_cache:
             self._spmd_local_fn_cache[cache_key] = tuple(
                 _build_local_apply_fn(len(self), axis, basis.project_orthogonal_coeffs)
+                for axis, basis in enumerate(self.basespaces)
+            )
+        functions = self._spmd_local_fn_cache[cache_key]
+        if self._spectral_sharding and _has_multiple_devices(c):
+            return _apply_separable_spmd_shard_map(
+                c, functions, spectral_sharding, self._spmd_local_fn_cache
+            )
+        return _apply_separable_replicated(
+            c, functions, spectral_sharding, self._spmd_local_fn_cache
+        )
+
+    def scalar_product_from_orthogonal(self, c: Array) -> Array:
+        """Return tensor Galerkin scalar products from orthogonal coefficients.
+
+        This reproduces ``scalar_product(orthogonal.backward(c))`` using only
+        separable mass/stencil operations. It is useful when a field already
+        exists as orthogonal coefficients, for example after
+        :meth:`derivative_orthogonal_coeffs`.
+        """
+
+        cache_key = ("scalar_product_from_orthogonal",)
+        if cache_key not in self._spmd_local_fn_cache:
+            self._spmd_local_fn_cache[cache_key] = tuple(
+                _build_local_apply_fn(
+                    len(self), axis, basis.scalar_product_orthogonal_coeffs
+                )
                 for axis, basis in enumerate(self.basespaces)
             )
         functions = self._spmd_local_fn_cache[cache_key]

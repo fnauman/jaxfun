@@ -26,7 +26,14 @@ class UnsupportedSpecError(ProblemSpecError):
 SUPPORTED_GEOMETRIES = {"pcf", "channel", "taylor_couette", "pipe"}
 SUPPORTED_PHYSICS = {"hydro", "mhd", "mri"}
 SUPPORT_STATES = {"production", "experimental", "unsupported"}
-INTEGRATORS = {"analytic", "IMEXRK222", "CNAB2", "linear_eigenproblem"}
+INTEGRATORS = {
+    "analytic",
+    "IMEXRK222",
+    "IMEXRK3",
+    "SBDF3",
+    "CNAB2",
+    "linear_eigenproblem",
+}
 MAGNETIC_BCS = {None, "conducting", "insulating", "pseudo_vacuum", "dirichlet"}
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "problem_spec.schema.json"
 

@@ -1,0 +1,170 @@
+{
+  "benchmark": "jaxfun_pcf_perf_refactor",
+  "configuration": {
+    "Re": 400.0,
+    "Rm": 400.0,
+    "basis_family": "C",
+    "coefficient_path": "optimized",
+    "compilation_cache_dir": "/tmp/jaxfun-cache-mhd-separate-65x64x64",
+    "domain": [
+      [
+        -1.0,
+        1.0
+      ],
+      [
+        0.0,
+        12.566370614359172
+      ],
+      [
+        0.0,
+        6.283185307179586
+      ]
+    ],
+    "dt": 0.001,
+    "integrator": "CNAB2",
+    "nonlinear_form": "gradient",
+    "padding": [
+      1.0,
+      1.5,
+      1.5
+    ],
+    "resolution": [
+      65,
+      64,
+      64
+    ],
+    "solve_batching": "separate",
+    "wavenumber_solver": "jax"
+  },
+  "protocol": {
+    "dt_transition_probes": 3,
+    "physical_steps_per_block": 25,
+    "timed_blocks": 10,
+    "warmup_blocks": 2
+  },
+  "provenance": {
+    "branch": "main",
+    "commit": "47955c5dbdf7ef23cedeee5c51a7acc930725ad7",
+    "describe": "47955c5-dirty",
+    "dirty": true,
+    "dirty_files": [
+      "M examples/channelflow_kmm.py",
+      " M examples/pcf_fluctuations_jax.py",
+      " M examples/pcf_mhd_jax.py",
+      " M examples/pcf_mhd_mri_shearpy_jax.py",
+      " M production/benchmark.py",
+      " M production/provenance.py",
+      " M src/jaxfun/galerkin/composite.py",
+      " M src/jaxfun/galerkin/orthogonal.py",
+      " M src/jaxfun/galerkin/tensorproductspace.py",
+      " M src/jaxfun/la/tpmatrix.py",
+      " M tests/couette/test_pcf_fluctuations_jax.py",
+      " M tests/couette/test_pcf_mhd_jax.py",
+      " M tests/la/test_tpmatrices_solvers.py",
+      " M tests/production/test_benchmark.py",
+      "?? BEST_PRACTICES.md",
+      "?? BEST_PRACTICES_fable5.md",
+      "?? LOCAL_PCF_RESOLUTION_DIAGNOSTICS.md",
+      "?? PLAN_jaxfun_perf_refactor.md",
+      "?? WORST_MISTAKES.md",
+      "?? WORST_MISTAKES_fable5.md",
+      "?? benchmark-results/",
+      "?? production/benchmark_pcf_refactor.py"
+    ],
+    "jax_config": {
+      "jax_enable_x64": true,
+      "jax_use_simplified_jaxpr_constants": true,
+      "jax_use_simplified_jaxpr_constants_env": "true",
+      "jaxfun_use_simplified_jaxpr_constants": null,
+      "jaxfun_wavenumber_solver": "jax"
+    },
+    "lockfile_sha256": {
+      "pyproject.toml": "1ee5060bd05637b6933d6d4e8262d5eb922d1495eafe833156294dae490e680a",
+      "uv.lock": "beb50787969b5500e5a4a9f4000b1df3fdb23114c226f3ef4b814b3ed1cdae16"
+    },
+    "remote_url": "git@github.com:fnauman/jaxfun",
+    "unpushed_commits": [],
+    "upstream": "origin/main",
+    "versions": {
+      "cuda_runtime": "PJRT C API\ncuda 13000",
+      "gpu": "NVIDIA GeForce RTX 5090 Laptop GPU",
+      "jax": "0.10.1",
+      "jax_backend": "gpu",
+      "jaxlib": "0.10.1",
+      "nvidia_driver": "580.159.04",
+      "python": "3.12.3"
+    }
+  },
+  "schema_version": 1,
+  "solver": "mhd",
+  "timing": {
+    "argument_bytes": 313675696,
+    "compilation_cache_info": {
+      "artifact_count": 127,
+      "bytes": 1944385,
+      "enabled": true,
+      "new_artifact_count": 127,
+      "new_bytes": 1944385,
+      "path": "/tmp/jaxfun-cache-mhd-separate-65x64x64"
+    },
+    "compile_s": 19.935086812009104,
+    "cost_per_shear_time_s": 61.977621123660356,
+    "dt": 0.001,
+    "dt_transition_probe": {
+      "dt_values": [
+        0.0008,
+        0.0008500000000000001,
+        0.0009000000000000001
+      ],
+      "live_entries_after": 1,
+      "live_entries_before": 1,
+      "reused_compiled_variant": true,
+      "rollout_cache_hits_delta": 3,
+      "rollout_cache_misses_delta": 0,
+      "transitions": 3
+    },
+    "final_diagnostics": {
+      "Emag": 0.0006539729697627033,
+      "Epert": 0.03185984769099515,
+      "Etot": 52.669153732135705,
+      "divB_L2": 3.1410405771893982e-18,
+      "divL2": 8.585600885456576e-17,
+      "mean_shear": 1.0,
+      "u_bot": -1.0,
+      "u_top": 1.0,
+      "wall_shear_bot": 1.000016656003138,
+      "wall_shear_top": 1.0000166560031385
+    },
+    "generated_code_bytes": 18952,
+    "label": "mhd:coefficient-gradient:65x64x64",
+    "output_bytes": 49284224,
+    "peak_bytes": 1398848768,
+    "rollout_cache_info": {
+      "evictions": 0,
+      "generation": 0,
+      "hits": 15,
+      "live_entries": 1,
+      "max_entries": 8,
+      "misses": 1,
+      "step_counts": [
+        25
+      ]
+    },
+    "rollout_steps": 25,
+    "state_checksum": {
+      "element_count": 3080320,
+      "imag_sum": 1.7153016845005582e-14,
+      "l2_norm": 3.3649137311886936,
+      "leaf_count": 16,
+      "real_sum": -4.424141848248741
+    },
+    "temp_bytes": 414160472,
+    "timed_blocks": 10,
+    "timed_steps": 10,
+    "total_timed_steps": 250,
+    "warm_step_p50_s": 0.061977621123660356,
+    "warm_step_p90_s": 0.0625524179339409,
+    "warm_step_s": 0.061977621123660356
+  },
+  "variant": "coefficient-gradient"
+}

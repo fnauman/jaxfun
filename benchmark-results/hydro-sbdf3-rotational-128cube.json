@@ -1,0 +1,171 @@
+{
+  "benchmark": "jaxfun_pcf_perf_refactor",
+  "configuration": {
+    "Re": 400.0,
+    "Rm": null,
+    "basis_family": "C",
+    "coefficient_path": "optimized",
+    "compilation_cache_dir": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/benchmark-cache/hydro-sbdf3-rotational-128cube-reordered",
+    "domain": [
+      [
+        -1.0,
+        1.0
+      ],
+      [
+        0.0,
+        12.566370614359172
+      ],
+      [
+        0.0,
+        6.283185307179586
+      ]
+    ],
+    "dt": 0.001,
+    "integrator": "SBDF3",
+    "nonlinear_form": "rotational",
+    "padding": [
+      1.0,
+      1.5,
+      1.5
+    ],
+    "resolution": [
+      128,
+      128,
+      128
+    ],
+    "solve_batching": "batched",
+    "wavenumber_solver": "jax"
+  },
+  "protocol": {
+    "dt_transition_probes": 0,
+    "physical_steps_per_block": 5,
+    "timed_blocks": 2,
+    "warmup_blocks": 1
+  },
+  "provenance": {
+    "branch": "main",
+    "commit": "47955c5dbdf7ef23cedeee5c51a7acc930725ad7",
+    "describe": "47955c5-dirty",
+    "dirty": true,
+    "dirty_files": [
+      "M examples/channelflow_kmm.py",
+      " M examples/pcf_fluctuations_jax.py",
+      " M examples/pcf_mhd_jax.py",
+      " M examples/pcf_mhd_mri_shearpy_jax.py",
+      " M production/benchmark.py",
+      " M production/oracles.py",
+      " M production/problem_spec.py",
+      " M production/provenance.py",
+      " M production/run_problem.py",
+      " M src/jaxfun/galerkin/composite.py",
+      " M src/jaxfun/galerkin/orthogonal.py",
+      " M src/jaxfun/galerkin/tensorproductspace.py",
+      " M src/jaxfun/integrators/__init__.py",
+      " M src/jaxfun/la/tpmatrix.py",
+      " M tests/couette/test_pcf_fluctuations_jax.py",
+      " M tests/couette/test_pcf_mhd_jax.py",
+      " M tests/la/test_tpmatrices_solvers.py",
+      " M tests/production/test_benchmark.py",
+      "?? BEST_PRACTICES.md",
+      "?? BEST_PRACTICES_fable5.md",
+      "?? LOCAL_PCF_RESOLUTION_DIAGNOSTICS.md",
+      "?? PLAN_jaxfun_perf_refactor.md",
+      "?? WORST_MISTAKES.md",
+      "?? WORST_MISTAKES_fable5.md",
+      "?? benchmark-cache/",
+      "?? benchmark-results/",
+      "?? production/benchmark_pcf_refactor.py",
+      "?? production/structured_sg_prototype.py",
+      "?? src/jaxfun/galerkin/hermitian.py",
+      "?? src/jaxfun/integrators/sbdf3.py",
+      "?? tests/couette/test_pcf_sbdf3_jax.py",
+      "?? tests/galerkin/test_hermitian_periodic.py",
+      "?? tests/integrators/test_sbdf3.py",
+      "?? tests/la/test_pcf_wavenumber_backends.py",
+      "?? tests/la/test_structured_sg_prototype.py"
+    ],
+    "jax_config": {
+      "jax_enable_x64": true,
+      "jax_use_simplified_jaxpr_constants": true,
+      "jax_use_simplified_jaxpr_constants_env": "true",
+      "jaxfun_use_simplified_jaxpr_constants": null,
+      "jaxfun_wavenumber_solver": "jax"
+    },
+    "lockfile_sha256": {
+      "pyproject.toml": "1ee5060bd05637b6933d6d4e8262d5eb922d1495eafe833156294dae490e680a",
+      "uv.lock": "beb50787969b5500e5a4a9f4000b1df3fdb23114c226f3ef4b814b3ed1cdae16"
+    },
+    "remote_url": "git@github.com:fnauman/jaxfun",
+    "unpushed_commits": [],
+    "upstream": "origin/main",
+    "versions": {
+      "cuda_runtime": "PJRT C API\ncuda 13000",
+      "gpu": "NVIDIA GeForce RTX 5090 Laptop GPU",
+      "jax": "0.10.1",
+      "jax_backend": "gpu",
+      "jaxlib": "0.10.1",
+      "nvidia_driver": "580.159.04",
+      "python": "3.12.3"
+    }
+  },
+  "schema_version": 1,
+  "solver": "hydro",
+  "timing": {
+    "alias_bytes": 0,
+    "argument_bytes": 3531471432,
+    "compilation_cache_info": {
+      "artifact_count": 156,
+      "bytes": 1388581,
+      "enabled": true,
+      "new_artifact_count": 156,
+      "new_bytes": 1388581,
+      "path": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/benchmark-cache/hydro-sbdf3-rotational-128cube-reordered"
+    },
+    "compile_s": 40.48657433199696,
+    "cost_per_shear_time_s": 219.7176454006694,
+    "dt": 0.001,
+    "dt_transition_probe": null,
+    "final_diagnostics": {
+      "Epert": 0.03311241515061922,
+      "Etot": 52.67100011793985,
+      "divL2": 1.1569254262401238e-16,
+      "mean_shear": 1.0,
+      "u_bot": -1.0,
+      "u_top": 1.0,
+      "wall_shear_bot": 1.0000001390840487,
+      "wall_shear_top": 1.0000001390840487
+    },
+    "generated_code_bytes": 7008,
+    "label": "hydro:optimized-rotational:128x128x128",
+    "output_bytes": 393748560,
+    "peak_bytes": 12628252672,
+    "rollout_cache_info": {
+      "evictions": 0,
+      "generation": 0,
+      "hits": 2,
+      "live_entries": 2,
+      "max_entries": 8,
+      "misses": 2,
+      "step_counts": [
+        3,
+        5
+      ]
+    },
+    "rollout_steps": 5,
+    "state_checksum": {
+      "element_count": 24609779,
+      "imag_sum": -5.445893938975254e-12,
+      "l2_norm": 4.9126246613658635,
+      "leaf_count": 23,
+      "real_sum": -9.233376626518906
+    },
+    "temp_bytes": 4491337736,
+    "timed_blocks": 2,
+    "timed_steps": 2,
+    "total_timed_steps": 10,
+    "warm_step_p50_s": 0.2197176454006694,
+    "warm_step_p90_s": 0.22005236171884462,
+    "warm_step_s": 0.2197176454006694
+  },
+  "variant": "optimized-rotational"
+}

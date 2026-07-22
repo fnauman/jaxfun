@@ -31,8 +31,9 @@ class ProductionOracleNotImplementedError(NotImplementedError):
     """Raised when a spec has no wired jaxfun production execution path yet."""
 
 
-_PCF_KMM_TIME_INTEGRATORS = frozenset({"IMEXRK222", "IMEXRK3", "CNAB2"})
-_PCF_VECTOR_POTENTIAL_TIME_INTEGRATORS = frozenset({"IMEXRK222", "CNAB2"})
+_PCF_KMM_TIME_INTEGRATORS = frozenset({"IMEXRK222", "IMEXRK3", "SBDF3", "CNAB2"})
+_PCF_VECTOR_POTENTIAL_TIME_INTEGRATORS = frozenset({"IMEXRK222", "SBDF3", "CNAB2"})
+_PCF_PRIMITIVE_TIME_INTEGRATORS = frozenset({"IMEXRK222", "CNAB2"})
 
 
 def _pcf_kmm_time_integrator(
@@ -49,6 +50,23 @@ def _pcf_kmm_time_integrator(
         raise ProductionOracleNotImplementedError(
             f"{solver_family} requires a time-stepping integrator "
             f"({supported}); got time.integrator={integrator!r}"
+        )
+    if integrator == "SBDF3" and adaptive_cfl_from_spec(spec) is not None:
+        raise ProductionOracleNotImplementedError(
+            f"{solver_family} does not support adaptive_cfl with fixed-step SBDF3"
+        )
+    return integrator
+
+
+def _pcf_primitive_time_integrator(spec: dict[str, Any]) -> str:
+    """Reject integrator labels the primitive PCF solver cannot honor."""
+
+    integrator = str(spec["time"]["integrator"])
+    if integrator not in _PCF_PRIMITIVE_TIME_INTEGRATORS:
+        supported = ", ".join(sorted(_PCF_PRIMITIVE_TIME_INTEGRATORS))
+        raise ProductionOracleNotImplementedError(
+            "PCF primitive MHD/MRI requires an implemented time-stepping "
+            f"integrator ({supported}); got time.integrator={integrator!r}"
         )
     return integrator
 
@@ -318,6 +336,22 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
                 if "nonlinear_old" not in payload
                 else tuple(payload["nonlinear_old"])
             ),
+            nonlinear_older=(
+                None
+                if "nonlinear_older" not in payload
+                else tuple(payload["nonlinear_older"])
+            ),
+            solution_old=(
+                None
+                if "solution_old" not in payload
+                else tuple(payload["solution_old"])
+            ),
+            solution_older=(
+                None
+                if "solution_older" not in payload
+                else tuple(payload["solution_older"])
+            ),
+            history_steps=payload.get("history_steps", 0.0),
             have_old=jnp.asarray(payload.get("have_old", 0.0), dtype=jnp.float32),
             previous_dt=payload.get("previous_dt", 0.0),
         )
@@ -361,6 +395,22 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
                     if "flow_nonlinear_old" not in payload
                     else tuple(payload["flow_nonlinear_old"])
                 ),
+                nonlinear_older=(
+                    None
+                    if "flow_nonlinear_older" not in payload
+                    else tuple(payload["flow_nonlinear_older"])
+                ),
+                solution_old=(
+                    None
+                    if "flow_solution_old" not in payload
+                    else tuple(payload["flow_solution_old"])
+                ),
+                solution_older=(
+                    None
+                    if "flow_solution_older" not in payload
+                    else tuple(payload["flow_solution_older"])
+                ),
+                history_steps=payload.get("flow_history_steps", 0.0),
                 have_old=jnp.asarray(
                     payload.get("flow_have_old", 0.0), dtype=jnp.float32
                 ),
@@ -372,6 +422,13 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
                 if "nonlinear_A_old" not in payload
                 else tuple(payload["nonlinear_A_old"])
             ),
+            nonlinear_A_older=(
+                None
+                if "nonlinear_A_older" not in payload
+                else tuple(payload["nonlinear_A_older"])
+            ),
+            A_old=(None if "A_old" not in payload else tuple(payload["A_old"])),
+            A_older=(None if "A_older" not in payload else tuple(payload["A_older"])),
         )
     if state_kind == "tc_vector_potential_mhd_saturation":
         from examples.taylor_couette_vp_jax import TCVPState
@@ -494,6 +551,13 @@ def run_supported_spec(
         )
     elif spec["geometry"] == "pcf" and spec.get("problem_id") == "pcf_fluct_re400":
         _pcf_kmm_time_integrator(spec, solver_family="PCF hydrodynamic KMM")
+    elif (
+        spec["geometry"] == "pcf"
+        and spec["physics"] in {"mhd", "mri"}
+        and spec["expected_oracle"]["type"]
+        in {"gpu_generated_saturated_dns", "mri_saturation_ladder"}
+    ):
+        _pcf_primitive_time_integrator(spec)
 
     validate_quench_duration_request(
         quench=quench,
@@ -3759,8 +3823,21 @@ def _checkpoint_payload(state: Any) -> dict[str, Any]:
                     "flow_previous_dt": jnp.asarray(state.flow.previous_dt),
                 }
             )
+        if state.flow.nonlinear_older is not None:
+            payload["flow_nonlinear_older"] = state.flow.nonlinear_older
+        if state.flow.solution_old is not None:
+            payload["flow_solution_old"] = state.flow.solution_old
+        if state.flow.solution_older is not None:
+            payload["flow_solution_older"] = state.flow.solution_older
+        payload["flow_history_steps"] = jnp.asarray(state.flow.history_steps)
         if state.nonlinear_A_old is not None:
             payload["nonlinear_A_old"] = state.nonlinear_A_old
+        if state.nonlinear_A_older is not None:
+            payload["nonlinear_A_older"] = state.nonlinear_A_older
+        if state.A_old is not None:
+            payload["A_old"] = state.A_old
+        if state.A_older is not None:
+            payload["A_older"] = state.A_older
         return payload
     if hasattr(state, "u") and hasattr(state, "A"):
         # TCVPState (vector-potential Taylor-Couette family).
@@ -3781,6 +3858,14 @@ def _checkpoint_payload(state: Any) -> dict[str, Any]:
                     "previous_dt": jnp.asarray(state.previous_dt),
                 }
             )
+        if getattr(state, "nonlinear_older", None) is not None:
+            payload["nonlinear_older"] = state.nonlinear_older
+        if getattr(state, "solution_old", None) is not None:
+            payload["solution_old"] = state.solution_old
+        if getattr(state, "solution_older", None) is not None:
+            payload["solution_older"] = state.solution_older
+        if hasattr(state, "history_steps"):
+            payload["history_steps"] = jnp.asarray(state.history_steps)
         return payload
     if hasattr(state, "u"):
         return {

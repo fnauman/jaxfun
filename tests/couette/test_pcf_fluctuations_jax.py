@@ -8,6 +8,149 @@ from jaxfun.integrators import IMEXRK3, IMEXRK222
 from jaxfun.io import Cadence
 
 
+def _random_complex(key, shape):
+    real_key, imag_key = jax.random.split(key)
+    return jax.random.normal(real_key, shape) + 1j * jax.random.normal(imag_key, shape)
+
+
+@pytest.mark.parametrize("family", ["C", "L"], ids=["chebyshev", "legendre"])
+def test_kmm_coefficient_rhs_and_reconstruction_match_transform_oracles(
+    family,
+) -> None:
+    solver = PlaneCouetteFluctuationJax(
+        N=(13, 12, 12),
+        family=family,
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+        perturbation_amplitude=0.0,
+        coefficient_path="optimized",
+    )
+    keys = jax.random.split(jax.random.PRNGKey(1729), 7)
+    H = tuple(
+        solver.TD.mask_nyquist(
+            1.0e-3 * _random_complex(keys[index], solver.TD.num_dofs)
+        )
+        for index in range(3)
+    )
+
+    actual_rhs = solver._nonlinear_rhs(H)
+    expected_rhs = solver._nonlinear_rhs_physical_reference(H)
+    for actual, expected in zip(actual_rhs, expected_rhs, strict=True):
+        assert jnp.allclose(actual, expected, rtol=2.0e-11, atol=2.0e-12), float(
+            jnp.max(jnp.abs(actual - expected))
+        )
+
+    u0 = solver.TB.mask_nyquist(1.0e-3 * _random_complex(keys[3], solver.TB.num_dofs))
+    g = solver.TD.mask_nyquist(1.0e-3 * _random_complex(keys[4], solver.TD.num_dofs))
+    v00 = jax.random.normal(keys[5], (solver.D00.num_dofs,))
+    w00 = jax.random.normal(keys[6], (solver.D00.num_dofs,))
+    actual_u = solver._reconstruct_velocity(u0, g, v00, w00)
+    expected_u = solver._reconstruct_velocity_physical_reference(u0, g, v00, w00)
+    for actual, expected in zip(actual_u, expected_u, strict=True):
+        assert jnp.allclose(actual, expected, rtol=2.0e-11, atol=2.0e-12), float(
+            jnp.max(jnp.abs(actual - expected))
+        )
+
+
+def test_kmm_coefficient_hot_path_avoids_physical_transform_round_trips(
+    monkeypatch,
+) -> None:
+    solver = PlaneCouetteFluctuationJax(
+        N=(9, 8, 8),
+        family="C",
+        dt=1.0e-3,
+        padding_factor=(1.0, 1.0, 1.0),
+        perturbation_amplitude=0.0,
+        coefficient_path="optimized",
+    )
+    H = tuple(jnp.zeros(solver.TD.num_dofs, dtype=complex) for _ in range(3))
+    u0 = jnp.zeros(solver.TB.num_dofs, dtype=complex)
+    g = jnp.zeros(solver.TD.num_dofs, dtype=complex)
+    mean = jnp.zeros(solver.D00.num_dofs)
+
+    to_orthogonal = type(solver.TD).to_orthogonal
+    conversions = 0
+
+    def counted_to_orthogonal(space, coefficients):
+        nonlocal conversions
+        conversions += 1
+        return to_orthogonal(space, coefficients)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("coefficient hot path performed a physical transform")
+
+    tensor_space_type = type(solver.TD)
+    monkeypatch.setattr(tensor_space_type, "to_orthogonal", counted_to_orthogonal)
+    monkeypatch.setattr(tensor_space_type, "backward_primitive", forbidden)
+    monkeypatch.setattr(tensor_space_type, "forward", forbidden)
+    monkeypatch.setattr(tensor_space_type, "scalar_product", forbidden)
+
+    solver._nonlinear_rhs(H)
+    assert conversions == 3
+    solver._reconstruct_velocity(u0, g, mean, mean)
+
+
+def test_pcf_defaults_to_transform_reference_path() -> None:
+    solver = PlaneCouetteFluctuationJax(N=(9, 4, 4))
+
+    assert solver.coefficient_path == "transform"
+
+
+def test_pcf_rejects_unknown_nonlinear_form() -> None:
+    with pytest.raises(ValueError, match="nonlinear_form"):
+        PlaneCouetteFluctuationJax(N=(9, 4, 4), nonlinear_form="advective")
+
+
+@pytest.mark.parametrize("family", ["C", "L"], ids=["chebyshev", "legendre"])
+def test_pcf_rotational_form_preserves_laminar_state_and_matches_gradient_step(
+    family,
+) -> None:
+    kwargs = dict(
+        N=(13, 12, 12),
+        family=family,
+        dt=1.0e-4,
+        padding_factor=(1.0, 1.5, 1.5),
+        perturbation_amplitude=0.02,
+        time_integrator="CNAB2",
+    )
+    gradient = PlaneCouetteFluctuationJax(**kwargs, nonlinear_form="gradient")
+    rotational = PlaneCouetteFluctuationJax(**kwargs, nonlinear_form="rotational")
+
+    laminar = rotational.step(rotational.zero_state())
+    assert all(jnp.allclose(value, 0.0, atol=2.0e-13) for value in laminar.u)
+    assert jnp.allclose(laminar.g, 0.0, atol=2.0e-13)
+
+    state = gradient.initial_state()
+    grad_rhs = gradient._nonlinear_rhs(gradient.convection(state))
+    rotational_state = rotational.initial_state()
+    rot_rhs = rotational._nonlinear_rhs(rotational.convection(rotational_state))
+    relative = jnp.linalg.norm(grad_rhs[0] - rot_rhs[0]) / jnp.linalg.norm(grad_rhs[0])
+    assert float(relative) < 1.0e-4
+    assert jnp.allclose(rot_rhs[1], grad_rhs[1], rtol=2.0e-11, atol=2.0e-12)
+
+    grad_step = gradient.step(state)
+    rot_step = rotational.step(rotational_state)
+    for actual, expected in zip(
+        (*rot_step.u, rot_step.g), (*grad_step.u, grad_step.g), strict=True
+    ):
+        assert jnp.allclose(actual, expected, rtol=2.0e-7, atol=2.0e-10)
+
+
+def test_pcf_rotational_term_has_zero_pointwise_self_work() -> None:
+    solver = PlaneCouetteFluctuationJax(
+        N=(13, 12, 12),
+        family="C",
+        nonlinear_form="rotational",
+        perturbation_amplitude=0.02,
+    )
+    state = solver.initial_state()
+    n, up = solver._flow_convection_physical(state)
+    omega = solver.velocity_vorticity_physical(state.u, padded=True)
+    utotal, _omega_total = solver._add_base_rotational_fields(up, omega)
+    self_work = sum(ui * ni for ui, ni in zip(utotal, n, strict=True))
+    assert float(jnp.max(jnp.abs(self_work))) < 2.0e-13
+
+
 def test_pcf_fluctuation_initialization_and_one_step_are_finite() -> None:
     solver = PlaneCouetteFluctuationJax(
         N=(9, 8, 8), family="L", dt=1.0e-3, perturbation_amplitude=0.05

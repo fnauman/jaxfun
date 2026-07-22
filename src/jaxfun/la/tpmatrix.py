@@ -713,6 +713,7 @@ def _make_wavenumber_batched_solve(
         if p == 0:
             return rhs
         n_fourier = rhs.shape[0]
+        rhs_dims = (1,) * max(0, rhs.ndim - 2)
         rows: list[Array] = []
         for separation, index in enumerate(l_indices, start=1):
             if index is None:
@@ -731,12 +732,15 @@ def _make_wavenumber_batched_solve(
         coefficients = jnp.stack(rows, axis=-1)  # (n_F, n_P, p)
 
         def step(window: Array, values: tuple[Array, Array]) -> tuple[Array, Array]:
-            rhs_i, coefficients_i = values  # (n_F,), (n_F, p)
-            solved_i = rhs_i - jnp.sum(coefficients_i * window, axis=-1)
-            next_window = jnp.concatenate((solved_i[:, None], window[:, :-1]), axis=1)
+            rhs_i, coefficients_i = values
+            coefficients_i = coefficients_i.reshape(coefficients_i.shape + rhs_dims)
+            solved_i = rhs_i - jnp.sum(coefficients_i * window, axis=1)
+            next_window = jnp.concatenate(
+                (solved_i[:, None, ...], window[:, :-1, ...]), axis=1
+            )
             return next_window, solved_i
 
-        carry = jnp.zeros((n_fourier, p), dtype=rhs.dtype)
+        carry = jnp.zeros((n_fourier, p, *rhs.shape[2:]), dtype=rhs.dtype)
         _, solved = jax.lax.scan(
             step,
             carry,
@@ -747,8 +751,9 @@ def _make_wavenumber_batched_solve(
     def _backward(U_data: Array, rhs: Array) -> Array:
         diagonal = U_data[:, main_index, :]
         if q == 0:
-            return rhs / diagonal
+            return rhs / diagonal.reshape(diagonal.shape + (1,) * (rhs.ndim - 2))
         n_fourier = rhs.shape[0]
+        rhs_dims = (1,) * max(0, rhs.ndim - 2)
         rows: list[Array] = []
         for separation, index in enumerate(u_indices, start=1):
             if index is None:
@@ -768,11 +773,15 @@ def _make_wavenumber_batched_solve(
 
         def step(window: Array, values: tuple[Array, Array, Array]):
             rhs_i, coefficients_i, diagonal_i = values
-            solved_i = (rhs_i - jnp.sum(coefficients_i * window, axis=-1)) / diagonal_i
-            next_window = jnp.concatenate((solved_i[:, None], window[:, :-1]), axis=1)
+            coefficients_i = coefficients_i.reshape(coefficients_i.shape + rhs_dims)
+            diagonal_i = diagonal_i.reshape(diagonal_i.shape + rhs_dims)
+            solved_i = (rhs_i - jnp.sum(coefficients_i * window, axis=1)) / diagonal_i
+            next_window = jnp.concatenate(
+                (solved_i[:, None, ...], window[:, :-1, ...]), axis=1
+            )
             return next_window, solved_i
 
-        carry = jnp.zeros((n_fourier, q), dtype=rhs.dtype)
+        carry = jnp.zeros((n_fourier, q, *rhs.shape[2:]), dtype=rhs.dtype)
         _, solved_reversed = jax.lax.scan(
             step,
             carry,
@@ -877,69 +886,89 @@ def _make_wavenumber_pallas_solve(
     )
     main_index = U_offsets.index(0)
 
-    def kernel(L_ref, U_ref, rhs_ref, out_ref):
-        def forward(row, _unused):
-            value = rhs_ref[0, row, :]
-            for separation, index in enumerate(lower_indices, start=1):
-                if index is not None:
-                    source = jnp.maximum(row - separation, 0)
-                    correction = L_ref[0, index, source] * out_ref[0, source, :]
-                    value = value - jnp.where(
-                        row >= separation,
-                        correction,
-                        jnp.zeros_like(correction),
-                    )
-            out_ref[0, row, :] = value
-            return ()
+    def make_call(num_lanes: int):
+        def kernel(L_ref, U_ref, rhs_ref, out_ref):
+            def forward(row, _unused):
+                value = rhs_ref[0, row, :]
+                for separation, index in enumerate(lower_indices, start=1):
+                    if index is not None:
+                        source = jnp.maximum(row - separation, 0)
+                        correction = L_ref[0, index, source] * out_ref[0, source, :]
+                        value = value - jnp.where(
+                            row >= separation,
+                            correction,
+                            jnp.zeros_like(correction),
+                        )
+                out_ref[0, row, :] = value
+                return ()
 
-        jax.lax.fori_loop(0, n_poly, forward, ())
+            jax.lax.fori_loop(0, n_poly, forward, ())
 
-        def backward(iteration, _unused):
-            row = n_poly - 1 - iteration
-            value = out_ref[0, row, :]
-            for separation, index in enumerate(upper_indices, start=1):
-                if index is not None:
-                    source = jnp.minimum(row + separation, n_poly - 1)
-                    correction = U_ref[0, index, source] * out_ref[0, source, :]
-                    value = value - jnp.where(
-                        row + separation < n_poly,
-                        correction,
-                        jnp.zeros_like(correction),
-                    )
-            out_ref[0, row, :] = value / U_ref[0, main_index, row]
-            return ()
+            def backward(iteration, _unused):
+                row = n_poly - 1 - iteration
+                value = out_ref[0, row, :]
+                for separation, index in enumerate(upper_indices, start=1):
+                    if index is not None:
+                        source = jnp.minimum(row + separation, n_poly - 1)
+                        correction = U_ref[0, index, source] * out_ref[0, source, :]
+                        value = value - jnp.where(
+                            row + separation < n_poly,
+                            correction,
+                            jnp.zeros_like(correction),
+                        )
+                out_ref[0, row, :] = value / U_ref[0, main_index, row]
+                return ()
 
-        jax.lax.fori_loop(0, n_poly, backward, ())
+            jax.lax.fori_loop(0, n_poly, backward, ())
 
-        def clear_padding(row, _unused):
-            out_ref[0, row, :] = jnp.zeros((2,), dtype=factor_dtype)
-            return ()
+            def clear_padding(row, _unused):
+                out_ref[0, row, :] = jnp.zeros((num_lanes,), dtype=factor_dtype)
+                return ()
 
-        jax.lax.fori_loop(n_poly, n_poly_padded, clear_padding, ())
+            jax.lax.fori_loop(n_poly, n_poly_padded, clear_padding, ())
 
-    rhs_shape = (n_fourier, n_poly_padded, 2)
-    call = pl.pallas_call(
-        kernel,
-        out_shape=jax.ShapeDtypeStruct(rhs_shape, factor_dtype),
-        grid=(n_fourier,),
-        in_specs=(
-            pl.BlockSpec((1, n_lower_padded, n_poly_padded), lambda mode: (mode, 0, 0)),
-            pl.BlockSpec((1, n_upper_padded, n_poly_padded), lambda mode: (mode, 0, 0)),
-            pl.BlockSpec((1, n_poly_padded, 2), lambda mode: (mode, 0, 0)),
-        ),
-        out_specs=pl.BlockSpec((1, n_poly_padded, 2), lambda mode: (mode, 0, 0)),
-        compiler_params=plt.CompilerParams(num_warps=1),
-        name="jaxfun_banded_triangular",
-    )
+        rhs_shape = (n_fourier, n_poly_padded, num_lanes)
+        return pl.pallas_call(
+            kernel,
+            out_shape=jax.ShapeDtypeStruct(rhs_shape, factor_dtype),
+            grid=(n_fourier,),
+            in_specs=(
+                pl.BlockSpec(
+                    (1, n_lower_padded, n_poly_padded), lambda mode: (mode, 0, 0)
+                ),
+                pl.BlockSpec(
+                    (1, n_upper_padded, n_poly_padded), lambda mode: (mode, 0, 0)
+                ),
+                pl.BlockSpec((1, n_poly_padded, num_lanes), lambda mode: (mode, 0, 0)),
+            ),
+            out_specs=pl.BlockSpec(
+                (1, n_poly_padded, num_lanes), lambda mode: (mode, 0, 0)
+            ),
+            compiler_params=plt.CompilerParams(num_warps=1),
+            name="jaxfun_banded_triangular",
+        )
 
     def solve(L_arg: Array, U_arg: Array, rhs: Array) -> Array:
         rhs_real = jnp.asarray(jnp.real(rhs), dtype=factor_dtype)
         rhs_imag = jnp.asarray(jnp.imag(rhs), dtype=factor_dtype)
+        lane_shape = rhs.shape[2:]
+        num_rhs = int(np.prod(lane_shape)) if lane_shape else 1
+        num_lanes = 2 * num_rhs
+        num_lanes_padded = _next_power_of_two(num_lanes)
         rhs_pair = jnp.pad(
-            jnp.stack((rhs_real, rhs_imag), axis=-1),
-            ((0, 0), (0, n_poly_padded - n_poly), (0, 0)),
+            jnp.stack((rhs_real, rhs_imag), axis=-1).reshape(
+                n_fourier, n_poly, num_lanes
+            ),
+            (
+                (0, 0),
+                (0, n_poly_padded - n_poly),
+                (0, num_lanes_padded - num_lanes),
+            ),
         )
-        solved = call(L_arg, U_arg, rhs_pair)[:, :n_poly, :]
+        solved = make_call(num_lanes_padded)(L_arg, U_arg, rhs_pair)[
+            :, :n_poly, :num_lanes
+        ]
+        solved = solved.reshape((*rhs.shape, 2))
         if jnp.issubdtype(rhs.dtype, jnp.complexfloating):
             return solved[..., 0] + 1j * solved[..., 1]
         return solved[..., 0]
@@ -1310,7 +1339,22 @@ class TPMatricesWavenumberSolver:
             sol_perm = sol_2d.reshape(_fourier_shape + (_n_P,))
             return jnp.transpose(sol_perm, _inv_perm)
 
+        _many_axes_order = tuple(axis + 1 for axis in _axes_order) + (0,)
+        _many_output_order = (len(shape),) + tuple(
+            _fourier_axes.index(axis) if axis in _fourier_axes else len(_fourier_axes)
+            for axis in range(_ndim)
+        )
+
+        @jax.jit
+        def _solve_many_jit(L: Array, U: Array, rhs: Array) -> Array:
+            n_rhs = rhs.shape[0]
+            rhs_3d = jnp.transpose(rhs, _many_axes_order).reshape(_n_F, _n_P, n_rhs)
+            sol_3d = _batched_fn(L, U, rhs_3d)
+            sol_perm = sol_3d.reshape(_fourier_shape + (_n_P, n_rhs))
+            return jnp.transpose(sol_perm, _many_output_order)
+
         self._solve_jit = _solve_jit
+        self._solve_many_jit = _solve_many_jit
         self._solve_args = (solve_L, solve_U)
 
         if len(jax.devices()) > 1:
@@ -1340,6 +1384,23 @@ class TPMatricesWavenumberSolver:
                 return _jit
 
             self._local_solve_jits = [_make_device_jit() for d in range(_n_local)]
+
+            def _make_device_many_jit():
+                @jax.jit
+                def _jit(L: Array, U: Array, rhs_d: Array) -> Array:
+                    n_rhs = rhs_d.shape[0]
+                    rhs_3d = jnp.transpose(rhs_d, _many_axes_order).reshape(
+                        _n_F_per_device, _n_P, n_rhs
+                    )
+                    sol_3d = _batched_fn(L, U, rhs_3d)
+                    sol_perm = sol_3d.reshape(_fourier_shape_per_device + (_n_P, n_rhs))
+                    return jnp.transpose(sol_perm, _many_output_order)
+
+                return _jit
+
+            self._local_solve_many_jits = [
+                _make_device_many_jit() for _ in range(_n_local)
+            ]
             self._local_solve_args = [
                 (self._L_per_device[d], self._U_per_device[d]) for d in range(_n_local)
             ]
@@ -1387,6 +1448,40 @@ class TPMatricesWavenumberSolver:
 
             return _solve_dense_jit, (lu_data, piv_data)
 
+        def _make_solve_many_jit(
+            local_constraints: tuple[WavenumberConstraint, ...],
+            local_fourier_shape: tuple[int, ...],
+        ):
+            constraint_modes = tuple(mode for mode, _row, _value in local_constraints)
+            constraint_rows = tuple(row for _mode, row, _value in local_constraints)
+            constraint_values = tuple(value for _mode, _row, value in local_constraints)
+            local_n_fourier = int(np.prod(local_fourier_shape))
+            many_axes_order = tuple(axis + 1 for axis in axes_order) + (0,)
+            many_output_order = (ndim,) + tuple(
+                fourier_axes.index(axis) if axis in fourier_axes else len(fourier_axes)
+                for axis in range(ndim)
+            )
+
+            @jax.jit
+            def _solve_dense_many_jit(
+                lu_arg: Array, piv_arg: Array, rhs: Array
+            ) -> Array:
+                n_rhs = rhs.shape[0]
+                rhs_3d = jnp.transpose(rhs, many_axes_order).reshape(
+                    local_n_fourier, n_poly, n_rhs
+                )
+                if constraint_modes:
+                    rhs_3d = rhs_3d.at[
+                        jnp.asarray(constraint_modes), jnp.asarray(constraint_rows), :
+                    ].set(jnp.asarray(constraint_values, dtype=rhs_3d.dtype)[:, None])
+                sol_3d = jax.vmap(
+                    lambda lu_i, piv_i, b_i: jsp_linalg.lu_solve((lu_i, piv_i), b_i)
+                )(lu_arg, piv_arg, rhs_3d)
+                sol_perm = sol_3d.reshape(local_fourier_shape + (n_poly, n_rhs))
+                return jnp.transpose(sol_perm, many_output_order)
+
+            return _solve_dense_many_jit
+
         if len(jax.devices()) > 1:
             if self.poly_axis == 0:
                 raise ValueError(
@@ -1417,6 +1512,7 @@ class TPMatricesWavenumberSolver:
             )
             local_fourier_shape = (fourier_shape[0] // n_total,) + fourier_shape[1:]
             self._local_solve_jits = []
+            self._local_solve_many_jits = []
             self._local_solve_args = []
             for device_index, device in enumerate(jax.local_devices()):
                 local_start = device_index * n_fourier_per_device
@@ -1434,6 +1530,14 @@ class TPMatricesWavenumberSolver:
                     local_fourier_shape,
                 )
                 self._local_solve_jits.append(local_solve)
+                self._local_solve_many_jits.append(
+                    _make_solve_many_jit(
+                        _constraints_for_wavenumber_range(
+                            constraints, global_start, global_end
+                        ),
+                        local_fourier_shape,
+                    )
+                )
                 self._local_solve_args.append(local_args)
             return
 
@@ -1441,6 +1545,7 @@ class TPMatricesWavenumberSolver:
         self._solve_jit, self._solve_args = _make_solve_jit(
             lu, piv, constraints, fourier_shape
         )
+        self._solve_many_jit = _make_solve_many_jit(constraints, fourier_shape)
 
     def solve(self, rhs: Array) -> Array:
         """Solve the wavenumber-loop system for RHS ``rhs``.
@@ -1482,6 +1587,39 @@ class TPMatricesWavenumberSolver:
 
         return self._solve_jit(*self._solve_args, rhs)
 
+    def solve_many(self, rhs: Array) -> Array:
+        """Solve multiple right-hand sides while loading each factor once.
+
+        The leading axis indexes right-hand sides and the remaining shape must
+        equal :attr:`shape`. The compact JAX and Pallas recurrences carry that
+        axis as vector lanes inside one compiled solve.
+        """
+
+        expected_ndim = len(self.shape) + 1
+        if rhs.ndim != expected_ndim or tuple(rhs.shape[1:]) != tuple(self.shape):
+            raise ValueError(
+                f"multi-RHS input must have shape (n_rhs, {self.shape}), "
+                f"received {rhs.shape}"
+            )
+        if not hasattr(self, "_solve_many_jit"):
+            return jax.vmap(self.solve)(rhs)
+        if len(jax.devices()) > 1:
+            try:
+                is_sharded_rhs = len(rhs.devices()) > 1
+            except (TypeError, AttributeError):
+                is_sharded_rhs = False
+            if is_sharded_rhs:
+                results = [
+                    self._local_solve_many_jits[d](
+                        *self._local_solve_args[d], rhs.addressable_data(d)
+                    )
+                    for d in range(jax.local_device_count())
+                ]
+                return jax.make_array_from_single_device_arrays(
+                    rhs.shape, rhs.sharding, results
+                )
+        return self._solve_many_jit(*self._solve_args, rhs)
+
     def runtime_args(self) -> tuple[Array, Array]:
         """Return factor arrays suitable for an outer compiled rollout.
 
@@ -1514,6 +1652,29 @@ class TPMatricesWavenumberSolver:
             ):
                 pass
         return self._solve_jit(*factor_args, rhs)
+
+    def solve_many_with_runtime_args(
+        self, rhs: Array, factor_args: tuple[Array, Array]
+    ) -> Array:
+        """Multi-RHS solve with caller-supplied factor arrays."""
+
+        expected_ndim = len(self.shape) + 1
+        if rhs.ndim != expected_ndim or tuple(rhs.shape[1:]) != tuple(self.shape):
+            raise ValueError(
+                f"multi-RHS input must have shape (n_rhs, {self.shape}), "
+                f"received {rhs.shape}"
+            )
+        if len(jax.devices()) > 1:
+            try:
+                if len(rhs.devices()) > 1:
+                    return self.solve_many(rhs)
+            except (TypeError, AttributeError):
+                pass
+        if not hasattr(self, "_solve_many_jit"):
+            return jax.vmap(
+                lambda value: self.solve_with_runtime_args(value, factor_args)
+            )(rhs)
+        return self._solve_many_jit(*factor_args, rhs)
 
 
 class TPMatricesDenseLUFactors:

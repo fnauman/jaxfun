@@ -54,6 +54,9 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
         magnetic_seed: str = "ax_yz",
         solenoidal_velocity_seed: bool = False,
         time_integrator: str | None = None,
+        nonlinear_form: str = "gradient",
+        coefficient_path: str = "transform",
+        solve_batching: str = "batched",
     ) -> None:
         self.omega = float(omega)
         self.shear_rate = float(shear_rate)
@@ -79,6 +82,9 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
             perturbation_amplitude=perturbation_amplitude,
             magnetic_amplitude=magnetic_amplitude,
             time_integrator=time_integrator,
+            nonlinear_form=nonlinear_form,
+            coefficient_path=coefficient_path,
+            solve_batching=solve_batching,
         )
         self.Ub = -self.shear_rate * self.X[0]
         self.Ubp = -self.shear_rate * self.Xp[0]
@@ -146,14 +152,7 @@ class PlaneCouetteMRIShearpyJax(PlaneCouetteMHDJax):
 
     def _mhd_convection(self, state: MHDState):
         flow = state.flow
-        up = self._backward_velocity(flow.u, padded=True)
-        grads = self._velocity_gradients(flow.u)
-        n = (
-            up[0] * grads["dudx"] + up[1] * grads["dudy"] + up[2] * grads["dudz"],
-            up[0] * grads["dvdx"] + up[1] * grads["dvdy"] + up[2] * grads["dvdz"],
-            up[0] * grads["dwdx"] + up[1] * grads["dwdy"] + up[2] * grads["dwdz"],
-        )
-        n = self._add_base_convection(n, up, grads)
+        n, up = self._flow_convection_physical(flow)
         n = (
             n[0] - 2.0 * self.omega * up[1],
             n[1] + 2.0 * self.omega * up[0],
@@ -595,24 +594,41 @@ class PlaneCouetteMRIShearpyInsulatingJax(PlaneCouetteMRIShearpyJax):
         n = int(self._A_M1.shape[0])
         n_modes = int(kmag.size)
         k2_flat = (kmag.reshape(n_modes) ** 2)[:, None, None]
-        base = self._A_M1 - (self.dt * self._gamma) * self.eta * (
-            self._A_D2 - k2_flat * self._A_M1
-        )
-        base = jnp.broadcast_to(base, (n_modes, n, n)).astype(complex)
-
-        # P system: Neumann rows at both walls (mode independent).
-        sp_rows = base.at[:, n - 2, :].set(self._A_d1[0][None, :])
-        sp_rows = sp_rows.at[:, n - 1, :].set(self._A_d1[1][None, :])
-        # Q system: Robin rows Q' - k Q = 0 (lower), Q' + k Q = 0 (upper).
         k_flat = kmag.reshape(n_modes)[:, None]
-        sq_rows = base.at[:, n - 2, :].set(
-            self._A_d1[0][None, :] - k_flat * self._A_d0[0][None, :]
-        )
-        sq_rows = sq_rows.at[:, n - 1, :].set(
-            self._A_d1[1][None, :] + k_flat * self._A_d0[1][None, :]
-        )
-        self._A_P_lu = jax.vmap(jsp_linalg.lu_factor)(sp_rows)
-        self._A_Q_lu = jax.vmap(jsp_linalg.lu_factor)(sq_rows)
+
+        def bordered_factors(coeff):
+            base = self._A_M1 - coeff * self.eta * (self._A_D2 - k2_flat * self._A_M1)
+            base = jnp.broadcast_to(base, (n_modes, n, n)).astype(complex)
+            sp_rows = base.at[:, n - 2, :].set(self._A_d1[0][None, :])
+            sp_rows = sp_rows.at[:, n - 1, :].set(self._A_d1[1][None, :])
+            sq_rows = base.at[:, n - 2, :].set(
+                self._A_d1[0][None, :] - k_flat * self._A_d0[0][None, :]
+            )
+            sq_rows = sq_rows.at[:, n - 1, :].set(
+                self._A_d1[1][None, :] + k_flat * self._A_d0[1][None, :]
+            )
+            return (
+                jax.vmap(jsp_linalg.lu_factor)(sp_rows),
+                jax.vmap(jsp_linalg.lu_factor)(sq_rows),
+            )
+
+        stage_gammas = ()
+        if self._low_storage_imexrk3 or self._sbdf3:
+            a_rk, b_rk, _ = self.timestepper.stages()
+            stage_gammas = tuple(
+                float((a_rk[rk] + b_rk[rk]) * self.dt / 2.0) for rk in range(3)
+            )
+        if self._low_storage_imexrk3:
+            stage_bordered = tuple(bordered_factors(gamma) for gamma in stage_gammas)
+            self._A_P_lu = tuple(value[0] for value in stage_bordered)
+            self._A_Q_lu = tuple(value[1] for value in stage_bordered)
+        else:
+            assert self._gamma is not None
+            self._A_P_lu, self._A_Q_lu = bordered_factors(self.dt * self._gamma)
+        if self._sbdf3:
+            startup_bordered = tuple(bordered_factors(gamma) for gamma in stage_gammas)
+            self._A_P_startup_lu = tuple(value[0] for value in startup_bordered)
+            self._A_Q_startup_lu = tuple(value[1] for value in startup_bordered)
 
     def _A_apply_radial(self, matrix, coeff):
         return jnp.einsum("ij,jkl->ikl", matrix, coeff)
@@ -654,19 +670,37 @@ class PlaneCouetteMRIShearpyInsulatingJax(PlaneCouetteMRIShearpyJax):
         return jnp.moveaxis(sol, 0, 1).reshape(n, ny, nz)
 
     def _A_runtime_args(self):
+        if self._low_storage_imexrk3:
+            return tuple(
+                (
+                    self._factor_runtime_args(self.SA_factor[rk]),
+                    self._A_P_lu[rk],
+                    self._A_Q_lu[rk],
+                )
+                for rk in range(3)
+            )
         return (
             self._factor_runtime_args(self.SA_factor),
             self._A_P_lu,
             self._A_Q_lu,
         )
 
-    def _A_solve(self, rhs, runtime_args=None):
+    def _A_startup_runtime_args(self):
+        return tuple(
+            (
+                self._factor_runtime_args(self.SA_startup_factor[rk]),
+                self._A_P_startup_lu[rk],
+                self._A_Q_startup_lu[rk],
+            )
+            for rk in range(3)
+        )
+
+    def _A_solve(self, rhs, runtime_args=None, factor=None):
         sa_args, p_lu, q_lu = (
             self._A_runtime_args() if runtime_args is None else runtime_args
         )
-        ax = self.TD.mask_nyquist(
-            self._solve_prefactor(self.SA_factor, rhs[0], sa_args)
-        )
+        factor = self.SA_factor if factor is None else factor
+        ax = self.TD.mask_nyquist(self._solve_prefactor(factor, rhs[0], sa_args))
         cy = self._A_cy[None, :, :]
         cz = self._A_cz[None, :, :]
         rhs_p = cy * rhs[1] + cz * rhs[2]

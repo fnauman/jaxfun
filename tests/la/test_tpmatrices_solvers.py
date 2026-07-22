@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import sympy as sp
 from jax import Array
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
 from jaxfun.galerkin import (
@@ -137,6 +138,29 @@ def test_tpmats_wavenumber_factor_solve_agrees_with_kron(poly):
 
 
 @POLY_SPACES
+@pytest.mark.parametrize("n_rhs", [1, 3])
+@pytest.mark.parametrize("backend", ["jax", "pallas-triton"])
+def test_tpmats_wavenumber_multi_rhs_matches_individual_solves(
+    poly, n_rhs, backend, monkeypatch
+):
+    if backend == "pallas-triton" and jax.default_backend() != "gpu":
+        pytest.skip("pallas-triton requires a GPU")
+    monkeypatch.setenv("JAXFUN_WAVENUMBER_SOLVER", backend)
+    _, A, b, _ = _poisson_fourier_poly_2d(12, poly)
+    solver = tpmats_wavenumber_factor(A)
+    index = jnp.arange(n_rhs, dtype=b.real.dtype).reshape(n_rhs, 1, 1)
+    rhs = jnp.stack([b] * n_rhs) * (1.0 + 0.1 * index + 0.05j * index)
+
+    expected = jnp.stack([solver.solve(value) for value in rhs])
+    actual = solver.solve_many(rhs)
+    runtime_actual = solver.solve_many_with_runtime_args(rhs, solver.runtime_args())
+
+    assert actual.shape == rhs.shape
+    assert jnp.allclose(actual, expected, rtol=2.0e-12, atol=2.0e-12)
+    assert jnp.allclose(runtime_actual, expected, rtol=2.0e-12, atol=2.0e-12)
+
+
+@POLY_SPACES
 def test_tpmats_wavenumber_factor_solve_fourier_poly_l2(poly):
     T, A, b, ue = _poisson_fourier_poly_2d(16, poly)
     wn = tpmats_wavenumber_factor(A)
@@ -206,6 +230,33 @@ def test_batched_wavenumber_solver_rejects_nondivisible_fourier_modes():
             B_data_batch=data,
             poly_offsets=dia.offsets,
         )
+
+
+@pytest.mark.spmd
+def test_batched_wavenumber_runtime_solve_dispatches_sharded_rhs():
+    dense = jnp.asarray([[2.0, 1.0], [1.0, 2.0]])
+    dia = DiaMatrix.from_dense(dense, offsets=(-1, 0, 1))
+    data = jnp.broadcast_to(dia.data, (4, *dia.data.shape))
+    solver = TPMatricesWavenumberSolver(
+        poly_axis=1,
+        shape=(4, 2),
+        B_data_batch=data,
+        poly_offsets=dia.offsets,
+    )
+    rhs = jnp.arange(24.0).reshape(3, 4, 2) + 1.0
+    mesh = Mesh(np.asarray(jax.devices()), ("k",))
+    sharding = NamedSharding(mesh, P(None, "k", None))
+    sharded_rhs = jax.device_put(rhs, sharding)
+    expected = jax.vmap(
+        lambda lane: jnp.linalg.solve(
+            jnp.broadcast_to(dense, (4, 2, 2)), lane[..., None]
+        )[..., 0]
+    )(rhs)
+
+    actual = solver.solve_many_with_runtime_args(sharded_rhs, solver.runtime_args())
+
+    assert len(actual.devices()) == jax.device_count()
+    assert jnp.allclose(actual, expected, rtol=1.0e-13, atol=1.0e-13)
 
 
 def test_wavenumber_solver_constraints_pin_matrix_row_and_rhs():

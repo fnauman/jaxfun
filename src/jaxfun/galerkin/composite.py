@@ -297,6 +297,13 @@ class Composite(OrthogonalSpace):
         rhs = self.apply_stencil_right(weighted)
         return self._mass_matrix.solve(rhs)
 
+    @jax.jit(static_argnums=0)
+    def scalar_product_orthogonal_coeffs(self, a: Array) -> Array:
+        """Return constrained-test scalar products from orthogonal coefficients."""
+
+        weighted = self.orthogonal.mass_matrix().matvec(a)
+        return self.apply_stencil_right(weighted)
+
     @overload
     def apply_stencil_galerkin(self, b: Matrix) -> Matrix: ...
     @overload

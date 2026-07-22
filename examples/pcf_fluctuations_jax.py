@@ -48,6 +48,9 @@ class PlaneCouetteFluctuationJax(KMM):
         perturbation_amplitude: float = 0.05,
         timestepper: type | None = None,
         time_integrator: str | None = None,
+        nonlinear_form: str = "gradient",
+        coefficient_path: str = "transform",
+        solve_batching: str = "batched",
     ) -> None:
         self.Re = float(Re)
         self.U_wall = float(U_wall)
@@ -63,6 +66,9 @@ class PlaneCouetteFluctuationJax(KMM):
             dpdy=0.0,
             timestepper=timestepper,
             time_integrator=time_integrator,
+            nonlinear_form=nonlinear_form,
+            coefficient_path=coefficient_path,
+            solve_batching=solve_batching,
         )
         self.Ub = self.U_wall * self.X[0]
         self.Ubp = self.U_wall * self.Xp[0]
@@ -98,6 +104,12 @@ class PlaneCouetteFluctuationJax(KMM):
         n1 = n1 + self.Ubp * grads["dvdy"] + up[0] * self.dUb_dx
         n2 = n2 + self.Ubp * grads["dwdy"]
         return n0, n1, n2
+
+    def _add_base_rotational_fields(self, up: Velocity, omega: Velocity):
+        return (
+            (up[0], up[1] + self.Ubp, up[2]),
+            (omega[0], omega[1], omega[2] + self.dUb_dx),
+        )
 
     def total_velocity_physical(self, state: KMMState) -> Velocity:
         up = self._backward_velocity(state.u)

@@ -1356,6 +1356,8 @@ _INTEGRATOR_FORMAL_ORDER = {
     "CNAB2": 2,
     "IMEXRK222": 2,
     "IMEXRK443": 3,
+    "IMEXRK3": 3,
+    "SBDF3": 3,
     "analytic": None,
     "linear_eigenproblem": None,
 }
