@@ -33,6 +33,7 @@ class ProductionOracleNotImplementedError(NotImplementedError):
 
 _PCF_KMM_TIME_INTEGRATORS = frozenset({"IMEXRK222", "IMEXRK3", "SBDF3", "CNAB2"})
 _PCF_VECTOR_POTENTIAL_TIME_INTEGRATORS = frozenset({"IMEXRK222", "SBDF3", "CNAB2"})
+_PCF_PRIMITIVE_TIME_INTEGRATORS = frozenset({"IMEXRK222", "CNAB2"})
 
 
 def _pcf_kmm_time_integrator(
@@ -53,6 +54,19 @@ def _pcf_kmm_time_integrator(
     if integrator == "SBDF3" and adaptive_cfl_from_spec(spec) is not None:
         raise ProductionOracleNotImplementedError(
             f"{solver_family} does not support adaptive_cfl with fixed-step SBDF3"
+        )
+    return integrator
+
+
+def _pcf_primitive_time_integrator(spec: dict[str, Any]) -> str:
+    """Reject integrator labels the primitive PCF solver cannot honor."""
+
+    integrator = str(spec["time"]["integrator"])
+    if integrator not in _PCF_PRIMITIVE_TIME_INTEGRATORS:
+        supported = ", ".join(sorted(_PCF_PRIMITIVE_TIME_INTEGRATORS))
+        raise ProductionOracleNotImplementedError(
+            "PCF primitive MHD/MRI requires an implemented time-stepping "
+            f"integrator ({supported}); got time.integrator={integrator!r}"
         )
     return integrator
 
@@ -537,6 +551,13 @@ def run_supported_spec(
         )
     elif spec["geometry"] == "pcf" and spec.get("problem_id") == "pcf_fluct_re400":
         _pcf_kmm_time_integrator(spec, solver_family="PCF hydrodynamic KMM")
+    elif (
+        spec["geometry"] == "pcf"
+        and spec["physics"] in {"mhd", "mri"}
+        and spec["expected_oracle"]["type"]
+        in {"gpu_generated_saturated_dns", "mri_saturation_ladder"}
+    ):
+        _pcf_primitive_time_integrator(spec)
 
     validate_quench_duration_request(
         quench=quench,

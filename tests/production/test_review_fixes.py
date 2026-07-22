@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from production.oracles import (
+    ProductionOracleNotImplementedError,
+    _pcf_primitive_time_integrator,
+)
 from production.problem_spec import ProblemSpecError
 from production.run_problem import (
     _assert_precision_matches_spec,
@@ -35,6 +39,19 @@ def test_integrator_provenance_records_cnab2_for_primitive():
     prov = _integrator_provenance(spec)
     assert prov["actual"] == "CNAB2"  # hard-coded in the primitive solver
     assert prov["formal_order"] == 2
+
+
+@pytest.mark.parametrize("integrator", ["IMEXRK3", "SBDF3"])
+def test_primitive_pcf_rejects_unimplemented_third_order_integrators(
+    integrator,
+) -> None:
+    spec = {"time": {"integrator": integrator}}
+
+    with pytest.raises(
+        ProductionOracleNotImplementedError,
+        match="PCF primitive MHD/MRI requires an implemented time-stepping integrator",
+    ):
+        _pcf_primitive_time_integrator(spec)
 
 
 def test_resolved_physics_metadata_records_actual_precision():
