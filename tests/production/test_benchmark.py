@@ -7,10 +7,23 @@ from dataclasses import dataclass
 import pytest
 
 from production.benchmark import (
+    _block_until_ready,
+    _state_checksum,
     benchmark_step,
     fit_cost_model,
     predicted_gpu_hours,
 )
+
+
+def test_block_until_ready_propagates_jax_execution_errors(monkeypatch) -> None:
+    import jax
+
+    def failed(_state):
+        raise RuntimeError("device execution failed")
+
+    monkeypatch.setattr(jax, "block_until_ready", failed)
+    with pytest.raises(RuntimeError, match="device execution failed"):
+        _block_until_ready(object())
 
 
 def test_cost_model_recovers_power_law():
@@ -101,6 +114,11 @@ class _MockCachedProductionSolver(_MockProductionSolver):
         return _MockCacheInfo(self.hits, self.misses, self.live_entries)
 
 
+class _MockFixedDtSolver(_MockCachedProductionSolver):
+    def set_dt(self, dt):
+        raise NotImplementedError("fixed dt only")
+
+
 def test_benchmark_step_separates_compile_and_warm():
     timing = benchmark_step(_MockSolver, label="mock", warmup_steps=1, timed_steps=5)
     assert timing.label == "mock"
@@ -110,6 +128,23 @@ def test_benchmark_step_separates_compile_and_warm():
     assert timing.cost_per_shear_time_s == pytest.approx(timing.warm_step_s / 0.01)
     d = timing.to_dict()
     assert "cost_per_shear_time_s" in d
+    assert timing.state_checksum is not None
+    assert timing.state_checksum["element_count"] == 1
+
+
+def test_state_checksum_excludes_integrator_history() -> None:
+    class PrimaryFields:
+        @staticmethod
+        def benchmark_state_fields(state):
+            return state["primary"]
+
+    solver = PrimaryFields()
+    left = {"primary": (1.0 + 2.0j, 3.0), "history": (4.0, 5.0)}
+    right = {"primary": (1.0 + 2.0j, 3.0), "history": (40.0, 50.0, 60.0)}
+
+    assert _state_checksum(solver, left) == _state_checksum(solver, right)
+    assert _state_checksum(solver, left)["scope"] == "primary_fields"
+    assert _state_checksum(solver, left)["leaf_count"] == 2
 
 
 def test_benchmark_step_times_compiled_production_rollout():
@@ -163,6 +198,24 @@ def test_benchmark_probes_dt_transitions_without_new_rollout_variant():
     assert probe["reused_compiled_variant"] is True
     assert timing.rollout_cache_info == {"hits": 4, "misses": 1, "live_entries": 1}
     assert built[0].solve_inputs[-3:] == [4, 4, 4]
+
+
+def test_fixed_dt_transition_probe_returns_complete_schema() -> None:
+    timing = benchmark_step(
+        _MockFixedDtSolver,
+        label="fixed-dt-mock",
+        warmup_steps=0,
+        timed_steps=1,
+        rollout_steps=2,
+        dt_transition_probes=1,
+    )
+
+    probe = timing.dt_transition_probe
+    assert probe is not None
+    assert probe["supported"] is False
+    assert probe["rollout_cache_hits_delta"] == 0
+    assert probe["rollout_cache_misses_delta"] == 0
+    assert probe["live_entries_before"] == probe["live_entries_after"] == 1
 
 
 def test_benchmark_rejects_negative_dt_transition_probes():

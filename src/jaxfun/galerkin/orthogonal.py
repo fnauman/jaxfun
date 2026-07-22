@@ -225,6 +225,18 @@ class OrthogonalSpace(BaseSpace):
 
         return c
 
+    @jax.jit(static_argnums=0)
+    def scalar_product_orthogonal_coeffs(self, c: Array) -> Array:
+        """Return Galerkin scalar products from orthogonal coefficients.
+
+        This is the coefficient-space equivalent of
+        ``scalar_product(backward(c))``. Keeping the operation in coefficient
+        space avoids a quadrature-grid round trip for fields that were formed
+        by coefficient differentiation.
+        """
+
+        return self.mass_matrix().matvec(c)
+
     @jax.jit(static_argnums=(0, 2))
     def backward(self, c: Array, N: int | None = None) -> Array:
         """Return series evaluation at quadrature points (possibly with padding).

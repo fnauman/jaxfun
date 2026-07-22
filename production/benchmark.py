@@ -40,9 +40,12 @@ class StepTiming:
     temp_bytes: int | None = None
     argument_bytes: int | None = None
     output_bytes: int | None = None
+    alias_bytes: int | None = None
     rollout_cache_info: dict[str, Any] | None = None
     compilation_cache_info: dict[str, Any] | None = None
     dt_transition_probe: dict[str, Any] | None = None
+    state_checksum: dict[str, float | int | str] | None = None
+    final_diagnostics: dict[str, float] | None = None
 
     @property
     def cost_per_shear_time_s(self) -> float:
@@ -64,7 +67,7 @@ def _block_until_ready(state: Any) -> None:
         import jax
 
         jax.block_until_ready(state)
-    except Exception:  # pragma: no cover - non-JAX states
+    except (AttributeError, TypeError):  # pragma: no cover - non-JAX states
         pass
 
 
@@ -152,10 +155,23 @@ def _probe_dt_transitions(
         return state, None
     base_dt = float(solver.dt)
     dt_values = [base_dt * (0.80 + 0.05 * index) for index in range(transitions)]
-    for dt_value in dt_values:
-        set_dt(dt_value)
-        probe_state = _advance(solver, state, rollout_steps)
-        _block_until_ready(probe_state)
+    try:
+        for dt_value in dt_values:
+            set_dt(dt_value)
+            probe_state = _advance(solver, state, rollout_steps)
+            _block_until_ready(probe_state)
+    except NotImplementedError as exc:
+        return state, {
+            "transitions": 0,
+            "dt_values": [],
+            "supported": False,
+            "reason": str(exc),
+            "rollout_cache_hits_delta": 0,
+            "rollout_cache_misses_delta": 0,
+            "live_entries_before": int(before["live_entries"]),
+            "live_entries_after": int(before["live_entries"]),
+            "reused_compiled_variant": None,
+        }
     set_dt(base_dt)
     after = _rollout_cache_info(solver)
     assert after is not None
@@ -163,6 +179,7 @@ def _probe_dt_transitions(
     hits_delta = int(after["hits"]) - int(before["hits"])
     return state, {
         "transitions": int(transitions),
+        "supported": True,
         "dt_values": dt_values,
         "rollout_cache_hits_delta": hits_delta,
         "rollout_cache_misses_delta": misses_delta,
@@ -180,8 +197,14 @@ def _compiled_memory_analysis(
         "temp_bytes": None,
         "argument_bytes": None,
         "output_bytes": None,
+        "alias_bytes": None,
     }
-    cache = getattr(solver, "_rollout_cache", None)
+    cache_hook = getattr(solver, "benchmark_rollout_cache", None)
+    cache = (
+        cache_hook()
+        if callable(cache_hook)
+        else getattr(solver, "_rollout_cache", None)
+    )
     analyse = getattr(cache, "compiled_memory_analysis", None)
     if not callable(analyse):
         return empty
@@ -200,11 +223,60 @@ def _compiled_memory_analysis(
             getattr(analysis, "argument_size_in_bytes", None)
         ),
         "output_bytes": _optional_int(getattr(analysis, "output_size_in_bytes", None)),
+        "alias_bytes": _optional_int(getattr(analysis, "alias_size_in_bytes", None)),
     }
 
 
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
+
+
+def _state_checksum(solver: Any, state: Any) -> dict[str, float | int | str]:
+    """Return a checksum over primary fields, excluding integrator history."""
+
+    import jax
+    import jax.numpy as jnp
+
+    fields_hook = getattr(solver, "benchmark_state_fields", None)
+    fields = fields_hook(state) if callable(fields_hook) else state
+    leaves = [jnp.asarray(value) for value in jax.tree.leaves(fields)]
+    real_sum = 0.0
+    imag_sum = 0.0
+    norm2 = 0.0
+    element_count = 0
+    for value in leaves:
+        host_value = np.asarray(jax.device_get(value))
+        real_sum += float(np.sum(np.real(host_value), dtype=np.float64))
+        imag_sum += float(np.sum(np.imag(host_value), dtype=np.float64))
+        norm2 += float(np.sum(np.abs(host_value) ** 2, dtype=np.float64))
+        element_count += int(value.size)
+    return {
+        "scope": "primary_fields" if callable(fields_hook) else "state_tree",
+        "leaf_count": len(leaves),
+        "element_count": element_count,
+        "real_sum": real_sum,
+        "imag_sum": imag_sum,
+        "l2_norm": float(np.sqrt(norm2)),
+    }
+
+
+def _compact_diagnostics(solver: Any, state: Any) -> dict[str, float] | None:
+    diagnostics = getattr(solver, "diagnostics", None)
+    if not callable(diagnostics):
+        return None
+    try:
+        import jax
+        import jax.numpy as jnp
+
+        values = diagnostics(state)
+        jax.block_until_ready(values)
+        return {
+            str(name): float(jax.device_get(value))
+            for name, value in values.items()
+            if jnp.asarray(value).ndim == 0
+        }
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 def benchmark_step(
@@ -275,6 +347,8 @@ def benchmark_step(
             persistent_cache_before, persistent_cache_after
         ),
         dt_transition_probe=dt_probe,
+        state_checksum=_state_checksum(solver, state),
+        final_diagnostics=_compact_diagnostics(solver, state),
         **memory,
     )
 
