@@ -76,9 +76,9 @@
     "azimuthal_wavenumber": 1
   },
   "native_axes": {
-    "axis_0": "r radial",
-    "axis_1": "theta azimuthal",
-    "axis_2": "z axial"
+    "axis_0": "theta azimuthal",
+    "axis_1": "z axial",
+    "axis_2": "r radial"
   },
   "nondimensional_groups": {
     "B0": 0.1,

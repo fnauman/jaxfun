@@ -206,3 +206,18 @@ def test_3d_tc_growth_tolerance_matches_deterministic_2d_goldens(filename):
         (ROOT / "production/examples" / filename).read_text(encoding="utf-8")
     )
     assert spec["tolerance_model"]["scalars"]["growth_rate"] == 1.0e-6
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["taylor_couette_hydro_3d_v1.json", "taylor_couette_mhd_3d_v1.json"],
+)
+def test_3d_tc_native_axes_match_solver_storage_order(filename):
+    spec = json.loads(
+        (ROOT / "production/examples" / filename).read_text(encoding="utf-8")
+    )
+    assert spec["native_axes"] == {
+        "axis_0": "theta azimuthal",
+        "axis_1": "z axial",
+        "axis_2": "r radial",
+    }
