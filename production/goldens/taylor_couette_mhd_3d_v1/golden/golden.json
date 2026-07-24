@@ -1,0 +1,147 @@
+{
+  "artifact_id": "taylor_couette_mhd_3d_v1",
+  "comparison_fields": {
+    "scalars_sha256": "5fe5b3aa5250df111e2d11da3671d3357cd04c1ea25d8418001d1aab86cb4cef",
+    "tolerance_model_sha256": "7c4b402f62a71dd252cb41e80e0d3504ba4948d97b970d510589edf9444a23d5"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_b": 1.0541502761133036e-08,
+      "divergence_u": 1.4863885301299558e-08,
+      "growth_rate": 0.2912937448320454,
+      "growth_rate_linear": 0.29129374483614967,
+      "kinetic_energy": 7.883607407650019e-15,
+      "magnetic_bc": "conducting",
+      "magnetic_energy": 1.1337572869748573e-14
+    },
+    "time_series": [
+      {
+        "growth_rate_linear": 0.29129374483614967,
+        "kinetic_energy": 7.856098168980772e-15,
+        "magnetic_energy": 1.1298011285580738e-14,
+        "t": 0.0
+      },
+      {
+        "growth_rate": 0.2912937448320454,
+        "kinetic_energy": 7.883607407650019e-15,
+        "magnetic_energy": 1.1337572869748573e-14,
+        "t": 0.006
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax": {
+      "captured_at_utc": "2026-07-24T08:15:16+00:00",
+      "cuda_visible_devices": null,
+      "default_backend": "gpu",
+      "degraded": false,
+      "devices": [
+        "cuda:0"
+      ],
+      "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+      "jax_default_scalar_dtype": "float64",
+      "jax_enable_x64": true,
+      "jax_enable_x64_env": "1",
+      "jax_platforms": "cpu",
+      "jax_use_simplified_jaxpr_constants": true,
+      "jax_use_simplified_jaxpr_constants_env": "true",
+      "jax_version": "0.10.1",
+      "jaxfun_enable_x64": "1",
+      "jaxfun_use_simplified_jaxpr_constants": null,
+      "jaxfun_wavenumber_solver": "jax",
+      "jaxlib_version": "0.10.1",
+      "mode": "gpu",
+      "production_run_dtype": "float64",
+      "requested_production_dtype": "float64",
+      "xla_python_client_preallocate": "false"
+    }
+  },
+  "generated_at_utc": "2026-07-24T08:15:32+00:00",
+  "generation": {
+    "run_options": {
+      "additional_steps": null,
+      "additional_time": null,
+      "checkpoint_every": null,
+      "compare_golden": false,
+      "diagnostics_every": null,
+      "profiles_every": null,
+      "requested_device": "cpu",
+      "resolution_tier": null,
+      "resume": null,
+      "snapshot_every": null,
+      "steps_override": null,
+      "validate_only": false,
+      "write_golden": true
+    },
+    "validation_scope": {
+      "bounded_smoke": false,
+      "checked_observables": [
+        "divergence_b",
+        "divergence_u",
+        "growth_rate",
+        "growth_rate_linear",
+        "kinetic_energy",
+        "magnetic_bc",
+        "magnetic_energy"
+      ],
+      "kind": "oracle_execution",
+      "quench_additional_steps": null,
+      "reason": "executed configured analytic, linear, or DNS oracle path",
+      "resolution_tier": null,
+      "steps_override": null
+    }
+  },
+  "git": {
+    "branch": "HEAD",
+    "commit": "83185420a261a60ae31c8f9f9abe29ceb8212f7e",
+    "describe": "8318542",
+    "dirty": true,
+    "dirty_files": [
+      "?? production/goldens/_jax_compilation_cache/",
+      "?? production/goldens/taylor_couette_hydro_3d_v1/",
+      "?? production/goldens/taylor_couette_mhd_3d_v1/"
+    ],
+    "jax_config": {
+      "jax_enable_x64": true,
+      "jax_use_simplified_jaxpr_constants": true,
+      "jax_use_simplified_jaxpr_constants_env": "true",
+      "jaxfun_use_simplified_jaxpr_constants": null,
+      "jaxfun_wavenumber_solver": "jax"
+    },
+    "lockfile_sha256": {
+      "pyproject.toml": "1ee5060bd05637b6933d6d4e8262d5eb922d1495eafe833156294dae490e680a",
+      "uv.lock": "beb50787969b5500e5a4a9f4000b1df3fdb23114c226f3ef4b814b3ed1cdae16"
+    },
+    "remote_url": "git@github.com:fnauman/jaxfun",
+    "unpushed_commits": [],
+    "upstream": null,
+    "versions": {
+      "cuda_runtime": "PJRT C API\ncuda 13000",
+      "gpu": "NVIDIA GeForce RTX 5090 Laptop GPU",
+      "jax": "0.10.1",
+      "jax_backend": "gpu",
+      "jaxlib": "0.10.1",
+      "nvidia_driver": "580.159.04",
+      "python": "3.12.3"
+    }
+  },
+  "problem_id": "taylor_couette_mhd_3d_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:510",
+    "demo/test_taylor_couette_dns.py:289"
+  ],
+  "spec_hash": "e83fcd718088ddc53f335e319dbb58d43aa38cd56da2aad3b1bf1f26678aab90",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b": 1e-08,
+      "divergence_u": 1e-08,
+      "growth_rate": 5e-05,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-08,
+      "magnetic_energy": 1e-08
+    }
+  }
+}
