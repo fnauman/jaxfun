@@ -126,7 +126,7 @@
     "scalars": {
       "divergence_b": 1e-08,
       "divergence_u": 1e-08,
-      "growth_rate": 5e-05,
+      "growth_rate": 1e-06,
       "growth_rate_linear": 1e-10,
       "kinetic_energy": 1e-08,
       "magnetic_energy": 1e-08

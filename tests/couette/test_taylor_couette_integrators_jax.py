@@ -105,3 +105,93 @@ def test_tc_third_order_integrators_have_third_order_self_convergence(
 def test_tc_rejects_unknown_time_integrator() -> None:
     with pytest.raises(ValueError, match="time_integrator"):
         AxisymmetricTCDNSJax(CircularCouette(), time_integrator="RK-ish")
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: AxisymmetricTCDNSJax(
+            CircularCouette(), Nr=8, Nz=4, dealias=1.0, time_integrator="SBDF3"
+        ),
+        lambda: TaylorCouetteDNSJax(
+            CircularCouette(),
+            Nr=8,
+            Ntheta=4,
+            Nz=4,
+            dealias=1.0,
+            time_integrator="SBDF3",
+        ),
+        lambda: AxisymmetricMRIDNSJax(
+            _keplerian_base(), Nr=8, Nz=4, dealias=1.0, time_integrator="SBDF3"
+        ),
+        lambda: TaylorCouetteMRIDNSJax(
+            _keplerian_base(),
+            Nr=8,
+            Ntheta=4,
+            Nz=4,
+            dealias=1.0,
+            time_integrator="SBDF3",
+        ),
+    ],
+    ids=["axisymmetric-hydro", "3d-hydro", "axisymmetric-mhd", "3d-mhd"],
+)
+def test_tc_sbdf3_rejects_timestep_changes(factory) -> None:
+    solver = factory()
+    state = solver.solve(solver.zero_state(), 3)
+    assert float(state.history_steps) == 2.0
+    solver.set_dt(solver.dt)
+    with pytest.raises(NotImplementedError, match="SBDF3 currently supports fixed dt"):
+        solver.set_dt(0.5 * solver.dt)
+
+
+@pytest.mark.parametrize("integrator", ["CNAB2", "IMEXRK3"])
+def test_tc_set_dt_updates_an_already_compiled_rollout(integrator) -> None:
+    base = CircularCouette()
+    initial_dt = 2.0e-3
+    updated_dt = 1.0e-3
+    solver = AxisymmetricTCDNSJax(
+        base,
+        Nr=8,
+        Nz=4,
+        dt=initial_dt,
+        dealias=1.0,
+        time_integrator=integrator,
+    )
+    initial, _ = solver.seed_linear_eigenmode(kz_mode=1, amp=1.0e-6)
+    solver.solve(initial, 1)
+    misses_before = solver.rollout_cache_info().misses
+    solver.set_dt(updated_dt)
+    updated = solver.solve(initial, 1)
+
+    fresh = AxisymmetricTCDNSJax(
+        base,
+        Nr=8,
+        Nz=4,
+        dt=updated_dt,
+        dealias=1.0,
+        time_integrator=integrator,
+    )
+    expected = fresh.solve(initial, 1)
+    assert solver.rollout_cache_info().misses == misses_before
+    for got, want in zip(updated.u, expected.u, strict=True):
+        assert jnp.allclose(got, want, rtol=2.0e-11, atol=2.0e-12)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: AxisymmetricTCDNSJax(CircularCouette(), Nr=8, Nz=4, dealias=1.0),
+        lambda: TaylorCouetteDNSJax(
+            CircularCouette(), Nr=8, Ntheta=4, Nz=4, dealias=1.0
+        ),
+    ],
+    ids=["axisymmetric", "full-3d"],
+)
+def test_tc_continuity_diagnostics_use_precomputed_operators(factory) -> None:
+    solver = factory()
+
+    def fail_reassembly(*_args, **_kwargs):
+        raise AssertionError("continuity diagnostics reassembled a symbolic operator")
+
+    solver._mode_blocks_from_expr = fail_reassembly
+    assert float(solver.continuity_residual_l2(solver.zero_state())) == 0.0

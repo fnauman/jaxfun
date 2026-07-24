@@ -1765,7 +1765,7 @@ def test_tc_dns_runs_compare_dns_goldens(tmp_path, problem_id, expected_keys):
     assert len(rows) == 2
     assert rows[0]["t"] == 0.0
     assert rows[-1]["growth_rate"] == pytest.approx(
-        rows[0]["growth_rate_linear"], abs=5.0e-5
+        rows[0]["growth_rate_linear"], abs=2.0e-7
     )
 
 

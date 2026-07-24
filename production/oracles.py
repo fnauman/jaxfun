@@ -1271,7 +1271,7 @@ def _run_taylor_couette_hydro_dns(
         "dt": float(spec["time"]["dt"]),
         "family": resolution.get("family", "C"),
         "dealias": float(resolution.get("dealias", 1.0)),
-        "time_integrator": str(spec["time"]["integrator"]),
+        "time_integrator": str(spec["time"].get("integrator", "CNAB2")),
     }
     if ntheta is not None:
         kwargs["Ntheta"] = int(ntheta)
@@ -2983,7 +2983,7 @@ def _run_taylor_couette_mhd_dns(
         "dt": float(spec["time"]["dt"]),
         "family": resolution.get("family", "C"),
         "dealias": float(resolution.get("dealias", 1.0)),
-        "time_integrator": str(spec["time"]["integrator"]),
+        "time_integrator": str(spec["time"].get("integrator", "CNAB2")),
     }
     if ntheta is not None:
         kwargs["Ntheta"] = int(ntheta)
@@ -4655,6 +4655,12 @@ def _steps_from_spec(spec: dict[str, Any], *, steps: int | None = None) -> int:
 
 def _kz_mode_from_spec(spec: dict[str, Any], Lz: float, *, strict: bool = True) -> int:
     mode = spec.get("mode", {})
+    m = int(mode.get("azimuthal_wavenumber", 0))
+    if m != 0 and _selected_resolution(spec).get("Ntheta") is None:
+        raise ProductionOracleNotImplementedError(
+            "non-axisymmetric Taylor-Couette modes require resolution.Ntheta; "
+            f"got azimuthal_wavenumber={m} for an axisymmetric solver"
+        )
     kz = float(mode["axial_wavenumber"])
     kz_mode = int(round(kz * float(Lz) / (2.0 * math.pi)))
     if kz_mode < 1:

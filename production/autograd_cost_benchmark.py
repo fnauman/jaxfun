@@ -44,250 +44,115 @@ import numpy as np
 # production specs (production/examples/*.json).
 # --------------------------------------------------------------------------- #
 
-_PCF_DOMAIN = ((-1.0, 1.0), (0.0, 12.566370614359172), (0.0, 6.283185307179586))
-
-
-def _build_hydro_pcf(resolution: tuple[int, int, int], integrator: str):
-    from examples.pcf_fluctuations_jax import PlaneCouetteFluctuationJax
-
-    resolution = tuple(resolution) if resolution else (65, 64, 64)
-
-    def build():
-        return PlaneCouetteFluctuationJax(
-            N=resolution,
-            dt=1.0e-3,
-            family="C",
-            padding_factor=(1.0, 1.5, 1.5),
-            time_integrator=integrator,
-            coefficient_path="optimized",
-            nonlinear_form="rotational",
-            solve_batching="batched",
-            Re=400.0,
-            perturbation_amplitude=0.02,
-        )
-
-    meta = {
+_BENCHMARK_CASES = {
+    "hydro_pcf": {
+        "config": "production/runs/pcf_fluct_re400.json",
+        "resolution_keys": ("Nx", "Ny", "Nz"),
+        "default_resolution": (65, 64, 64),
         "family": "hydrodynamic plane Couette (KMM)",
         "solver": "PlaneCouetteFluctuationJax",
         "physics": "hydro",
-        "Re": 400.0,
-        "resolution": list(resolution),
-        "dt": 1.0e-3,
-        "integrator": integrator,
-        "integrator_order": 3,
-        "domain": _PCF_DOMAIN,
-    }
-    return build, (lambda s: s.initial_state()), meta
-
-
-def _build_mhd_mri_pcf(resolution: tuple[int, int, int], integrator: str):
-    from examples.pcf_mhd_mri_shearpy_jax import PlaneCouetteMRIShearpyJax
-
-    resolution = tuple(resolution) if resolution else (65, 64, 64)
-
-    def build():
-        return PlaneCouetteMRIShearpyJax(
-            N=resolution,
-            dt=1.0e-3,
-            family="C",
-            padding_factor=(1.0, 1.5, 1.5),
-            time_integrator=integrator,
-            coefficient_path="optimized",
-            nonlinear_form="rotational",
-            solve_batching="batched",
-            Re=400.0,
-            Rm=400.0,
-            perturbation_amplitude=0.02,
-            magnetic_amplitude=0.005,
-        )
-
-    meta = {
+    },
+    "mhd_mri_pcf": {
+        "config": "production/runs/exp_pcf_mri_vector_potential.json",
+        "resolution_keys": ("Nx", "Ny", "Nz"),
+        "default_resolution": (65, 64, 64),
         "family": "MHD/MRI plane Couette (vector-potential, div-B preserving)",
         "solver": "PlaneCouetteMRIShearpyJax",
         "physics": "mri",
-        "Re": 400.0,
-        "Rm": 400.0,
-        "resolution": list(resolution),
-        "dt": 1.0e-3,
-        "integrator": integrator,
-        "integrator_order": 3,
-        "domain": _PCF_DOMAIN,
-    }
-    return build, (lambda s: s.initial_state()), meta
-
-
-def _build_tc_hydro(resolution: tuple[int, int] | None, integrator: str):
-    from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
-
-    nr, nz = resolution if resolution is not None else (40, 8)
-
-    def build():
-        return AxisymmetricTCDNSJax(
-            base=CircularCouette(1.0, 2.0, 1.0, 0.0),
-            nu=0.01,
-            Nr=nr,
-            Nz=nz,
-            Lz=2.0074074463832545,
-            dt=1.0e-3,
-            family="C",
-            dealias=1.0,
-            time_integrator=integrator,
-        )
-
-    meta = {
+    },
+    "tc_hydro": {
+        "config": "production/examples/taylor_couette_hydro_dns_v1.json",
+        "resolution_keys": ("Nr", "Nz"),
+        "default_resolution": (40, 8),
         "family": "Taylor-Couette (axisymmetric hydro DNS)",
         "solver": "AxisymmetricTCDNSJax",
         "physics": "hydro",
-        "Re": 100.0,
-        "resolution": [nr, nz],
-        "dt": 1.0e-3,
-        "integrator": integrator,
-        "integrator_order": 2 if integrator == "CNAB2" else 3,
-    }
-    return build, (lambda s: s.initial_state(amp=1.0e-6)), meta
-
-
-def _build_tc_mhd(resolution: tuple[int, int] | None, integrator: str):
-    from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
-
-    nr, nz = resolution if resolution is not None else (40, 8)
-
-    def build():
-        return AxisymmetricMRIDNSJax(
-            base=CircularCouette(1.0, 2.0, 1.0, 0.3535533905932738),
-            B0=0.1,
-            nu=0.001,
-            eta_mag=0.001,
-            Nr=nr,
-            Nz=nz,
-            Lz=1.0471975511965976,
-            dt=2.0e-3,
-            family="C",
-            dealias=1.0,
-            time_integrator=integrator,
-        )
-
-    meta = {
+    },
+    "tc_mhd": {
+        "config": "production/examples/taylor_couette_mhd_dns_v1.json",
+        "resolution_keys": ("Nr", "Nz"),
+        "default_resolution": (40, 8),
         "family": "Taylor-Couette MRI (axisymmetric MHD DNS)",
         "solver": "AxisymmetricMRIDNSJax",
         "physics": "mri",
-        "Re": 1000.0,
-        "Rm": 1000.0,
-        "B0": 0.1,
-        "resolution": [nr, nz],
-        "dt": 2.0e-3,
-        "integrator": integrator,
-        "integrator_order": 2 if integrator == "CNAB2" else 3,
-    }
-    return build, (lambda s: s.seed_linear_eigenmode(kz_mode=1, amp=1.0e-7)[0]), meta
-
-
-def _build_tc_hydro_3d(resolution, integrator: str):
-    """Full 3D (theta, z, r) hydro Taylor-Couette DNS."""
-    from examples.taylor_couette_dns_jax import CircularCouette, TaylorCouetteDNSJax
-
-    nr, ntheta, nz = resolution if resolution else (32, 16, 16)
-
-    def build():
-        return TaylorCouetteDNSJax(
-            base=CircularCouette(1.0, 2.0, 1.0, 0.0),
-            nu=0.01,
-            Nr=nr,
-            Ntheta=ntheta,
-            Nz=nz,
-            Lz=2.0074074463832545,
-            dt=1.0e-3,
-            family="C",
-            dealias=1.5,
-            time_integrator=integrator,
-        )
-
-    meta = {
+    },
+    "tc_hydro_3d": {
+        "config": "production/examples/taylor_couette_hydro_3d_v1.json",
+        "resolution_keys": ("Nr", "Ntheta", "Nz"),
+        "default_resolution": (32, 16, 16),
         "family": "Taylor-Couette (FULL 3D hydro DNS)",
         "solver": "TaylorCouetteDNSJax",
         "physics": "hydro",
-        "Re": 100.0,
-        "resolution": [nr, ntheta, nz],
-        "dt": 1.0e-3,
-        "integrator": integrator,
-        "integrator_order": 2 if integrator == "CNAB2" else 3,
-    }
-    return build, (lambda s: s.initial_state(amp=1.0e-6)), meta
-
-
-def _build_tc_mhd_3d(resolution, integrator: str):
-    """Full 3D (theta, z, r) conducting-wall MHD/MRI Taylor-Couette DNS."""
-    from examples.taylor_couette_dns_jax import CircularCouette, TaylorCouetteMRIDNSJax
-
-    nr, ntheta, nz = resolution if resolution else (24, 16, 16)
-
-    def build():
-        return TaylorCouetteMRIDNSJax(
-            base=CircularCouette(1.0, 2.0, 1.0, 0.3535533905932738),
-            B0=0.1,
-            nu=0.001,
-            eta_mag=0.001,
-            Nr=nr,
-            Ntheta=ntheta,
-            Nz=nz,
-            Lz=1.0471975511965976,
-            dt=2.0e-3,
-            family="C",
-            dealias=1.5,
-            time_integrator=integrator,
-        )
-
-    meta = {
+    },
+    "tc_mhd_3d": {
+        "config": "production/examples/taylor_couette_mhd_3d_v1.json",
+        "resolution_keys": ("Nr", "Ntheta", "Nz"),
+        "default_resolution": (24, 16, 16),
         "family": "Taylor-Couette MRI (FULL 3D MHD DNS, conducting wall)",
         "solver": "TaylorCouetteMRIDNSJax",
         "physics": "mri",
-        "Re": 1000.0,
-        "Rm": 1000.0,
-        "B0": 0.1,
-        "resolution": [nr, ntheta, nz],
-        "dt": 2.0e-3,
+    },
+    "primitive_pcf": {
+        "config": "production/examples/pcf_mri_primitive_dns_v1.json",
+        "resolution_keys": ("Nx", "Nz"),
+        "default_resolution": (40, 16),
+        "family": "MHD/MRI plane Couette (primitive-variable axisymmetric DNS)",
+        "solver": "AxisymmetricPCFMRIDNSJax",
+        "physics": "mri",
+    },
+}
+
+
+def _build_production_case(problem: str, resolution, integrator: str):
+    """Build and seed through the canonical production benchmark factory."""
+    from production.benchmark import _solver_and_seed_builders
+    from production.oracles import _pcf_primitive_time_integrator
+
+    case = _BENCHMARK_CASES[problem]
+    repository = Path(__file__).resolve().parents[1]
+    spec = json.loads((repository / case["config"]).read_text(encoding="utf-8"))
+    keys = case["resolution_keys"]
+    selected = tuple(resolution) if resolution else case["default_resolution"]
+    if len(selected) != len(keys):
+        dimensions = " ".join(keys)
+        raise ValueError(
+            f"{problem} resolution requires {len(keys)} integers ({dimensions}); "
+            f"got {len(selected)}"
+        )
+    spec["resolution"].update(
+        {key: int(value) for key, value in zip(keys, selected, strict=True)}
+    )
+    spec["time"]["integrator"] = integrator
+    if problem == "primitive_pcf":
+        _pcf_primitive_time_integrator(spec)
+
+    build_solver, seed_state = _solver_and_seed_builders(spec)
+    groups = spec.get("nondimensional_groups", {})
+    meta = {
+        "family": case["family"],
+        "solver": case["solver"],
+        "physics": case["physics"],
+        "resolution": list(selected),
+        "dt": float(spec["time"]["dt"]),
         "integrator": integrator,
         "integrator_order": 2 if integrator == "CNAB2" else 3,
+        "config": case["config"],
     }
-    return build, (lambda s: s.seed_linear_eigenmode(kz_mode=1, amp=1.0e-7)[0]), meta
+    for key in ("Re", "Rm", "B0"):
+        if key in groups:
+            meta[key] = groups[key]
+    return build_solver, seed_state, meta
 
 
-def _build_primitive_pcf(resolution: tuple[int, int, int], integrator: str):
-    """Primitive-variable MRI shearing box (CNAB2-only) for comparison."""
-    from production.adapters import load_config
-    from production.oracles import _pcf_mri_packet_state, _primitive_solver_from_spec
-
-    cfg = load_config(
-        "production/examples/pcf_mri_shearbox_dns_v1.json", resolution_tier="smoke"
+def _registry_builder(problem: str):
+    return lambda resolution, integrator: _build_production_case(
+        problem, resolution, integrator
     )
-    spec = cfg.spec
-
-    def build():
-        return _primitive_solver_from_spec(spec)
-
-    def seed(solver):
-        return _pcf_mri_packet_state(solver, spec)[0]
-
-    meta = {
-        "family": "MHD/MRI plane Couette (primitive-variable shearing box)",
-        "solver": "PCFMRIDNSJax",
-        "physics": "mri",
-        "integrator": integrator,
-        "integrator_order": 2,
-        "integrator_note": "primitive solver is CNAB2-only",
-        "config": "production/examples/pcf_mri_shearbox_dns_v1.json@smoke",
-    }
-    return build, seed, meta
 
 
 _REGISTRY: dict[str, Callable[..., Any]] = {
-    "hydro_pcf": _build_hydro_pcf,
-    "mhd_mri_pcf": _build_mhd_mri_pcf,
-    "tc_hydro": _build_tc_hydro,
-    "tc_mhd": _build_tc_mhd,
-    "tc_hydro_3d": _build_tc_hydro_3d,
-    "tc_mhd_3d": _build_tc_mhd_3d,
-    "primitive_pcf": _build_primitive_pcf,
+    problem: _registry_builder(problem) for problem in _BENCHMARK_CASES
 }
 
 
@@ -552,8 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         nargs="+",
         default=None,
         help=(
-            "Override resolution: 3 ints for PCF/full-3D TC, "
-            "2 ints (Nr Nz) for axisymmetric TC."
+            "Override resolution using the dimensions for the selected problem; "
+            "invalid dimension counts are rejected."
         ),
     )
     parser.add_argument("--warmup", type=int, default=3)

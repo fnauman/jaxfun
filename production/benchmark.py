@@ -554,6 +554,12 @@ def _solver_and_seed_builders(spec: dict[str, Any]):
                 return solver_cls(**kwargs)
 
             def seed_tc_hydro(solver: Any) -> Any:
+                mode = spec.get("mode", {})
+                if "axial_wavenumber" not in mode:
+                    kwargs = {"amp": amplitude}
+                    if ntheta is not None:
+                        kwargs["m"] = azimuthal_mode
+                    return solver.initial_state(**kwargs)
                 kwargs = {
                     "kz_mode": _kz_mode_from_spec(spec, solver.Lz, strict=False),
                     "amp": amplitude,

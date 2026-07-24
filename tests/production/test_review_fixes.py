@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
+import math
+from pathlib import Path
+
+import jax
+import numpy as np
 import pytest
 
+from production.autograd_cost_benchmark import _build_production_case
+from production.benchmark import _solver_and_seed_builders
 from production.oracles import (
     ProductionOracleNotImplementedError,
+    _kz_mode_from_spec,
     _pcf_primitive_time_integrator,
+    _run_taylor_couette_hydro_dns,
 )
 from production.problem_spec import ProblemSpecError
 from production.run_problem import (
@@ -14,6 +24,8 @@ from production.run_problem import (
     _integrator_provenance,
     _resolved_physics_metadata,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_integrator_provenance_records_imexrk222_for_vector_potential():
@@ -113,3 +125,84 @@ def test_release_ref_and_untracked_archive(tmp_path):
     if gate["discovery_only"]:
         assert "diff_sha256" in gate
         assert "untracked_archived" in gate  # F7: untracked list is captured
+
+
+def test_nonaxisymmetric_tc_mode_requires_azimuthal_resolution():
+    spec = {
+        "resolution": {"Nr": 8, "Nz": 4},
+        "mode": {
+            "axial_wavenumber": math.pi,
+            "azimuthal_wavenumber": 1,
+        },
+    }
+
+    with pytest.raises(
+        ProductionOracleNotImplementedError,
+        match=r"require resolution\.Ntheta",
+    ):
+        _kz_mode_from_spec(spec, 2.0)
+
+    spec["resolution"]["Ntheta"] = 4
+    assert _kz_mode_from_spec(spec, 2.0) == 1
+
+
+def test_tc_hydro_oracle_defaults_missing_integrator_to_cnab2():
+    jax.config.update("jax_enable_x64", True)
+    spec = json.loads(
+        (ROOT / "production/examples/taylor_couette_hydro_dns_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    spec["resolution"].update({"Nr": 8, "Nz": 4})
+    spec["time"].pop("integrator")
+
+    result = _run_taylor_couette_hydro_dns(spec, steps=1)
+
+    assert math.isfinite(result["scalars"]["growth_rate"])
+    assert result["scalars"]["divergence_linf"] < 1.0e-6
+
+
+def test_tc_hydro_benchmark_seed_supports_legacy_modeless_specs():
+    jax.config.update("jax_enable_x64", True)
+    spec = json.loads(
+        (ROOT / "production/examples/taylor_couette_hydro_dns_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    spec["resolution"].update({"Nr": 8, "Nz": 4})
+    spec.pop("mode")
+
+    build_solver, seed_state = _solver_and_seed_builders(spec)
+    solver = build_solver()
+    state = seed_state(solver)
+
+    assert all(
+        np.isfinite(np.asarray(leaf)).all() for leaf in jax.tree_util.tree_leaves(state)
+    )
+
+
+@pytest.mark.parametrize("integrator", ["IMEXRK3", "SBDF3"])
+def test_autograd_primitive_override_rejects_unsupported_integrator(integrator):
+    with pytest.raises(
+        ProductionOracleNotImplementedError,
+        match="PCF primitive MHD/MRI requires an implemented time-stepping integrator",
+    ):
+        _build_production_case("primitive_pcf", (8, 4), integrator)
+
+
+def test_autograd_primitive_metadata_reports_selected_cnab2():
+    _build, _seed, metadata = _build_production_case("primitive_pcf", (8, 4), "CNAB2")
+    assert metadata["integrator"] == "CNAB2"
+    assert metadata["integrator_order"] == 2
+    assert metadata["resolution"] == [8, 4]
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["taylor_couette_hydro_3d_v1.json", "taylor_couette_mhd_3d_v1.json"],
+)
+def test_3d_tc_growth_tolerance_matches_deterministic_2d_goldens(filename):
+    spec = json.loads(
+        (ROOT / "production/examples" / filename).read_text(encoding="utf-8")
+    )
+    assert spec["tolerance_model"]["scalars"]["growth_rate"] == 1.0e-6

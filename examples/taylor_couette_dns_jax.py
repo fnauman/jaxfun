@@ -20,6 +20,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg as jsp_linalg
 import numpy as np
 import sympy as sp
 from jax import Array
@@ -53,6 +54,7 @@ from jaxfun.galerkin import (
 from jaxfun.galerkin.Chebyshev import Chebyshev
 from jaxfun.galerkin.Fourier import Fourier
 from jaxfun.galerkin.Legendre import Legendre
+from jaxfun.integrators import ars_stage_rhs
 from jaxfun.integrators.cnab2 import (
     ScanRolloutCache,
     ScanRolloutCacheInfo,
@@ -277,6 +279,7 @@ class AxisymmetricTCDNSJax:
             self.padded_counts = None
             self.inv_r_p = self.inv_r
 
+        self._build_continuity_modes()
         self._build_time_operators()
         self._configure_rollout_cache()
 
@@ -293,53 +296,56 @@ class AxisymmetricTCDNSJax:
         return jnp.result_type(jnp.asarray(1.0), jnp.asarray(1.0j))
 
     @staticmethod
-    def _inverse_modes(modes: Array) -> Array:
-        """Invert independent radial blocks once, outside compiled rollouts."""
-        host_modes = np.asarray(modes)
-        return jnp.asarray(np.linalg.inv(host_modes), dtype=modes.dtype)
+    def _factor_modes(modes: Array) -> tuple[Array, Array]:
+        """Factor independent pinned mode blocks with partial pivoting."""
+        return jax.vmap(jsp_linalg.lu_factor)(modes)
 
     def _build_time_operators(self) -> None:
         """Build only mode-local operators for the selected IMEX scheme."""
         self.Limp = jnp.zeros((0, 0), dtype=self._operator_dtype())
         self.Lexp = jnp.zeros((0, 0), dtype=self.Limp.dtype)
-        self.startup_Lexp_modes = jnp.zeros((0,), dtype=self.Limp.dtype)
-        self.startup_Limp_inv = jnp.zeros((0,), dtype=self.Limp.dtype)
+        self.startup_Limp_lu = (
+            jnp.zeros((0,), dtype=self.Limp.dtype),
+            jnp.zeros((0,), dtype=jnp.int32),
+        )
+        self.linear_modes = jnp.zeros((0,), dtype=self.Limp.dtype)
 
         if self.time_integrator == "CNAB2":
             limp, lexp, mass = self._build_operators(0.5)
             self.Limp_modes = limp
             self.Lexp_modes = lexp
             self.mass_modes = mass
-            self.Limp_inv = self._inverse_modes(self._pin_pressure_modes(limp))
+            self.Limp_lu = self._factor_modes(self._pin_pressure_modes(limp))
             return
 
         # IMEXRK443 is the four-stage, third-order ARS scheme used for the
         # public IMEXRK3 option and as the third-order SBDF3 bootstrap.
         startup_limp, startup_lexp, mass = self._build_operators(0.5)
-        startup_inv = self._inverse_modes(self._pin_pressure_modes(startup_limp))
+        startup_lu = self._factor_modes(self._pin_pressure_modes(startup_limp))
         self.mass_modes = mass
+        self.linear_modes = (startup_lexp - mass) / 0.5
         if self.time_integrator == "IMEXRK3":
             self.Limp_modes = startup_limp
             self.Lexp_modes = startup_lexp
-            self.Limp_inv = startup_inv
+            self.Limp_lu = startup_lu
             return
 
         limp, lexp, mass = self._build_operators(SBDF3_IMPLICIT_SCALE)
         self.Limp_modes = limp
         self.Lexp_modes = lexp
         self.mass_modes = mass
-        self.Limp_inv = self._inverse_modes(self._pin_pressure_modes(limp))
-        self.startup_Lexp_modes = startup_lexp
-        self.startup_Limp_inv = startup_inv
+        self.Limp_lu = self._factor_modes(self._pin_pressure_modes(limp))
+        self.startup_Limp_lu = startup_lu
 
     def _configure_rollout_cache(self) -> None:
         self._rollout_cache = ScanRolloutCache(
             self._step_with_operators,
             dynamic_args=lambda: (
                 self.Lexp_modes,
-                self.Limp_inv,
-                self.startup_Lexp_modes,
-                self.startup_Limp_inv,
+                *self.Limp_lu,
+                *self.startup_Limp_lu,
+                self.mass_modes,
+                self.linear_modes,
             ),
         )
 
@@ -347,16 +353,20 @@ class AxisymmetricTCDNSJax:
         self,
         state,
         Lexp_modes: Array,
-        Limp_inv: Array,
-        startup_Lexp_modes: Array,
-        startup_Limp_inv: Array,
+        limp_factor: Array,
+        limp_pivots: Array,
+        startup_factor: Array,
+        startup_pivots: Array,
+        mass_modes: Array,
+        linear_modes: Array,
     ):
         return self.step(
             state,
             Lexp_modes,
-            Limp_inv,
-            startup_Lexp_modes,
-            startup_Limp_inv,
+            (limp_factor, limp_pivots),
+            (startup_factor, startup_pivots),
+            mass_modes,
+            linear_modes,
         )
 
     @staticmethod
@@ -411,6 +421,11 @@ class AxisymmetricTCDNSJax:
     def _scatter_modes(values: Array, indices: Array, size: int) -> Array:
         flat = jnp.zeros((size,), dtype=values.dtype)
         return flat.at[indices].set(values)
+
+    @staticmethod
+    def _put_block(A: Array, rows: slice, cols: slice, block: Array) -> Array:
+        """Compatibility helper retained for the vector-potential TC solver."""
+        return A.at[rows, cols].add(block)
 
     @staticmethod
     def _mode_block_slices(space: CoupledSpace) -> tuple[slice, ...]:
@@ -596,8 +611,12 @@ class AxisymmetricTCDNSJax:
         modes = modes.at[0, pressure_row, :].set(0)
         return modes.at[0, pressure_row, pressure_row].set(1)
 
-    def _solve_limp(self, rhs: Array, Limp_inv: Array | None = None) -> Array:
-        """Apply precomputed mode inverses as one fused batched matmul."""
+    def _solve_limp(
+        self,
+        rhs: Array,
+        Limp_lu: tuple[Array, Array] | None = None,
+    ) -> Array:
+        """Solve pinned mode blocks with their precomputed pivoted-LU factors."""
         components = self.VQ.unflatten(rhs)
         n_modes = int(np.prod(self._mode_shape(self.VQ)))
         rhs_modes = jnp.concatenate(
@@ -605,8 +624,10 @@ class AxisymmetricTCDNSJax:
         )
         pressure_row = sum(int(space.num_dofs[-1]) for space in self.VQ[:3])
         rhs_modes = rhs_modes.at[0, pressure_row].set(0)
-        inverse = self.Limp_inv if Limp_inv is None else Limp_inv
-        sol_modes = jnp.einsum("kij,kj->ki", inverse, rhs_modes)
+        lu, pivots = self.Limp_lu if Limp_lu is None else Limp_lu
+        sol_modes = jax.vmap(
+            lambda lu_i, piv_i, rhs_i: jsp_linalg.lu_solve((lu_i, piv_i), rhs_i)
+        )(lu, pivots, rhs_modes)
         mode_slices = self._mode_block_slices(self.VQ)
         return self.VQ.flatten(
             tuple(
@@ -727,63 +748,105 @@ class AxisymmetricTCDNSJax:
         return self.VV.unflatten(out)  # ty: ignore[return-value]
 
     def _solve_velocity_rhs(
-        self, rhs_u: Velocity, Limp_inv: Array
+        self, rhs_u: Velocity, Limp_lu: tuple[Array, Array]
     ) -> tuple[Velocity, Array]:
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_u, rhs_p))
-        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_inv))
+        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         return (sol[0], sol[1], sol[2]), sol[3]
 
-    def _step_cnab2(
-        self, state: AxisymmetricTCState, Lexp_modes: Array, Limp_inv: Array
-    ) -> AxisymmetricTCState:
-        n_hat = self.nonlinear(state)
-        rhs_v = self._apply_lexp(state.u, Lexp_modes)
-        rhs_u = cnab2_rhs(rhs_v, n_hat, state.nonlinear_old, state.have_old)
-        u, p = self._solve_velocity_rhs(rhs_u, Limp_inv)
+    def _step_cnab2_fields(
+        self,
+        state,
+        values,
+        Lexp_modes: Array,
+        Limp_lu: tuple[Array, Array],
+        apply_lexp,
+        solve_rhs,
+        field_name: str,
+    ):
+        """Shared CNAB2 update for hydro and MHD coefficient pytrees."""
+        nonlinear = self.nonlinear(state)
+        explicit = apply_lexp(values, Lexp_modes)
+        rhs = cnab2_rhs(explicit, nonlinear, state.nonlinear_old, state.have_old)
+        advanced, pressure = solve_rhs(rhs, Limp_lu)
         return replace(
             state,
-            u=u,
-            p=p,
-            nonlinear_old=n_hat,
+            **{field_name: advanced},
+            p=pressure,
+            nonlinear_old=nonlinear,
             have_old=jnp.ones_like(state.have_old),
         )
+
+    def _step_cnab2(
+        self,
+        state: AxisymmetricTCState,
+        Lexp_modes: Array,
+        Limp_lu: tuple[Array, Array],
+    ) -> AxisymmetricTCState:
+        return self._step_cnab2_fields(
+            state,
+            state.u,
+            Lexp_modes,
+            Limp_lu,
+            self._apply_lexp,
+            self._solve_velocity_rhs,
+            "u",
+        )
+
+    def _step_imexrk3_fields(
+        self,
+        state,
+        values,
+        stage_lu: tuple[Array, Array],
+        mass_modes: Array,
+        linear_modes: Array,
+        apply_lexp,
+        solve_rhs,
+        field_name: str,
+    ):
+        """Shared coupled ARS update for hydro and MHD coefficient pytrees."""
+        a, b, _ = IMEXRK443.stages()
+        base_rhs = apply_lexp(values, mass_modes)
+        fields_stage = values
+        pressure_stage = state.p
+        nonlinear_history = []
+        linear_history = []
+        for rk in range(IMEXRK443.steps()):
+            stage_state = replace(state, **{field_name: fields_stage}, p=pressure_stage)
+            nonlinear = self.nonlinear(stage_state)
+            nonlinear_history.append(tuple(-value for value in nonlinear))
+            if rk > 0:
+                linear_history.append(apply_lexp(fields_stage, linear_modes))
+            rhs = ars_stage_rhs(
+                base_rhs,
+                nonlinear_history,
+                linear_history,
+                a,
+                b,
+                1.0,
+                rk,
+            )
+            fields_stage, pressure_stage = solve_rhs(rhs, stage_lu)
+        return replace(state, **{field_name: fields_stage}, p=pressure_stage)
 
     def _step_imexrk3(
         self,
         state: AxisymmetricTCState,
-        stage_lexp: Array,
-        stage_inv: Array,
+        stage_lu: tuple[Array, Array],
+        mass_modes: Array,
+        linear_modes: Array,
     ) -> AxisymmetricTCState:
-        """Advance one four-stage, third-order ARS IMEX Runge--Kutta step."""
-        a, b, _ = IMEXRK443.stages()
-        base_rhs = self._apply_lexp(state.u, self.mass_modes)
-        linear_modes = (stage_lexp - self.mass_modes) / 0.5
-        u_stage = state.u
-        p_stage = state.p
-        nonlinear_history: list[Velocity] = []
-        linear_history: list[Velocity] = []
-        for rk in range(IMEXRK443.steps()):
-            stage_state = replace(state, u=u_stage, p=p_stage)
-            nonlinear = self.nonlinear(stage_state)
-            nonlinear_history.append(tuple(-value for value in nonlinear))
-            if rk > 0:
-                linear_history.append(self._apply_lexp(u_stage, linear_modes))
-            rhs = base_rhs
-            for j in range(rk + 1):
-                rhs = jax.tree.map(
-                    lambda value, term, coeff=b[rk + 1, j]: value + coeff * term,
-                    rhs,
-                    nonlinear_history[j],
-                )
-            for j in range(rk):
-                rhs = jax.tree.map(
-                    lambda value, term, coeff=a[rk + 1, j + 1]: value + coeff * term,
-                    rhs,
-                    linear_history[j],
-                )
-            u_stage, p_stage = self._solve_velocity_rhs(rhs, stage_inv)
-        return replace(state, u=u_stage, p=p_stage)
+        return self._step_imexrk3_fields(
+            state,
+            state.u,
+            stage_lu,
+            mass_modes,
+            linear_modes,
+            self._apply_lexp,
+            self._solve_velocity_rhs,
+            "u",
+        )
 
     @staticmethod
     def _ensure_tc_history(state: AxisymmetricTCState) -> AxisymmetricTCState:
@@ -819,12 +882,36 @@ class AxisymmetricTCDNSJax:
             have_old=jnp.ones_like(state.have_old),
         )
 
+    def _sbdf3_rhs_fields(
+        self,
+        values,
+        solution_old,
+        solution_older,
+        nonlinear,
+        nonlinear_old,
+        nonlinear_older,
+        mass_modes: Array,
+        apply_lexp,
+    ):
+        mass_rhs = sbdf3_mass_history(
+            apply_lexp(values, mass_modes),
+            apply_lexp(solution_old, mass_modes),
+            apply_lexp(solution_older, mass_modes),
+        )
+        nonlinear_rhs = sbdf3_explicit_history(
+            nonlinear, nonlinear_old, nonlinear_older
+        )
+        return jax.tree.map(
+            lambda mass, explicit: mass - explicit, mass_rhs, nonlinear_rhs
+        )
+
     def _step_sbdf3(
         self,
         state: AxisymmetricTCState,
-        Limp_inv: Array,
-        startup_lexp: Array,
-        startup_inv: Array,
+        Limp_lu: tuple[Array, Array],
+        startup_lu: tuple[Array, Array],
+        mass_modes: Array,
+        linear_modes: Array,
     ) -> AxisymmetricTCState:
         state = self._ensure_tc_history(state)
         assert state.nonlinear_older is not None
@@ -833,25 +920,21 @@ class AxisymmetricTCDNSJax:
         current_nonlinear = self.nonlinear(state)
 
         def startup(value: AxisymmetricTCState) -> AxisymmetricTCState:
-            advanced = self._step_imexrk3(value, startup_lexp, startup_inv)
+            advanced = self._step_imexrk3(value, startup_lu, mass_modes, linear_modes)
             return self._shift_tc_history(value, advanced, current_nonlinear)
 
         def steady(value: AxisymmetricTCState) -> AxisymmetricTCState:
-            mass_current = self._apply_lexp(value.u, self.mass_modes)
-            mass_previous = self._apply_lexp(value.solution_old, self.mass_modes)
-            mass_older = self._apply_lexp(value.solution_older, self.mass_modes)
-            mass_rhs = sbdf3_mass_history(mass_current, mass_previous, mass_older)
-            nonlinear_rhs = sbdf3_explicit_history(
+            rhs = self._sbdf3_rhs_fields(
+                value.u,
+                value.solution_old,
+                value.solution_older,
                 current_nonlinear,
                 value.nonlinear_old,
                 value.nonlinear_older,
+                mass_modes,
+                self._apply_lexp,
             )
-            rhs = jax.tree.map(
-                lambda mass, nonlinear: mass - nonlinear,
-                mass_rhs,
-                nonlinear_rhs,
-            )
-            u, p = self._solve_velocity_rhs(rhs, Limp_inv)
+            u, p = self._solve_velocity_rhs(rhs, Limp_lu)
             advanced = replace(value, u=u, p=p)
             return self._shift_tc_history(value, advanced, current_nonlinear)
 
@@ -866,30 +949,39 @@ class AxisymmetricTCDNSJax:
         self,
         state: AxisymmetricTCState,
         Lexp_modes: Array | None = None,
-        Limp_inv: Array | None = None,
-        startup_Lexp_modes: Array | None = None,
-        startup_Limp_inv: Array | None = None,
+        Limp_lu: tuple[Array, Array] | None = None,
+        startup_Limp_lu: tuple[Array, Array] | None = None,
+        mass_modes: Array | None = None,
+        linear_modes: Array | None = None,
     ) -> AxisymmetricTCState:
         """Advance one step with the configured differentiable IMEX scheme."""
         lexp = self.Lexp_modes if Lexp_modes is None else Lexp_modes
-        inverse = self.Limp_inv if Limp_inv is None else Limp_inv
+        lu_factors = self.Limp_lu if Limp_lu is None else Limp_lu
+        mass = self.mass_modes if mass_modes is None else mass_modes
+        linear = self.linear_modes if linear_modes is None else linear_modes
         if self.time_integrator == "CNAB2":
-            return self._step_cnab2(state, lexp, inverse)
+            return self._step_cnab2(state, lexp, lu_factors)
         if self.time_integrator == "IMEXRK3":
-            return self._step_imexrk3(state, lexp, inverse)
-        startup_lexp = (
-            self.startup_Lexp_modes
-            if startup_Lexp_modes is None
-            else startup_Lexp_modes
+            return self._step_imexrk3(state, lu_factors, mass, linear)
+        startup_factors = (
+            self.startup_Limp_lu if startup_Limp_lu is None else startup_Limp_lu
         )
-        startup_inverse = (
-            self.startup_Limp_inv if startup_Limp_inv is None else startup_Limp_inv
-        )
-        return self._step_sbdf3(state, inverse, startup_lexp, startup_inverse)
+        return self._step_sbdf3(state, lu_factors, startup_factors, mass, linear)
 
     def set_dt(self, dt: float) -> None:
-        """Rebuild timestep-dependent mode operators without changing shapes."""
-        self.dt = float(dt)
+        """Rebuild fixed-history-safe timestep operators without recompiling."""
+        new_dt = float(dt)
+        unchanged = math.isclose(
+            new_dt, self.dt, rel_tol=8.0 * np.finfo(float).eps, abs_tol=0.0
+        )
+        if self.time_integrator == "SBDF3" and not unchanged:
+            raise NotImplementedError(
+                "SBDF3 currently supports fixed dt only; start a fresh "
+                "solver/history for a different timestep"
+            )
+        if unchanged:
+            return
+        self.dt = new_dt
         self._build_time_operators()
 
     def solve(self, state: AxisymmetricTCState, steps: int) -> AxisymmetricTCState:
@@ -930,6 +1022,17 @@ class AxisymmetricTCDNSJax:
             tstep0=tstep0,
         )
 
+    def _build_continuity_modes(self) -> None:
+        """Precompute the constant mode-local weak-divergence operators."""
+        q = TestFunction(self.TP)
+        ur = TrialFunction(self.TD)
+        uz = TrialFunction(self.TD)
+        mode_shape = tuple(int(n) for n in self.TP.num_dofs[:-1])
+        dr = self._mode_blocks_from_expr(q * Dx(ur, 1, 1), mode_shape)
+        invr = self._mode_blocks_from_expr(q * (1 / self.r) * ur, mode_shape)
+        dz = self._mode_blocks_from_expr(q * Dx(uz, 0, 1), mode_shape)
+        self._continuity_modes = (dr + invr, dz)
+
     def velocity_physical(self, state: AxisymmetricTCState) -> Velocity:
         return tuple(self.TD.backward(ui) for ui in state.u)  # ty: ignore[return-value]
 
@@ -948,16 +1051,10 @@ class AxisymmetricTCDNSJax:
         return jnp.max(jnp.abs(self.divergence(state)))
 
     def continuity_residual_l2(self, state: AxisymmetricTCState) -> Array:
-        q = TestFunction(self.TP)
-        ur = TrialFunction(self.TD)
-        uz = TrialFunction(self.TD)
-        mode_shape = tuple(int(n) for n in self.TP.num_dofs[:-1])
-        dr = self._mode_blocks_from_expr(q * Dx(ur, 1, 1), mode_shape)
-        invr = self._mode_blocks_from_expr(q * (1 / self.r) * ur, mode_shape)
-        dz = self._mode_blocks_from_expr(q * Dx(uz, 0, 1), mode_shape)
-        ur_modes = state.u[0].reshape((dr.shape[0], dr.shape[2]))
+        dr_invr, dz = self._continuity_modes
+        ur_modes = state.u[0].reshape((dr_invr.shape[0], dr_invr.shape[2]))
         uz_modes = state.u[2].reshape((dz.shape[0], dz.shape[2]))
-        residual = jnp.einsum("mij,mj->mi", dr + invr, ur_modes)
+        residual = jnp.einsum("mij,mj->mi", dr_invr, ur_modes)
         residual += jnp.einsum("mij,mj->mi", dz, uz_modes)
         return jnp.linalg.norm(residual)
 
@@ -1050,6 +1147,7 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
             self.padded_counts = None
             self.inv_r_p = self.inv_r
 
+        self._build_continuity_modes()
         self._build_time_operators()
         self._configure_rollout_cache()
 
@@ -1209,6 +1307,19 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
             w[which]
         )
 
+    def _build_continuity_modes(self) -> None:
+        """Precompute full-3D weak-divergence blocks for every Fourier mode."""
+        q = TestFunction(self.TP)
+        ur = TrialFunction(self.TD)
+        ut = TrialFunction(self.TD)
+        uz = TrialFunction(self.TD)
+        mode_shape = tuple(int(n) for n in self.TP.num_dofs[:-1])
+        dr = self._mode_blocks_from_expr(q * Dx(ur, 2, 1), mode_shape)
+        invr = self._mode_blocks_from_expr(q * (1 / self.r) * ur, mode_shape)
+        dt = self._mode_blocks_from_expr(q * (1 / self.r) * Dx(ut, 0, 1), mode_shape)
+        dz = self._mode_blocks_from_expr(q * Dx(uz, 1, 1), mode_shape)
+        self._continuity_modes = (dr + invr, dt, dz)
+
     def velocity_physical(self, state: AxisymmetricTCState) -> Velocity:
         return tuple(self.TD.backward(ui) for ui in state.u)  # ty: ignore[return-value]
 
@@ -1225,21 +1336,11 @@ class TaylorCouetteDNSJax(AxisymmetricTCDNSJax):
         return dur_dr + ur * self.inv_r + dut_dt * self.inv_r + duz_dz
 
     def continuity_residual_l2(self, state: AxisymmetricTCState) -> Array:
-        q = TestFunction(self.TP)
-        ur = TrialFunction(self.TD)
-        ut = TrialFunction(self.TD)
-        uz = TrialFunction(self.TD)
-        mode_shape = tuple(int(n) for n in self.TP.num_dofs[:-1])
-        dr = self._mode_blocks_from_expr(q * Dx(ur, 2, 1), mode_shape)
-        invr = self._mode_blocks_from_expr(q * (1 / self.r) * ur, mode_shape)
-        dt = self._mode_blocks_from_expr(
-            q * (1 / self.r) * Dx(ut, 0, 1), mode_shape
-        )
-        dz = self._mode_blocks_from_expr(q * Dx(uz, 1, 1), mode_shape)
-        ur_modes = state.u[0].reshape((dr.shape[0], dr.shape[2]))
+        dr_invr, dt, dz = self._continuity_modes
+        ur_modes = state.u[0].reshape((dr_invr.shape[0], dr_invr.shape[2]))
         ut_modes = state.u[1].reshape((dt.shape[0], dt.shape[2]))
         uz_modes = state.u[2].reshape((dz.shape[0], dz.shape[2]))
-        residual = jnp.einsum("mij,mj->mi", dr + invr, ur_modes)
+        residual = jnp.einsum("mij,mj->mi", dr_invr, ur_modes)
         residual += jnp.einsum("mij,mj->mi", dt, ut_modes)
         residual += jnp.einsum("mij,mj->mi", dz, uz_modes)
         return jnp.linalg.norm(residual)
@@ -1559,64 +1660,47 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         return self.VE.unflatten(out)  # ty: ignore[return-value]
 
     def _solve_mhd_rhs(
-        self, rhs_x: MHDFields, Limp_inv: Array
+        self, rhs_x: MHDFields, Limp_lu: tuple[Array, Array]
     ) -> tuple[MHDFields, Array]:
         rhs_p = jnp.zeros(self.TP.num_dofs, dtype=self.Limp.dtype)
         rhs = self.VQ.flatten((*rhs_x[:3], rhs_p, *rhs_x[3:]))
-        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_inv))
+        sol = self.VQ.unflatten(self._solve_limp(rhs, Limp_lu))
         x = (sol[0], sol[1], sol[2], sol[4], sol[5], sol[6])
         return x, sol[3]
 
     def _step_cnab2_mhd(
-        self, state: AxisymmetricMRIState, Lexp_modes: Array, Limp_inv: Array
+        self,
+        state: AxisymmetricMRIState,
+        Lexp_modes: Array,
+        Limp_lu: tuple[Array, Array],
     ) -> AxisymmetricMRIState:
-        n_hat = self.nonlinear(state)
-        rhs_e = self._apply_lexp_mhd(state.x, Lexp_modes)
-        rhs_x = cnab2_rhs(rhs_e, n_hat, state.nonlinear_old, state.have_old)
-        x, p = self._solve_mhd_rhs(rhs_x, Limp_inv)
-        return replace(
+        return self._step_cnab2_fields(
             state,
-            x=x,
-            p=p,
-            nonlinear_old=n_hat,
-            have_old=jnp.ones_like(state.have_old),
+            state.x,
+            Lexp_modes,
+            Limp_lu,
+            self._apply_lexp_mhd,
+            self._solve_mhd_rhs,
+            "x",
         )
 
     def _step_imexrk3_mhd(
         self,
         state: AxisymmetricMRIState,
-        stage_lexp: Array,
-        stage_inv: Array,
+        stage_lu: tuple[Array, Array],
+        mass_modes: Array,
+        linear_modes: Array,
     ) -> AxisymmetricMRIState:
-        """Advance MHD fields with four-stage, third-order ARS IMEX RK."""
-        a, b, _ = IMEXRK443.stages()
-        base_rhs = self._apply_lexp_mhd(state.x, self.mass_modes)
-        linear_modes = (stage_lexp - self.mass_modes) / 0.5
-        x_stage = state.x
-        p_stage = state.p
-        nonlinear_history: list[MHDFields] = []
-        linear_history: list[MHDFields] = []
-        for rk in range(IMEXRK443.steps()):
-            stage_state = replace(state, x=x_stage, p=p_stage)
-            nonlinear = self.nonlinear(stage_state)
-            nonlinear_history.append(tuple(-value for value in nonlinear))
-            if rk > 0:
-                linear_history.append(self._apply_lexp_mhd(x_stage, linear_modes))
-            rhs = base_rhs
-            for j in range(rk + 1):
-                rhs = jax.tree.map(
-                    lambda value, term, coeff=b[rk + 1, j]: value + coeff * term,
-                    rhs,
-                    nonlinear_history[j],
-                )
-            for j in range(rk):
-                rhs = jax.tree.map(
-                    lambda value, term, coeff=a[rk + 1, j + 1]: value + coeff * term,
-                    rhs,
-                    linear_history[j],
-                )
-            x_stage, p_stage = self._solve_mhd_rhs(rhs, stage_inv)
-        return replace(state, x=x_stage, p=p_stage)
+        return self._step_imexrk3_fields(
+            state,
+            state.x,
+            stage_lu,
+            mass_modes,
+            linear_modes,
+            self._apply_lexp_mhd,
+            self._solve_mhd_rhs,
+            "x",
+        )
 
     @staticmethod
     def _ensure_mhd_history(state: AxisymmetricMRIState) -> AxisymmetricMRIState:
@@ -1655,9 +1739,10 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
     def _step_sbdf3_mhd(
         self,
         state: AxisymmetricMRIState,
-        Limp_inv: Array,
-        startup_lexp: Array,
-        startup_inv: Array,
+        Limp_lu: tuple[Array, Array],
+        startup_lu: tuple[Array, Array],
+        mass_modes: Array,
+        linear_modes: Array,
     ) -> AxisymmetricMRIState:
         state = self._ensure_mhd_history(state)
         assert state.nonlinear_older is not None
@@ -1666,25 +1751,23 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         current_nonlinear = self.nonlinear(state)
 
         def startup(value: AxisymmetricMRIState) -> AxisymmetricMRIState:
-            advanced = self._step_imexrk3_mhd(value, startup_lexp, startup_inv)
+            advanced = self._step_imexrk3_mhd(
+                value, startup_lu, mass_modes, linear_modes
+            )
             return self._shift_mhd_history(value, advanced, current_nonlinear)
 
         def steady(value: AxisymmetricMRIState) -> AxisymmetricMRIState:
-            mass_current = self._apply_lexp_mhd(value.x, self.mass_modes)
-            mass_previous = self._apply_lexp_mhd(value.solution_old, self.mass_modes)
-            mass_older = self._apply_lexp_mhd(value.solution_older, self.mass_modes)
-            mass_rhs = sbdf3_mass_history(mass_current, mass_previous, mass_older)
-            nonlinear_rhs = sbdf3_explicit_history(
+            rhs = self._sbdf3_rhs_fields(
+                value.x,
+                value.solution_old,
+                value.solution_older,
                 current_nonlinear,
                 value.nonlinear_old,
                 value.nonlinear_older,
+                mass_modes,
+                self._apply_lexp_mhd,
             )
-            rhs = jax.tree.map(
-                lambda mass, nonlinear: mass - nonlinear,
-                mass_rhs,
-                nonlinear_rhs,
-            )
-            x, p = self._solve_mhd_rhs(rhs, Limp_inv)
+            x, p = self._solve_mhd_rhs(rhs, Limp_lu)
             advanced = replace(value, x=x, p=p)
             return self._shift_mhd_history(value, advanced, current_nonlinear)
 
@@ -1699,26 +1782,24 @@ class AxisymmetricMRIDNSJax(AxisymmetricTCDNSJax):
         self,
         state: AxisymmetricMRIState,
         Lexp_modes: Array | None = None,
-        Limp_inv: Array | None = None,
-        startup_Lexp_modes: Array | None = None,
-        startup_Limp_inv: Array | None = None,
+        Limp_lu: tuple[Array, Array] | None = None,
+        startup_Limp_lu: tuple[Array, Array] | None = None,
+        mass_modes: Array | None = None,
+        linear_modes: Array | None = None,
     ) -> AxisymmetricMRIState:
         """Advance MHD fields with the configured differentiable IMEX scheme."""
         lexp = self.Lexp_modes if Lexp_modes is None else Lexp_modes
-        inverse = self.Limp_inv if Limp_inv is None else Limp_inv
+        lu_factors = self.Limp_lu if Limp_lu is None else Limp_lu
+        mass = self.mass_modes if mass_modes is None else mass_modes
+        linear = self.linear_modes if linear_modes is None else linear_modes
         if self.time_integrator == "CNAB2":
-            return self._step_cnab2_mhd(state, lexp, inverse)
+            return self._step_cnab2_mhd(state, lexp, lu_factors)
         if self.time_integrator == "IMEXRK3":
-            return self._step_imexrk3_mhd(state, lexp, inverse)
-        startup_lexp = (
-            self.startup_Lexp_modes
-            if startup_Lexp_modes is None
-            else startup_Lexp_modes
+            return self._step_imexrk3_mhd(state, lu_factors, mass, linear)
+        startup_factors = (
+            self.startup_Limp_lu if startup_Limp_lu is None else startup_Limp_lu
         )
-        startup_inverse = (
-            self.startup_Limp_inv if startup_Limp_inv is None else startup_Limp_inv
-        )
-        return self._step_sbdf3_mhd(state, inverse, startup_lexp, startup_inverse)
+        return self._step_sbdf3_mhd(state, lu_factors, startup_factors, mass, linear)
 
     def solve(self, state: AxisymmetricMRIState, steps: int) -> AxisymmetricMRIState:
         if self.time_integrator == "SBDF3":
