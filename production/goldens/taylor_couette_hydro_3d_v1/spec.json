@@ -69,9 +69,9 @@
     "azimuthal_wavenumber": 1
   },
   "native_axes": {
-    "axis_0": "r radial",
-    "axis_1": "theta azimuthal",
-    "axis_2": "z axial"
+    "axis_0": "theta azimuthal",
+    "axis_1": "z axial",
+    "axis_2": "r radial"
   },
   "nondimensional_groups": {
     "Omega1": 1.0,
@@ -104,7 +104,7 @@
       "Nz": 4
     }
   },
-  "spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca",
+  "spec_hash": "19df630cfd61d4f1bec225ebdde8d226623f9b2781d177a4d062affdf37e7abc",
   "support_state": "production",
   "time": {
     "dt": 0.001,

@@ -32,7 +32,7 @@
   "environment": {
     "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
     "jax": {
-      "captured_at_utc": "2026-07-24T12:21:46+00:00",
+      "captured_at_utc": "2026-07-24T13:31:58+00:00",
       "cuda_visible_devices": "",
       "default_backend": "cpu",
       "degraded": true,
@@ -57,7 +57,7 @@
       "xla_python_client_preallocate": "false"
     }
   },
-  "generated_at_utc": "2026-07-24T12:22:00+00:00",
+  "generated_at_utc": "2026-07-24T13:32:11+00:00",
   "generation": {
     "run_options": {
       "additional_steps": null,
@@ -94,8 +94,8 @@
   },
   "git": {
     "branch": "HEAD",
-    "commit": "09fef79372e2ca8d2ef22d10caae80f9b9b05068",
-    "describe": "09fef79",
+    "commit": "4705fa608cb79289159fde0d3215c437195825b2",
+    "describe": "4705fa6",
     "dirty": false,
     "dirty_files": [],
     "jax_config": {
@@ -128,7 +128,7 @@
     "solver_survey.md:510",
     "demo/test_taylor_couette_dns.py:289"
   ],
-  "spec_hash": "7b768d13309c0d133a35f78db3df69604f91797ed0b73268923a0afa63cfe8ad",
+  "spec_hash": "5df709afffbf0af66eaf315dc42aee1b1a90e5f971090f4493dfa5b7522f539c",
   "tolerance_model": {
     "kind": "physics-regression",
     "scalars": {

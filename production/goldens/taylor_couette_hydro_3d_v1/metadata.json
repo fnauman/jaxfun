@@ -19,9 +19,9 @@
       "z": "spanwise/axial rotation-axis direction"
     },
     "native_axes": {
-      "axis_0": "r radial",
-      "axis_1": "theta azimuthal",
-      "axis_2": "z axial"
+      "axis_0": "theta azimuthal",
+      "axis_1": "z axial",
+      "axis_2": "r radial"
     },
     "nondimensional_groups": {
       "Omega1": 1.0,
@@ -98,10 +98,10 @@
       "examples/taylor_couette_dns_jax.py",
       "examples/taylor_couette_linear_jax.py"
     ],
-    "spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca"
+    "spec_hash": "19df630cfd61d4f1bec225ebdde8d226623f9b2781d177a4d062affdf37e7abc"
   },
   "artifact_id": "taylor_couette_hydro_3d_v1",
-  "base_spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca",
+  "base_spec_hash": "19df630cfd61d4f1bec225ebdde8d226623f9b2781d177a4d062affdf37e7abc",
   "classification": {
     "energy_key": "total_energy",
     "fit": {
@@ -119,14 +119,14 @@
   },
   "compilation_cache": {
     "enabled": true,
-    "path": "/tmp/fork_jaxfun-pr50-cache-09fef79",
+    "path": "/tmp/fork_jaxfun-pr50-axis-cache-4705fa6",
     "requested": true,
     "restores_process_config": true,
     "source": "env"
   },
   "config_path": "production/examples/taylor_couette_hydro_3d_v1.json",
   "device": {
-    "captured_at_utc": "2026-07-24T12:21:15+00:00",
+    "captured_at_utc": "2026-07-24T13:31:38+00:00",
     "cuda_visible_devices": "",
     "default_backend": "cpu",
     "degraded": true,
@@ -157,7 +157,7 @@
     "divergence_linf",
     "rayleigh_stable"
   ],
-  "diagnostics_path": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79/diagnostics.jsonl",
+  "diagnostics_path": "/tmp/fork_jaxfun-pr50-axis-hydro-out-4705fa6/diagnostics.jsonl",
   "execution": {
     "execution_kind": "dns-linear-window",
     "solver_execution_wired": true,
@@ -171,14 +171,14 @@
     ],
     "type": "circular_couette_dns_growth"
   },
-  "generated_at_utc": "2026-07-24T12:21:15+00:00",
+  "generated_at_utc": "2026-07-24T13:31:38+00:00",
   "geometry": "taylor_couette",
   "golden_resolution": {
     "exists": true,
-    "golden_path": "/tmp/fork_jaxfun-pr50-golden-clean-09fef79/production/goldens/taylor_couette_hydro_3d_v1/golden/golden.json",
+    "golden_path": "/tmp/fork_jaxfun-pr50-axis-golden-4705fa6/production/goldens/taylor_couette_hydro_3d_v1/golden/golden.json",
     "policy": "vendored",
-    "root": "/tmp/fork_jaxfun-pr50-golden-clean-09fef79/production/goldens",
-    "spec_path": "/tmp/fork_jaxfun-pr50-golden-clean-09fef79/production/goldens/taylor_couette_hydro_3d_v1/spec.json"
+    "root": "/tmp/fork_jaxfun-pr50-axis-golden-4705fa6/production/goldens",
+    "spec_path": "/tmp/fork_jaxfun-pr50-axis-golden-4705fa6/production/goldens/taylor_couette_hydro_3d_v1/spec.json"
   },
   "integrator": {
     "actual": "SBDF3",
@@ -188,13 +188,13 @@
     "requested": "SBDF3"
   },
   "numerics_contract_version": null,
-  "out_dir": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79",
+  "out_dir": "/tmp/fork_jaxfun-pr50-axis-hydro-out-4705fa6",
   "physics": "hydro",
   "problem_id": "taylor_couette_hydro_3d_v1",
   "provenance": {
     "branch": "HEAD",
-    "commit": "09fef79372e2ca8d2ef22d10caae80f9b9b05068",
-    "describe": "09fef79",
+    "commit": "4705fa608cb79289159fde0d3215c437195825b2",
+    "describe": "4705fa6",
     "dirty": false,
     "dirty_files": [],
     "jax_config": {
@@ -209,7 +209,7 @@
       "uv.lock": "beb50787969b5500e5a4a9f4000b1df3fdb23114c226f3ef4b814b3ed1cdae16"
     },
     "release_gate": {
-      "diff_archive": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79/worktree_diff.patch",
+      "diff_archive": "/tmp/fork_jaxfun-pr50-axis-hydro-out-4705fa6/worktree_diff.patch",
       "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "discovery_only": true,
       "passed": false,
@@ -315,16 +315,16 @@
     "type_valid": null
   },
   "schema_version": 1,
-  "spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca",
+  "spec_hash": "19df630cfd61d4f1bec225ebdde8d226623f9b2781d177a4d062affdf37e7abc",
   "support_state": "production",
   "timing": {
-    "ms_per_step": 2767.454684673188,
-    "seconds_per_step": 2.767454684673188,
-    "solver_finished_at_utc": "2026-07-24T12:21:24+00:00",
-    "solver_started_at_utc": "2026-07-24T12:21:15+00:00",
+    "ms_per_step": 2800.4010253353044,
+    "seconds_per_step": 2.8004010253353044,
+    "solver_finished_at_utc": "2026-07-24T13:31:46+00:00",
+    "solver_started_at_utc": "2026-07-24T13:31:38+00:00",
     "solver_steps": 3,
-    "solver_wall_time_seconds": 8.302364054019563,
-    "steps_per_second": 0.36134286336764043
+    "solver_wall_time_seconds": 8.401203076005913,
+    "steps_per_second": 0.3570917132771245
   },
   "validation_floor": {
     "divergence_diagnostics": [
@@ -352,5 +352,5 @@
     "resolution_tier": null,
     "steps_override": null
   },
-  "written_golden": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79/golden/golden.json"
+  "written_golden": "/tmp/fork_jaxfun-pr50-axis-hydro-out-4705fa6/golden/golden.json"
 }
