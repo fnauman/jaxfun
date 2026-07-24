@@ -1,0 +1,123 @@
+{
+  "boundary_conditions": {
+    "magnetic": null,
+    "velocity": {
+      "inner": "Omega1*R1",
+      "outer": "Omega2*R2",
+      "type": "no_slip_rotating_cylinders"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "kinetic_energy",
+    "growth_rate",
+    "growth_rate_linear",
+    "divergence_u"
+  ],
+  "diagnostics": [
+    "kinetic_energy",
+    "growth_rate",
+    "growth_rate_linear",
+    "divergence_linf",
+    "rayleigh_stable"
+  ],
+  "domain": {
+    "r": [
+      1.0,
+      2.0
+    ],
+    "theta_period": 6.283185307179586,
+    "z_period": 2.0074074463832545
+  },
+  "evolved_variables": [
+    "u_r",
+    "u_theta",
+    "u_z",
+    "p"
+  ],
+  "expected_oracle": {
+    "source": "full-3D TaylorCouetteDNSJax mode-local primitive-variable DNS; non-axisymmetric linear-eigenmode seed",
+    "source_anchors": [
+      "solver_survey.md:392",
+      "demo/test_taylor_couette_dns.py:87"
+    ],
+    "type": "circular_couette_dns_growth"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "type": "none"
+  },
+  "formulation": {
+    "internal": "primitive-variable perturbation NS, full 3D (theta,z,r) SBDF3 saddle-point DNS about the A*r+B/r base flow",
+    "pressure": "P_N/P_{N-2} pressure with null-space pinning"
+  },
+  "geometry": "taylor_couette",
+  "golden": {
+    "artifact_id": "taylor_couette_hydro_3d_v1",
+    "regeneration_command": "python -m production.run_problem --config production/examples/taylor_couette_hydro_3d_v1.json --out production/goldens/taylor_couette_hydro_3d_v1 --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 1e-06,
+    "type": "linear_eigenmode"
+  },
+  "mode": {
+    "axial_wavenumber": 3.13,
+    "azimuthal_wavenumber": 1
+  },
+  "native_axes": {
+    "axis_0": "theta azimuthal",
+    "axis_1": "z axial",
+    "axis_2": "r radial"
+  },
+  "nondimensional_groups": {
+    "Omega1": 1.0,
+    "Omega2": 0.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "Re": 100.0,
+    "nu": 0.01,
+    "radius_ratio": 0.5
+  },
+  "physics": "hydro",
+  "precision": "float64",
+  "problem_id": "taylor_couette_hydro_3d_v1",
+  "random_seed": null,
+  "resolution": {
+    "Nr": 12,
+    "Ntheta": 4,
+    "Nz": 4,
+    "dealias": 1.5,
+    "family": "C",
+    "memory_model": "mode-local O(Ntheta*Nz*Nr^2); no global DOF^2 operator",
+    "production": {
+      "Nr": 32,
+      "Ntheta": 16,
+      "Nz": 16
+    },
+    "smoke": {
+      "Nr": 8,
+      "Ntheta": 4,
+      "Nz": 4
+    }
+  },
+  "support_state": "production",
+  "time": {
+    "dt": 0.001,
+    "final_time": 0.003,
+    "integrator": "SBDF3"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_linf": 1e-08,
+      "growth_rate": 1e-06,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-08
+    }
+  },
+  "unsupported_subcases": []
+}

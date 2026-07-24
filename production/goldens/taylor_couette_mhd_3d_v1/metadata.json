@@ -1,0 +1,376 @@
+{
+  "adapter": {
+    "axis_conventions": {
+      "axis_0": "r radial",
+      "axis_1": "theta azimuthal",
+      "axis_2": "z axial"
+    },
+    "boundary_conditions": {
+      "magnetic": {
+        "details": "b_r=0, Robin d(r b_theta)/dr=0, Neumann db_z/dr=0",
+        "type": "conducting"
+      },
+      "velocity": {
+        "type": "no_slip_rotating_cylinders"
+      }
+    },
+    "canonical_axes": {
+      "x": "wall-normal/radial/shear-gradient direction",
+      "y": "streamwise/azimuthal wall-motion direction",
+      "z": "spanwise/axial rotation-axis direction"
+    },
+    "native_axes": {
+      "axis_0": "theta azimuthal",
+      "axis_1": "z axial",
+      "axis_2": "r radial"
+    },
+    "nondimensional_groups": {
+      "B0": 0.1,
+      "Omega1": 1.0,
+      "Omega2": 0.3535533905932738,
+      "Pm": 1.0,
+      "R1": 1.0,
+      "R2": 2.0,
+      "Re": 1000.0,
+      "Rm": 1000.0,
+      "eta_mag": 0.001,
+      "nu": 0.001,
+      "radius_ratio": 0.5
+    },
+    "solver_args": {
+      "B0": 0.1,
+      "Omega1": 1.0,
+      "Omega2": 0.3535533905932738,
+      "Pm": 1.0,
+      "R1": 1.0,
+      "R2": 2.0,
+      "Re": 1000.0,
+      "Rm": 1000.0,
+      "boundary_conditions": {
+        "magnetic": {
+          "details": "b_r=0, Robin d(r b_theta)/dr=0, Neumann db_z/dr=0",
+          "type": "conducting"
+        },
+        "velocity": {
+          "type": "no_slip_rotating_cylinders"
+        }
+      },
+      "domain": {
+        "r": [
+          1.0,
+          2.0
+        ],
+        "theta_period": 6.283185307179586,
+        "z_period": 1.0471975511965976
+      },
+      "dt": 0.002,
+      "eta_mag": 0.001,
+      "final_time": 0.006,
+      "forcing": {
+        "B0": 0.1,
+        "type": "imposed_axial_field"
+      },
+      "geometry": "taylor_couette",
+      "initial_condition": {
+        "amplitude": 1e-07,
+        "type": "linear_eigenmode"
+      },
+      "integrator": "SBDF3",
+      "mode": {
+        "axial_wavenumber": 6.0,
+        "azimuthal_wavenumber": 1
+      },
+      "nu": 0.001,
+      "physics": "mhd",
+      "resolution": {
+        "Nr": 12,
+        "Ntheta": 4,
+        "Nz": 4,
+        "dealias": 1.5,
+        "family": "C",
+        "memory_model": "mode-local O(Ntheta*Nz*Nr^2); no global DOF^2 operator",
+        "production": {
+          "Nr": 24,
+          "Ntheta": 16,
+          "Nz": 16
+        },
+        "smoke": {
+          "Nr": 8,
+          "Ntheta": 4,
+          "Nz": 4
+        }
+      }
+    },
+    "solver_source_files": [
+      "examples/taylor_couette_dns_jax.py",
+      "examples/taylor_couette_mri_jax.py"
+    ],
+    "source_files": [
+      "examples/taylor_couette_dns_jax.py",
+      "examples/taylor_couette_mri_jax.py"
+    ],
+    "spec_hash": "5df709afffbf0af66eaf315dc42aee1b1a90e5f971090f4493dfa5b7522f539c"
+  },
+  "artifact_id": "taylor_couette_mhd_3d_v1",
+  "base_spec_hash": "5df709afffbf0af66eaf315dc42aee1b1a90e5f971090f4493dfa5b7522f539c",
+  "classification": {
+    "energy_key": "total_energy",
+    "fit": {
+      "noise_floor": null,
+      "r_squared": null,
+      "samples": 0,
+      "slope": null,
+      "stderr": null,
+      "window_end_t": null,
+      "window_start_t": null
+    },
+    "reason": "insufficient positive fluctuation-energy samples to fit a slope",
+    "scientific_class": "inconclusive",
+    "underresolved": null
+  },
+  "compilation_cache": {
+    "enabled": true,
+    "path": "/tmp/fork_jaxfun-pr50-axis-cache-4705fa6",
+    "requested": true,
+    "restores_process_config": true,
+    "source": "env"
+  },
+  "config_path": "production/examples/taylor_couette_mhd_3d_v1.json",
+  "device": {
+    "captured_at_utc": "2026-07-24T13:31:58+00:00",
+    "cuda_visible_devices": "",
+    "default_backend": "cpu",
+    "degraded": true,
+    "devices": [
+      "cpu:0"
+    ],
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax_default_scalar_dtype": "float64",
+    "jax_enable_x64": true,
+    "jax_enable_x64_env": "1",
+    "jax_platforms": "cpu",
+    "jax_use_simplified_jaxpr_constants": true,
+    "jax_use_simplified_jaxpr_constants_env": "true",
+    "jax_version": "0.10.1",
+    "jaxfun_enable_x64": "1",
+    "jaxfun_use_simplified_jaxpr_constants": null,
+    "jaxfun_wavenumber_solver": "jax",
+    "jaxlib_version": "0.10.1",
+    "mode": "cpu_smoke",
+    "production_run_dtype": "float64",
+    "requested_production_dtype": "float64",
+    "xla_python_client_preallocate": "false"
+  },
+  "diagnostics": [
+    "growth_rate",
+    "growth_rate_linear",
+    "kinetic_energy",
+    "magnetic_energy",
+    "divergence_u",
+    "divergence_b",
+    "magnetic_bc"
+  ],
+  "diagnostics_path": "/tmp/fork_jaxfun-pr50-axis-mhd-out-4705fa6/diagnostics.jsonl",
+  "execution": {
+    "execution_kind": "dns-linear-window",
+    "solver_execution_wired": true,
+    "status": "completed"
+  },
+  "expected_oracle": {
+    "source": "full-3D TaylorCouetteMRIDNSJax conducting-wall mode-local DNS; non-axisymmetric MRI eigenmode seed",
+    "source_anchors": [
+      "solver_survey.md:510",
+      "demo/test_taylor_couette_dns.py:289"
+    ],
+    "type": "tc_mri_dns_growth"
+  },
+  "generated_at_utc": "2026-07-24T13:31:58+00:00",
+  "geometry": "taylor_couette",
+  "golden_resolution": {
+    "exists": true,
+    "golden_path": "/tmp/fork_jaxfun-pr50-axis-golden-4705fa6/production/goldens/taylor_couette_mhd_3d_v1/golden/golden.json",
+    "policy": "vendored",
+    "root": "/tmp/fork_jaxfun-pr50-axis-golden-4705fa6/production/goldens",
+    "spec_path": "/tmp/fork_jaxfun-pr50-axis-golden-4705fa6/production/goldens/taylor_couette_mhd_3d_v1/spec.json"
+  },
+  "integrator": {
+    "actual": "SBDF3",
+    "dt": 0.002,
+    "formal_order": 3,
+    "order_regression_test": null,
+    "requested": "SBDF3"
+  },
+  "numerics_contract_version": null,
+  "out_dir": "/tmp/fork_jaxfun-pr50-axis-mhd-out-4705fa6",
+  "physics": "mhd",
+  "problem_id": "taylor_couette_mhd_3d_v1",
+  "provenance": {
+    "branch": "HEAD",
+    "commit": "4705fa608cb79289159fde0d3215c437195825b2",
+    "describe": "4705fa6",
+    "dirty": false,
+    "dirty_files": [],
+    "jax_config": {
+      "jax_enable_x64": true,
+      "jax_use_simplified_jaxpr_constants": true,
+      "jax_use_simplified_jaxpr_constants_env": "true",
+      "jaxfun_use_simplified_jaxpr_constants": null,
+      "jaxfun_wavenumber_solver": "jax"
+    },
+    "lockfile_sha256": {
+      "pyproject.toml": "1ee5060bd05637b6933d6d4e8262d5eb922d1495eafe833156294dae490e680a",
+      "uv.lock": "beb50787969b5500e5a4a9f4000b1df3fdb23114c226f3ef4b814b3ed1cdae16"
+    },
+    "release_gate": {
+      "diff_archive": "/tmp/fork_jaxfun-pr50-axis-mhd-out-4705fa6/worktree_diff.patch",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "discovery_only": true,
+      "passed": false,
+      "problems": [
+        "no upstream/remote-tracking branch (commit not pushed)",
+        "HEAD is not an immutable release ref: an exact local tag resolving to HEAD must exist at the same commit on origin (a branch, including main, is a movable ref)"
+      ],
+      "release_ref": {
+        "exact_tag": null,
+        "is_immutable_ref": false,
+        "remote": "origin",
+        "remote_tag_commit": null,
+        "remote_verified": false,
+        "tag_commit": null
+      },
+      "untracked_archived": []
+    },
+    "remote_url": "git@github.com:fnauman/jaxfun",
+    "unpushed_commits": [],
+    "upstream": null,
+    "versions": {
+      "cuda_runtime": "cpu",
+      "gpu": "cpu",
+      "jax": "0.10.1",
+      "jax_backend": "cpu",
+      "jaxlib": "0.10.1",
+      "nvidia_driver": "580.159.04",
+      "python": "3.12.3"
+    }
+  },
+  "resolved_physics": {
+    "B0": 0.1,
+    "Ly": 9.42477796076938,
+    "Lz": 1.0471975511965976,
+    "Omega": 0.5211506596987213,
+    "Omega1": 1.0,
+    "Omega2": 0.3535533905932738,
+    "Omega_mid": 0.5211506596987213,
+    "Pm": 1.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "Re_TC": 1000.0,
+    "Re_h": 191.53973612051146,
+    "Rm_TC": 1000.0,
+    "Rm_h": 191.53973612051146,
+    "S": 0.7661589444820459,
+    "S_mid": 0.7661589444820459,
+    "U0": 0.38307947224102296,
+    "curvature": 0.3333333333333333,
+    "eta": 0.001,
+    "gap": 1.0,
+    "geometry": "taylor_couette",
+    "h": 0.5,
+    "magnetic_bc": "conducting",
+    "nu": 0.001,
+    "precision": "float64",
+    "q_mid": 1.4701294725885306,
+    "r_mid": 1.5,
+    "raw_inputs": {
+      "domain_r": [
+        1.0,
+        2.0
+      ],
+      "geometry": "taylor_couette",
+      "nondimensional_groups": {
+        "B0": 0.1,
+        "Omega1": 1.0,
+        "Omega2": 0.3535533905932738,
+        "Pm": 1.0,
+        "R1": 1.0,
+        "R2": 2.0,
+        "Re": 1000.0,
+        "Rm": 1000.0,
+        "eta_mag": 0.001,
+        "nu": 0.001,
+        "radius_ratio": 0.5
+      },
+      "physics": "mhd"
+    },
+    "reynolds_convention": "Re_h = |S_mid| h^2 / nu; Re_TC = |Omega1| R1 (R2-R1) / nu",
+    "theta_period": 6.283185307179586,
+    "velocity_scale": "midpoint_shear"
+  },
+  "run_options": {
+    "additional_steps": null,
+    "additional_time": null,
+    "checkpoint_every": null,
+    "compare_golden": false,
+    "diagnostics_every": null,
+    "profiles_every": null,
+    "requested_device": "cpu",
+    "resolution_tier": null,
+    "resume": null,
+    "snapshot_every": null,
+    "steps_override": null,
+    "validate_only": false,
+    "write_golden": true
+  },
+  "saturation_checks": {
+    "energy_growth_factor": null,
+    "magnetic_energy_growth_factor": null,
+    "passed": null,
+    "present": false,
+    "required": false,
+    "stationarity_check_passed": null,
+    "stationarity_relative_change": null,
+    "type_valid": null
+  },
+  "schema_version": 1,
+  "spec_hash": "5df709afffbf0af66eaf315dc42aee1b1a90e5f971090f4493dfa5b7522f539c",
+  "support_state": "production",
+  "timing": {
+    "ms_per_step": 4427.077499994387,
+    "seconds_per_step": 4.427077499994387,
+    "solver_finished_at_utc": "2026-07-24T13:32:11+00:00",
+    "solver_started_at_utc": "2026-07-24T13:31:58+00:00",
+    "solver_steps": 3,
+    "solver_wall_time_seconds": 13.281232499983162,
+    "steps_per_second": 0.225882650575073
+  },
+  "validation_floor": {
+    "divergence_diagnostics": [
+      "scalars.divergence_u",
+      "scalars.divergence_b"
+    ],
+    "divergence_limit": 0.01,
+    "divergence_present": true,
+    "max_divergence": 1.486388530128091e-08,
+    "nonfinite_diagnostics": [],
+    "passed": true,
+    "required": false
+  },
+  "validation_scope": {
+    "bounded_smoke": false,
+    "checked_observables": [
+      "divergence_b",
+      "divergence_u",
+      "growth_rate",
+      "growth_rate_linear",
+      "kinetic_energy",
+      "magnetic_bc",
+      "magnetic_energy"
+    ],
+    "kind": "oracle_execution",
+    "quench_additional_steps": null,
+    "reason": "executed configured analytic, linear, or DNS oracle path",
+    "resolution_tier": null,
+    "steps_override": null
+  },
+  "written_golden": "/tmp/fork_jaxfun-pr50-axis-mhd-out-4705fa6/golden/golden.json"
+}

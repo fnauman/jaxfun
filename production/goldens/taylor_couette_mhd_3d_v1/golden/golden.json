@@ -1,0 +1,143 @@
+{
+  "artifact_id": "taylor_couette_mhd_3d_v1",
+  "comparison_fields": {
+    "scalars_sha256": "6a361876f2f0d180b0db3a70c93529bae3d0574c90d5ea0f3042efdafe0c6692",
+    "tolerance_model_sha256": "99989362656c804ca0cd1f920bb1933211926d37f755048ddd5e85829b900041"
+  },
+  "diagnostics": {
+    "scalars": {
+      "divergence_b": 1.0541502761126154e-08,
+      "divergence_u": 1.486388530128091e-08,
+      "growth_rate": 0.29129374483210074,
+      "growth_rate_linear": 0.2912937448361517,
+      "kinetic_energy": 7.883607407650011e-15,
+      "magnetic_bc": "conducting",
+      "magnetic_energy": 1.1337572869748595e-14
+    },
+    "time_series": [
+      {
+        "growth_rate_linear": 0.2912937448361517,
+        "kinetic_energy": 7.85609816898076e-15,
+        "magnetic_energy": 1.1298011285580755e-14,
+        "t": 0.0
+      },
+      {
+        "growth_rate": 0.29129374483210074,
+        "kinetic_energy": 7.883607407650011e-15,
+        "magnetic_energy": 1.1337572869748595e-14,
+        "t": 0.006
+      }
+    ]
+  },
+  "environment": {
+    "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+    "jax": {
+      "captured_at_utc": "2026-07-24T13:31:58+00:00",
+      "cuda_visible_devices": "",
+      "default_backend": "cpu",
+      "degraded": true,
+      "devices": [
+        "cpu:0"
+      ],
+      "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
+      "jax_default_scalar_dtype": "float64",
+      "jax_enable_x64": true,
+      "jax_enable_x64_env": "1",
+      "jax_platforms": "cpu",
+      "jax_use_simplified_jaxpr_constants": true,
+      "jax_use_simplified_jaxpr_constants_env": "true",
+      "jax_version": "0.10.1",
+      "jaxfun_enable_x64": "1",
+      "jaxfun_use_simplified_jaxpr_constants": null,
+      "jaxfun_wavenumber_solver": "jax",
+      "jaxlib_version": "0.10.1",
+      "mode": "cpu_smoke",
+      "production_run_dtype": "float64",
+      "requested_production_dtype": "float64",
+      "xla_python_client_preallocate": "false"
+    }
+  },
+  "generated_at_utc": "2026-07-24T13:32:11+00:00",
+  "generation": {
+    "run_options": {
+      "additional_steps": null,
+      "additional_time": null,
+      "checkpoint_every": null,
+      "compare_golden": false,
+      "diagnostics_every": null,
+      "profiles_every": null,
+      "requested_device": "cpu",
+      "resolution_tier": null,
+      "resume": null,
+      "snapshot_every": null,
+      "steps_override": null,
+      "validate_only": false,
+      "write_golden": true
+    },
+    "validation_scope": {
+      "bounded_smoke": false,
+      "checked_observables": [
+        "divergence_b",
+        "divergence_u",
+        "growth_rate",
+        "growth_rate_linear",
+        "kinetic_energy",
+        "magnetic_bc",
+        "magnetic_energy"
+      ],
+      "kind": "oracle_execution",
+      "quench_additional_steps": null,
+      "reason": "executed configured analytic, linear, or DNS oracle path",
+      "resolution_tier": null,
+      "steps_override": null
+    }
+  },
+  "git": {
+    "branch": "HEAD",
+    "commit": "4705fa608cb79289159fde0d3215c437195825b2",
+    "describe": "4705fa6",
+    "dirty": false,
+    "dirty_files": [],
+    "jax_config": {
+      "jax_enable_x64": true,
+      "jax_use_simplified_jaxpr_constants": true,
+      "jax_use_simplified_jaxpr_constants_env": "true",
+      "jaxfun_use_simplified_jaxpr_constants": null,
+      "jaxfun_wavenumber_solver": "jax"
+    },
+    "lockfile_sha256": {
+      "pyproject.toml": "1ee5060bd05637b6933d6d4e8262d5eb922d1495eafe833156294dae490e680a",
+      "uv.lock": "beb50787969b5500e5a4a9f4000b1df3fdb23114c226f3ef4b814b3ed1cdae16"
+    },
+    "remote_url": "git@github.com:fnauman/jaxfun",
+    "unpushed_commits": [],
+    "upstream": null,
+    "versions": {
+      "cuda_runtime": "cpu",
+      "gpu": "cpu",
+      "jax": "0.10.1",
+      "jax_backend": "cpu",
+      "jaxlib": "0.10.1",
+      "nvidia_driver": "580.159.04",
+      "python": "3.12.3"
+    }
+  },
+  "problem_id": "taylor_couette_mhd_3d_v1",
+  "schema_version": 1,
+  "source_anchors": [
+    "solver_survey.md:510",
+    "demo/test_taylor_couette_dns.py:289"
+  ],
+  "spec_hash": "5df709afffbf0af66eaf315dc42aee1b1a90e5f971090f4493dfa5b7522f539c",
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b": 1e-08,
+      "divergence_u": 1e-08,
+      "growth_rate": 1e-06,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-08,
+      "magnetic_energy": 1e-08
+    }
+  }
+}

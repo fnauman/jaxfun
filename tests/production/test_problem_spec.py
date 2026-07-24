@@ -26,9 +26,11 @@ ACCEPTED = [
     "pcf_mri_primitive_dns_v1",
     "taylor_couette_hydro_v1",
     "taylor_couette_hydro_dns_v1",
+    "taylor_couette_hydro_3d_v1",
     "taylor_couette_mhd_conducting_v1",
     "taylor_couette_mhd_insulating_v1",
     "taylor_couette_mhd_dns_v1",
+    "taylor_couette_mhd_3d_v1",
     "pipe_hagen_poiseuille_v1",
     "pipe_womersley_v1",
 ]

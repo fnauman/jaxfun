@@ -1,0 +1,136 @@
+{
+  "boundary_conditions": {
+    "magnetic": {
+      "details": "b_r=0, Robin d(r b_theta)/dr=0, Neumann db_z/dr=0",
+      "type": "conducting"
+    },
+    "velocity": {
+      "type": "no_slip_rotating_cylinders"
+    }
+  },
+  "canonical_axes": {
+    "x": "wall-normal/radial/shear-gradient direction",
+    "y": "streamwise/azimuthal wall-motion direction",
+    "z": "spanwise/axial rotation-axis direction"
+  },
+  "diagnostic_variables": [
+    "growth_rate",
+    "growth_rate_linear",
+    "magnetic_energy",
+    "divergence_b"
+  ],
+  "diagnostics": [
+    "growth_rate",
+    "growth_rate_linear",
+    "kinetic_energy",
+    "magnetic_energy",
+    "divergence_u",
+    "divergence_b",
+    "magnetic_bc"
+  ],
+  "domain": {
+    "r": [
+      1.0,
+      2.0
+    ],
+    "theta_period": 6.283185307179586,
+    "z_period": 1.0471975511965976
+  },
+  "evolved_variables": [
+    "u_r",
+    "u_theta",
+    "u_z",
+    "p",
+    "b_r",
+    "b_theta",
+    "b_z"
+  ],
+  "expected_oracle": {
+    "source": "full-3D TaylorCouetteMRIDNSJax conducting-wall mode-local DNS; non-axisymmetric MRI eigenmode seed",
+    "source_anchors": [
+      "solver_survey.md:510",
+      "demo/test_taylor_couette_dns.py:289"
+    ],
+    "type": "tc_mri_dns_growth"
+  },
+  "family": "shenfun",
+  "forcing": {
+    "B0": 0.1,
+    "type": "imposed_axial_field"
+  },
+  "formulation": {
+    "internal": "primitive-variable perturbation resistive-MHD, full 3D (theta,z,r) SBDF3 saddle-point DNS about W=V(r)e_theta, B=B0 e_z",
+    "pressure": "total pressure Pi = p + B0 b_z; magnetic field direct components"
+  },
+  "geometry": "taylor_couette",
+  "golden": {
+    "artifact_id": "taylor_couette_mhd_3d_v1",
+    "regeneration_command": "python -m production.run_problem --config production/examples/taylor_couette_mhd_3d_v1.json --out production/goldens/taylor_couette_mhd_3d_v1 --write-golden"
+  },
+  "initial_condition": {
+    "amplitude": 1e-07,
+    "type": "linear_eigenmode"
+  },
+  "mode": {
+    "axial_wavenumber": 6.0,
+    "azimuthal_wavenumber": 1
+  },
+  "native_axes": {
+    "axis_0": "theta azimuthal",
+    "axis_1": "z axial",
+    "axis_2": "r radial"
+  },
+  "nondimensional_groups": {
+    "B0": 0.1,
+    "Omega1": 1.0,
+    "Omega2": 0.3535533905932738,
+    "Pm": 1.0,
+    "R1": 1.0,
+    "R2": 2.0,
+    "Re": 1000.0,
+    "Rm": 1000.0,
+    "eta_mag": 0.001,
+    "nu": 0.001,
+    "radius_ratio": 0.5
+  },
+  "physics": "mhd",
+  "precision": "float64",
+  "problem_id": "taylor_couette_mhd_3d_v1",
+  "random_seed": null,
+  "resolution": {
+    "Nr": 12,
+    "Ntheta": 4,
+    "Nz": 4,
+    "dealias": 1.5,
+    "family": "C",
+    "memory_model": "mode-local O(Ntheta*Nz*Nr^2); no global DOF^2 operator",
+    "production": {
+      "Nr": 24,
+      "Ntheta": 16,
+      "Nz": 16
+    },
+    "smoke": {
+      "Nr": 8,
+      "Ntheta": 4,
+      "Nz": 4
+    }
+  },
+  "support_state": "production",
+  "time": {
+    "dt": 0.002,
+    "final_time": 0.006,
+    "integrator": "SBDF3"
+  },
+  "tolerance_model": {
+    "kind": "physics-regression",
+    "scalars": {
+      "divergence_b": 1e-08,
+      "divergence_u": 1e-08,
+      "growth_rate": 1e-06,
+      "growth_rate_linear": 1e-10,
+      "kinetic_energy": 1e-08,
+      "magnetic_energy": 1e-08
+    }
+  },
+  "unsupported_subcases": []
+}
