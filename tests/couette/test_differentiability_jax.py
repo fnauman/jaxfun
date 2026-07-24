@@ -15,7 +15,12 @@ from examples.pcf_minimal_seed_jax import (
     tree_scale,
 )
 from examples.pcf_mri_primitive_jax import AxisymmetricPCFMRIDNSJax
-from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
+from examples.taylor_couette_dns_jax import (
+    AxisymmetricTCDNSJax,
+    CircularCouette,
+    TaylorCouetteDNSJax,
+    TaylorCouetteMRIDNSJax,
+)
 
 
 def _pcf_initial_state_with_amp(solver: PlaneCouetteFluctuationJax, amp):
@@ -313,3 +318,47 @@ def test_axisymmetric_tc_state_gradient_is_finite_through_cnab2_history_flag():
         bool(jnp.isfinite(leaf).all()) for leaf in jax.tree_util.tree_leaves(grad_state)
     )
     assert tree_l2_norm(grad_state) > 0.0
+
+
+@pytest.mark.skipif(
+    not bool(jax.config.read("jax_enable_x64")),
+    reason="3D TC differentiability checks use x64 finite differences",
+)
+@pytest.mark.parametrize("physics", ["hydro", "mhd"])
+def test_tc_3d_sbdf3_energy_gradient_matches_amplitude_fd(physics):
+    if physics == "hydro":
+        solver = TaylorCouetteDNSJax(
+            CircularCouette(),
+            nu=0.002,
+            Nr=8,
+            Ntheta=4,
+            Nz=4,
+            dt=1.0e-3,
+            dealias=1.0,
+            time_integrator="SBDF3",
+        )
+    else:
+        solver = TaylorCouetteMRIDNSJax(
+            CircularCouette(1.0, 2.0, 1.0, 0.5**1.5),
+            B0=0.1,
+            nu=0.001,
+            eta_mag=0.001,
+            Nr=8,
+            Ntheta=4,
+            Nz=4,
+            dt=1.0e-3,
+            dealias=1.0,
+            time_integrator="SBDF3",
+        )
+
+    def final_energy(amplitude):
+        state, _ = solver.seed_linear_eigenmode(m=1, kz_mode=1, amp=amplitude)
+        return solver.energy(solver.solve(state, steps=3))
+
+    amplitude = 1.0e-5
+    gradient = jax.grad(final_energy)(amplitude)
+    finite_difference = _central_difference(final_energy, amplitude, 1.0e-7)
+
+    assert jnp.isfinite(gradient)
+    assert gradient != 0.0
+    assert jnp.allclose(gradient, finite_difference, rtol=1.0e-4, atol=1.0e-12)

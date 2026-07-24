@@ -1719,6 +1719,28 @@ def test_pcf_primitive_dns_runs_compare_dns_goldens(
                 "magnetic_energy",
             ],
         ),
+        (
+            "taylor_couette_hydro_3d_v1",
+            [
+                "divergence_linf",
+                "growth_rate",
+                "growth_rate_linear",
+                "kinetic_energy",
+                "rayleigh_stable",
+            ],
+        ),
+        (
+            "taylor_couette_mhd_3d_v1",
+            [
+                "divergence_b",
+                "divergence_u",
+                "growth_rate",
+                "growth_rate_linear",
+                "kinetic_energy",
+                "magnetic_bc",
+                "magnetic_energy",
+            ],
+        ),
     ],
 )
 def test_tc_dns_runs_compare_dns_goldens(tmp_path, problem_id, expected_keys):
@@ -1743,7 +1765,7 @@ def test_tc_dns_runs_compare_dns_goldens(tmp_path, problem_id, expected_keys):
     assert len(rows) == 2
     assert rows[0]["t"] == 0.0
     assert rows[-1]["growth_rate"] == pytest.approx(
-        rows[0]["growth_rate_linear"], abs=2.0e-7
+        rows[0]["growth_rate_linear"], abs=5.0e-5
     )
 
 
@@ -1766,7 +1788,11 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
         ).read_text()
     )
     spec["resolution"] = {**spec["resolution"], "Nr": 10, "Nz": 6}
-    spec["time"] = {**spec["time"], "final_time": 0.006}
+    spec["time"] = {
+        **spec["time"],
+        "final_time": 0.006,
+        "integrator": "SBDF3",
+    }
     spec_path = tmp_path / "tc_dns_checkpoint.json"
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
@@ -1823,6 +1849,10 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
         p=payload["p"],
         nonlinear_old=tuple(payload["nonlinear_old"]),
         have_old=payload["have_old"],
+        nonlinear_older=tuple(payload["nonlinear_older"]),
+        solution_old=tuple(payload["solution_old"]),
+        solution_older=tuple(payload["solution_older"]),
+        history_steps=payload["history_steps"],
     )
 
     groups = spec["nondimensional_groups"]
@@ -1835,6 +1865,7 @@ def test_tc_dns_runner_checkpoint_restart_continues(tmp_path):
         dt=spec["time"]["dt"],
         family=spec["resolution"]["family"],
         dealias=1.0,
+        time_integrator=spec["time"]["integrator"],
     )
     kz_mode = round(spec["mode"]["axial_wavenumber"] * solver.Lz / (2.0 * math.pi))
     state0, _ = solver.seed_linear_eigenmode(

@@ -503,6 +503,8 @@ def _solver_and_seed_builders(spec: dict[str, Any]):
         dealias = float(spec["resolution"].get("dealias", 1.0))
         lz = float(spec["domain"]["z_period"])
         dt = float(spec["time"]["dt"])
+        time_integrator = str(spec["time"].get("integrator", "CNAB2"))
+        azimuthal_mode = int(spec.get("mode", {}).get("azimuthal_wavenumber", 0))
         amplitude = float(spec["initial_condition"].get("amplitude", 1.0e-4))
 
         if representation == "vector_potential":
@@ -545,15 +547,22 @@ def _solver_and_seed_builders(spec: dict[str, Any]):
                     dt=dt,
                     family=family,
                     dealias=dealias,
+                    time_integrator=time_integrator,
                 )
                 if ntheta is not None:
                     kwargs["Ntheta"] = int(ntheta)
                 return solver_cls(**kwargs)
 
-            return (
-                build_tc_hydro,
-                lambda solver: solver.initial_state(amp=amplitude),
-            )
+            def seed_tc_hydro(solver: Any) -> Any:
+                kwargs = {
+                    "kz_mode": _kz_mode_from_spec(spec, solver.Lz, strict=False),
+                    "amp": amplitude,
+                }
+                if ntheta is not None:
+                    kwargs["m"] = azimuthal_mode
+                return solver.seed_linear_eigenmode(**kwargs)[0]
+
+            return build_tc_hydro, seed_tc_hydro
 
         solver_cls = AxisymmetricMRIDNSJax if ntheta is None else TaylorCouetteMRIDNSJax
 
@@ -569,18 +578,22 @@ def _solver_and_seed_builders(spec: dict[str, Any]):
                 dt=dt,
                 family=family,
                 dealias=dealias,
+                time_integrator=time_integrator,
             )
             if ntheta is not None:
                 kwargs["Ntheta"] = int(ntheta)
             return solver_cls(**kwargs)
 
-        return (
-            build_tc_mhd,
-            lambda solver: solver.seed_linear_eigenmode(
-                kz_mode=_kz_mode_from_spec(spec, solver.Lz, strict=False),
-                amp=amplitude,
-            )[0],
-        )
+        def seed_tc_mhd(solver: Any) -> Any:
+            kwargs = {
+                "kz_mode": _kz_mode_from_spec(spec, solver.Lz, strict=False),
+                "amp": amplitude,
+            }
+            if ntheta is not None:
+                kwargs["m"] = azimuthal_mode
+            return solver.seed_linear_eigenmode(**kwargs)[0]
+
+        return build_tc_mhd, seed_tc_mhd
     raise ValueError(
         f"no benchmark solver factory for {spec.get('problem_id')!r} "
         f"(geometry={geometry!r}, physics={physics!r}, "

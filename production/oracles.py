@@ -363,6 +363,22 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
             have_old=jnp.asarray(payload["have_old"], dtype=jnp.float32),
+            nonlinear_older=(
+                None
+                if "nonlinear_older" not in payload
+                else tuple(payload["nonlinear_older"])
+            ),
+            solution_old=(
+                None
+                if "solution_old" not in payload
+                else tuple(payload["solution_old"])
+            ),
+            solution_older=(
+                None
+                if "solution_older" not in payload
+                else tuple(payload["solution_older"])
+            ),
+            history_steps=payload.get("history_steps", 0.0),
         )
     if state_kind in {"axisymmetric_tc_mhd", "axisymmetric_tc_mhd_saturation"}:
         from examples.taylor_couette_dns_jax import AxisymmetricMRIState
@@ -372,6 +388,22 @@ def _state_from_checkpoint_payload(payload: dict[str, Any], *, state_kind: str) 
             p=payload["p"],
             nonlinear_old=tuple(payload["nonlinear_old"]),
             have_old=jnp.asarray(payload["have_old"], dtype=jnp.float32),
+            nonlinear_older=(
+                None
+                if "nonlinear_older" not in payload
+                else tuple(payload["nonlinear_older"])
+            ),
+            solution_old=(
+                None
+                if "solution_old" not in payload
+                else tuple(payload["solution_old"])
+            ),
+            solution_older=(
+                None
+                if "solution_older" not in payload
+                else tuple(payload["solution_older"])
+            ),
+            history_steps=payload.get("history_steps", 0.0),
         )
     if state_kind in {"axisymmetric_pcf_primitive", "pcf_primitive_mhd_saturation"}:
         from examples.pcf_mri_primitive_jax import AxisymmetricPCFState
@@ -1213,9 +1245,13 @@ def _run_taylor_couette_hydro_dns(
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
-    from examples.taylor_couette_dns_jax import AxisymmetricTCDNSJax, CircularCouette
+    from examples.taylor_couette_dns_jax import (
+        AxisymmetricTCDNSJax,
+        CircularCouette,
+        TaylorCouetteDNSJax,
+    )
 
-    resolution = spec["resolution"]
+    resolution = _selected_resolution(spec)
     groups = spec["nondimensional_groups"]
     physics = _resolved_physics(spec)
     base = CircularCouette(
@@ -1224,23 +1260,33 @@ def _run_taylor_couette_hydro_dns(
         float(groups["Omega1"]),
         float(groups["Omega2"]),
     )
-    solver = AxisymmetricTCDNSJax(
-        base,
-        nu=physics.nu,
-        Nr=int(resolution.get("Nr", resolution.get("N", 40))),
-        Nz=int(resolution.get("Nz", 8)),
-        Lz=float(spec["domain"]["z_period"]),
-        dt=float(spec["time"]["dt"]),
-        family=resolution.get("family", "C"),
-        dealias=1.0,
-    )
-    state, eigenvalue = solver.seed_linear_eigenmode(
-        kz_mode=_kz_mode_from_spec(spec, solver.Lz),
-        amp=float(spec["initial_condition"].get("amplitude", 1.0e-6)),
-    )
+    ntheta = resolution.get("Ntheta")
+    solver_cls = AxisymmetricTCDNSJax if ntheta is None else TaylorCouetteDNSJax
+    kwargs: dict[str, Any] = {
+        "base": base,
+        "nu": physics.nu,
+        "Nr": int(resolution.get("Nr", resolution.get("N", 40))),
+        "Nz": int(resolution.get("Nz", 8)),
+        "Lz": float(spec["domain"]["z_period"]),
+        "dt": float(spec["time"]["dt"]),
+        "family": resolution.get("family", "C"),
+        "dealias": float(resolution.get("dealias", 1.0)),
+        "time_integrator": str(spec["time"]["integrator"]),
+    }
+    if ntheta is not None:
+        kwargs["Ntheta"] = int(ntheta)
+    solver = solver_cls(**kwargs)
+    seed_kwargs = {
+        "kz_mode": _kz_mode_from_spec(spec, solver.Lz),
+        "amp": float(spec["initial_condition"].get("amplitude", 1.0e-6)),
+    }
+    if ntheta is not None:
+        seed_kwargs["m"] = int(spec.get("mode", {}).get("azimuthal_wavenumber", 0))
+    state, eigenvalue = solver.seed_linear_eigenmode(**seed_kwargs)
     initial = solver.diagnostics(state)
+    state_kind = "axisymmetric_tc_hydro"
     state, tstep0, t0 = _resume_or_initial_state(
-        resume_checkpoint, state, spec=spec, state_kind="axisymmetric_tc_hydro"
+        resume_checkpoint, state, spec=spec, state_kind=state_kind
     )
     target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
@@ -1254,7 +1300,7 @@ def _run_taylor_couette_hydro_dns(
         checkpoint_every=checkpoint_every,
         snapshot_every=snapshot_every,
         diagnostics_every=diagnostics_every,
-        state_kind="axisymmetric_tc_hydro",
+        state_kind=state_kind,
         device_record=device_record,
         t0=t0,
         tstep0=tstep0,
@@ -2904,7 +2950,11 @@ def _run_taylor_couette_mhd_dns(
     device_record: dict[str, Any] | None = None,
     resume_checkpoint: Any | None = None,
 ) -> dict[str, Any]:
-    from examples.taylor_couette_dns_jax import AxisymmetricMRIDNSJax, CircularCouette
+    from examples.taylor_couette_dns_jax import (
+        AxisymmetricMRIDNSJax,
+        CircularCouette,
+        TaylorCouetteMRIDNSJax,
+    )
 
     magnetic_bc = _magnetic_bc(spec)
     if magnetic_bc != "conducting":
@@ -2912,33 +2962,43 @@ def _run_taylor_couette_mhd_dns(
             "TC MHD DNS golden parity is wired only for conducting walls, "
             f"got {magnetic_bc!r}"
         )
-    resolution = spec["resolution"]
+    resolution = _selected_resolution(spec)
     groups = spec["nondimensional_groups"]
     physics = _resolved_physics(spec)
-    solver = AxisymmetricMRIDNSJax(
-        CircularCouette(
+    ntheta = resolution.get("Ntheta")
+    solver_cls = AxisymmetricMRIDNSJax if ntheta is None else TaylorCouetteMRIDNSJax
+    kwargs: dict[str, Any] = {
+        "base": CircularCouette(
             float(groups["R1"]),
             float(groups["R2"]),
             float(groups["Omega1"]),
             float(groups["Omega2"]),
         ),
-        B0=physics.B0,
-        nu=physics.nu,
-        eta_mag=physics.eta if physics.eta is not None else physics.nu,
-        Nr=int(resolution.get("Nr", resolution.get("N", 40))),
-        Nz=int(resolution.get("Nz", 8)),
-        Lz=float(spec["domain"]["z_period"]),
-        dt=float(spec["time"]["dt"]),
-        family=resolution.get("family", "C"),
-        dealias=1.0,
-    )
-    state, eigenvalue = solver.seed_linear_eigenmode(
-        kz_mode=_kz_mode_from_spec(spec, solver.Lz),
-        amp=float(spec["initial_condition"].get("amplitude", 1.0e-7)),
-    )
+        "B0": physics.B0,
+        "nu": physics.nu,
+        "eta_mag": physics.eta if physics.eta is not None else physics.nu,
+        "Nr": int(resolution.get("Nr", resolution.get("N", 40))),
+        "Nz": int(resolution.get("Nz", 8)),
+        "Lz": float(spec["domain"]["z_period"]),
+        "dt": float(spec["time"]["dt"]),
+        "family": resolution.get("family", "C"),
+        "dealias": float(resolution.get("dealias", 1.0)),
+        "time_integrator": str(spec["time"]["integrator"]),
+    }
+    if ntheta is not None:
+        kwargs["Ntheta"] = int(ntheta)
+    solver = solver_cls(**kwargs)
+    seed_kwargs = {
+        "kz_mode": _kz_mode_from_spec(spec, solver.Lz),
+        "amp": float(spec["initial_condition"].get("amplitude", 1.0e-7)),
+    }
+    if ntheta is not None:
+        seed_kwargs["m"] = int(spec.get("mode", {}).get("azimuthal_wavenumber", 0))
+    state, eigenvalue = solver.seed_linear_eigenmode(**seed_kwargs)
     initial = solver.diagnostics(state)
+    state_kind = "axisymmetric_tc_mhd"
     state, tstep0, t0 = _resume_or_initial_state(
-        resume_checkpoint, state, spec=spec, state_kind="axisymmetric_tc_mhd"
+        resume_checkpoint, state, spec=spec, state_kind=state_kind
     )
     target_steps, n_steps = _remaining_steps_from_resume(
         spec, steps=steps, tstep0=tstep0
@@ -2952,7 +3012,7 @@ def _run_taylor_couette_mhd_dns(
         checkpoint_every=checkpoint_every,
         snapshot_every=snapshot_every,
         diagnostics_every=diagnostics_every,
-        state_kind="axisymmetric_tc_mhd",
+        state_kind=state_kind,
         device_record=device_record,
         t0=t0,
         tstep0=tstep0,
@@ -3868,19 +3928,37 @@ def _checkpoint_payload(state: Any) -> dict[str, Any]:
             payload["history_steps"] = jnp.asarray(state.history_steps)
         return payload
     if hasattr(state, "u"):
-        return {
+        payload = {
             "u": state.u,
             "p": state.p,
             "nonlinear_old": state.nonlinear_old,
             "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
         }
+        if getattr(state, "nonlinear_older", None) is not None:
+            payload["nonlinear_older"] = state.nonlinear_older
+        if getattr(state, "solution_old", None) is not None:
+            payload["solution_old"] = state.solution_old
+        if getattr(state, "solution_older", None) is not None:
+            payload["solution_older"] = state.solution_older
+        if hasattr(state, "history_steps"):
+            payload["history_steps"] = jnp.asarray(state.history_steps)
+        return payload
     if hasattr(state, "x"):
-        return {
+        payload = {
             "x": state.x,
             "p": state.p,
             "nonlinear_old": state.nonlinear_old,
             "have_old": jnp.asarray(state.have_old, dtype=jnp.float32),
         }
+        if getattr(state, "nonlinear_older", None) is not None:
+            payload["nonlinear_older"] = state.nonlinear_older
+        if getattr(state, "solution_old", None) is not None:
+            payload["solution_old"] = state.solution_old
+        if getattr(state, "solution_older", None) is not None:
+            payload["solution_older"] = state.solution_older
+        if hasattr(state, "history_steps"):
+            payload["history_steps"] = jnp.asarray(state.history_steps)
+        return payload
     raise TypeError(f"unsupported checkpoint state type {type(state).__name__}")
 
 
@@ -4577,10 +4655,6 @@ def _steps_from_spec(spec: dict[str, Any], *, steps: int | None = None) -> int:
 
 def _kz_mode_from_spec(spec: dict[str, Any], Lz: float, *, strict: bool = True) -> int:
     mode = spec.get("mode", {})
-    if int(mode.get("azimuthal_wavenumber", 0)) != 0:
-        raise ProductionOracleNotImplementedError(
-            "Taylor-Couette DNS golden parity is wired only for axisymmetric m=0 specs"
-        )
     kz = float(mode["axial_wavenumber"])
     kz_mode = int(round(kz * float(Lz) / (2.0 * math.pi)))
     if kz_mode < 1:
