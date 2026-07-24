@@ -104,7 +104,7 @@
       "Nz": 4
     }
   },
-  "spec_hash": "ef681c47eec04da8eab3c35aab4cf468560f629c44e1b3d35af59df0eda5e317",
+  "spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca",
   "support_state": "production",
   "time": {
     "dt": 0.001,
@@ -115,7 +115,7 @@
     "kind": "physics-regression",
     "scalars": {
       "divergence_linf": 1e-08,
-      "growth_rate": 5e-05,
+      "growth_rate": 1e-06,
       "growth_rate_linear": 1e-10,
       "kinetic_energy": 1e-08
     }

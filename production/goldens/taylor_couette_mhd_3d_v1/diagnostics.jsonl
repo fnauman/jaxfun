@@ -1,2 +1,2 @@
-{"growth_rate_linear": 0.29129374483614967, "kinetic_energy": 7.856098168980772e-15, "magnetic_energy": 1.1298011285580738e-14, "t": 0.0}
-{"divergence_b": 1.0541502761133036e-08, "divergence_u": 1.4863885301299558e-08, "growth_rate": 0.2912937448320454, "growth_rate_linear": 0.29129374483614967, "kinetic_energy": 7.883607407650019e-15, "magnetic_bc": "conducting", "magnetic_energy": 1.1337572869748573e-14, "t": 0.006}
+{"growth_rate_linear": 0.2912937448361517, "kinetic_energy": 7.85609816898076e-15, "magnetic_energy": 1.1298011285580755e-14, "t": 0.0}
+{"divergence_b": 1.0541502761126154e-08, "divergence_u": 1.486388530128091e-08, "growth_rate": 0.29129374483210074, "growth_rate_linear": 0.2912937448361517, "kinetic_energy": 7.883607407650011e-15, "magnetic_bc": "conducting", "magnetic_energy": 1.1337572869748595e-14, "t": 0.006}

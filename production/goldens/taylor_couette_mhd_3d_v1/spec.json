@@ -115,7 +115,7 @@
       "Nz": 4
     }
   },
-  "spec_hash": "e83fcd718088ddc53f335e319dbb58d43aa38cd56da2aad3b1bf1f26678aab90",
+  "spec_hash": "7b768d13309c0d133a35f78db3df69604f91797ed0b73268923a0afa63cfe8ad",
   "support_state": "production",
   "time": {
     "dt": 0.002,
@@ -127,7 +127,7 @@
     "scalars": {
       "divergence_b": 1e-08,
       "divergence_u": 1e-08,
-      "growth_rate": 5e-05,
+      "growth_rate": 1e-06,
       "growth_rate_linear": 1e-10,
       "kinetic_energy": 1e-08,
       "magnetic_energy": 1e-08

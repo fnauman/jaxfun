@@ -1,26 +1,26 @@
 {
   "artifact_id": "taylor_couette_hydro_3d_v1",
   "comparison_fields": {
-    "scalars_sha256": "a88943c8c4e7a146a24cda021551bf247c2c6ce62793880c32f078730f3bc982",
-    "tolerance_model_sha256": "3df3a9f615acf817be70558d84059a4fd8f525ead1f6d5564164bc7325826972"
+    "scalars_sha256": "436a1a5b7984318a4774920915927ed038b427033588b3c1c8de4351e7f08b37",
+    "tolerance_model_sha256": "12cb50f844523326e9dd8cbb5bbfc4fa9bc9416334447781aaaa90b7a57a8949"
   },
   "diagnostics": {
     "scalars": {
-      "divergence_linf": 7.255456995703013e-10,
-      "growth_rate": 0.0838787324363943,
-      "growth_rate_linear": 0.08387873243611842,
-      "kinetic_energy": 7.955617099356651e-12,
+      "divergence_linf": 7.255456995739012e-10,
+      "growth_rate": 0.08387873243632032,
+      "growth_rate_linear": 0.08387873243612082,
+      "kinetic_energy": 7.955617099356648e-12,
       "rayleigh_stable": false
     },
     "time_series": [
       {
-        "growth_rate_linear": 0.08387873243611842,
+        "growth_rate_linear": 0.08387873243612082,
         "kinetic_energy": 7.951614264231089e-12,
         "t": 0.0
       },
       {
-        "growth_rate": 0.0838787324363943,
-        "kinetic_energy": 7.955617099356651e-12,
+        "growth_rate": 0.08387873243632032,
+        "kinetic_energy": 7.955617099356648e-12,
         "t": 0.003
       }
     ]
@@ -28,12 +28,12 @@
   "environment": {
     "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
     "jax": {
-      "captured_at_utc": "2026-07-24T08:14:42+00:00",
-      "cuda_visible_devices": null,
-      "default_backend": "gpu",
-      "degraded": false,
+      "captured_at_utc": "2026-07-24T12:21:15+00:00",
+      "cuda_visible_devices": "",
+      "default_backend": "cpu",
+      "degraded": true,
       "devices": [
-        "cuda:0"
+        "cpu:0"
       ],
       "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
       "jax_default_scalar_dtype": "float64",
@@ -47,13 +47,13 @@
       "jaxfun_use_simplified_jaxpr_constants": null,
       "jaxfun_wavenumber_solver": "jax",
       "jaxlib_version": "0.10.1",
-      "mode": "gpu",
+      "mode": "cpu_smoke",
       "production_run_dtype": "float64",
       "requested_production_dtype": "float64",
       "xla_python_client_preallocate": "false"
     }
   },
-  "generated_at_utc": "2026-07-24T08:14:53+00:00",
+  "generated_at_utc": "2026-07-24T12:21:24+00:00",
   "generation": {
     "run_options": {
       "additional_steps": null,
@@ -88,13 +88,10 @@
   },
   "git": {
     "branch": "HEAD",
-    "commit": "83185420a261a60ae31c8f9f9abe29ceb8212f7e",
-    "describe": "8318542",
-    "dirty": true,
-    "dirty_files": [
-      "?? production/goldens/_jax_compilation_cache/",
-      "?? production/goldens/taylor_couette_hydro_3d_v1/"
-    ],
+    "commit": "09fef79372e2ca8d2ef22d10caae80f9b9b05068",
+    "describe": "09fef79",
+    "dirty": false,
+    "dirty_files": [],
     "jax_config": {
       "jax_enable_x64": true,
       "jax_use_simplified_jaxpr_constants": true,
@@ -110,10 +107,10 @@
     "unpushed_commits": [],
     "upstream": null,
     "versions": {
-      "cuda_runtime": "PJRT C API\ncuda 13000",
-      "gpu": "NVIDIA GeForce RTX 5090 Laptop GPU",
+      "cuda_runtime": "cpu",
+      "gpu": "cpu",
       "jax": "0.10.1",
-      "jax_backend": "gpu",
+      "jax_backend": "cpu",
       "jaxlib": "0.10.1",
       "nvidia_driver": "580.159.04",
       "python": "3.12.3"
@@ -125,12 +122,12 @@
     "solver_survey.md:392",
     "demo/test_taylor_couette_dns.py:87"
   ],
-  "spec_hash": "ef681c47eec04da8eab3c35aab4cf468560f629c44e1b3d35af59df0eda5e317",
+  "spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca",
   "tolerance_model": {
     "kind": "physics-regression",
     "scalars": {
       "divergence_linf": 1e-08,
-      "growth_rate": 5e-05,
+      "growth_rate": 1e-06,
       "growth_rate_linear": 1e-10,
       "kinetic_energy": 1e-08
     }

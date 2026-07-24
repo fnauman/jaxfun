@@ -98,10 +98,10 @@
       "examples/taylor_couette_dns_jax.py",
       "examples/taylor_couette_linear_jax.py"
     ],
-    "spec_hash": "ef681c47eec04da8eab3c35aab4cf468560f629c44e1b3d35af59df0eda5e317"
+    "spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca"
   },
   "artifact_id": "taylor_couette_hydro_3d_v1",
-  "base_spec_hash": "ef681c47eec04da8eab3c35aab4cf468560f629c44e1b3d35af59df0eda5e317",
+  "base_spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca",
   "classification": {
     "energy_key": "total_energy",
     "fit": {
@@ -119,19 +119,19 @@
   },
   "compilation_cache": {
     "enabled": true,
-    "path": "production/goldens/_jax_compilation_cache",
+    "path": "/tmp/fork_jaxfun-pr50-cache-09fef79",
     "requested": true,
     "restores_process_config": true,
-    "source": "run_parent_default"
+    "source": "env"
   },
   "config_path": "production/examples/taylor_couette_hydro_3d_v1.json",
   "device": {
-    "captured_at_utc": "2026-07-24T08:14:42+00:00",
-    "cuda_visible_devices": null,
-    "default_backend": "gpu",
-    "degraded": false,
+    "captured_at_utc": "2026-07-24T12:21:15+00:00",
+    "cuda_visible_devices": "",
+    "default_backend": "cpu",
+    "degraded": true,
     "devices": [
-      "cuda:0"
+      "cpu:0"
     ],
     "interpreter": "/home/nauman/cfd/shenfun_jaxfun_spectralDNS/fork_jaxfun/.venv/bin/python",
     "jax_default_scalar_dtype": "float64",
@@ -145,7 +145,7 @@
     "jaxfun_use_simplified_jaxpr_constants": null,
     "jaxfun_wavenumber_solver": "jax",
     "jaxlib_version": "0.10.1",
-    "mode": "gpu",
+    "mode": "cpu_smoke",
     "production_run_dtype": "float64",
     "requested_production_dtype": "float64",
     "xla_python_client_preallocate": "false"
@@ -157,7 +157,7 @@
     "divergence_linf",
     "rayleigh_stable"
   ],
-  "diagnostics_path": "production/goldens/taylor_couette_hydro_3d_v1/diagnostics.jsonl",
+  "diagnostics_path": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79/diagnostics.jsonl",
   "execution": {
     "execution_kind": "dns-linear-window",
     "solver_execution_wired": true,
@@ -171,13 +171,14 @@
     ],
     "type": "circular_couette_dns_growth"
   },
-  "generated_at_utc": "2026-07-24T08:14:42+00:00",
+  "generated_at_utc": "2026-07-24T12:21:15+00:00",
   "geometry": "taylor_couette",
   "golden_resolution": {
-    "exists": false,
-    "golden_path": null,
-    "message": "golden for 'taylor_couette_hydro_3d_v1' not found at /tmp/jaxfun-tc-golden-clean.iiVEIj/production/goldens/taylor_couette_hydro_3d_v1/golden/golden.json",
-    "policy": "missing"
+    "exists": true,
+    "golden_path": "/tmp/fork_jaxfun-pr50-golden-clean-09fef79/production/goldens/taylor_couette_hydro_3d_v1/golden/golden.json",
+    "policy": "vendored",
+    "root": "/tmp/fork_jaxfun-pr50-golden-clean-09fef79/production/goldens",
+    "spec_path": "/tmp/fork_jaxfun-pr50-golden-clean-09fef79/production/goldens/taylor_couette_hydro_3d_v1/spec.json"
   },
   "integrator": {
     "actual": "SBDF3",
@@ -187,18 +188,15 @@
     "requested": "SBDF3"
   },
   "numerics_contract_version": null,
-  "out_dir": "production/goldens/taylor_couette_hydro_3d_v1",
+  "out_dir": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79",
   "physics": "hydro",
   "problem_id": "taylor_couette_hydro_3d_v1",
   "provenance": {
     "branch": "HEAD",
-    "commit": "83185420a261a60ae31c8f9f9abe29ceb8212f7e",
-    "describe": "8318542",
-    "dirty": true,
-    "dirty_files": [
-      "?? production/goldens/_jax_compilation_cache/",
-      "?? production/goldens/taylor_couette_hydro_3d_v1/"
-    ],
+    "commit": "09fef79372e2ca8d2ef22d10caae80f9b9b05068",
+    "describe": "09fef79",
+    "dirty": false,
+    "dirty_files": [],
     "jax_config": {
       "jax_enable_x64": true,
       "jax_use_simplified_jaxpr_constants": true,
@@ -211,8 +209,8 @@
       "uv.lock": "beb50787969b5500e5a4a9f4000b1df3fdb23114c226f3ef4b814b3ed1cdae16"
     },
     "release_gate": {
-      "diff_archive": "production/goldens/taylor_couette_hydro_3d_v1/worktree_diff.patch",
-      "diff_sha256": "3f81bede7c05cbd8e29d938361131b17760f65a25ad0f286c08b12ebd70abbd0",
+      "diff_archive": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79/worktree_diff.patch",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "discovery_only": true,
       "passed": false,
       "problems": [
@@ -227,18 +225,16 @@
         "remote_verified": false,
         "tag_commit": null
       },
-      "untracked_archived": [
-        "production/goldens/taylor_couette_hydro_3d_v1/worktree_diff.patch"
-      ]
+      "untracked_archived": []
     },
     "remote_url": "git@github.com:fnauman/jaxfun",
     "unpushed_commits": [],
     "upstream": null,
     "versions": {
-      "cuda_runtime": "PJRT C API\ncuda 13000",
-      "gpu": "NVIDIA GeForce RTX 5090 Laptop GPU",
+      "cuda_runtime": "cpu",
+      "gpu": "cpu",
       "jax": "0.10.1",
-      "jax_backend": "gpu",
+      "jax_backend": "cpu",
       "jaxlib": "0.10.1",
       "nvidia_driver": "580.159.04",
       "python": "3.12.3"
@@ -319,16 +315,16 @@
     "type_valid": null
   },
   "schema_version": 1,
-  "spec_hash": "ef681c47eec04da8eab3c35aab4cf468560f629c44e1b3d35af59df0eda5e317",
+  "spec_hash": "4972a71ee1138d4f0bfd15ba11e760287f2a1569eccd9c313a22057d7b331fca",
   "support_state": "production",
   "timing": {
-    "ms_per_step": 3793.5805703358105,
-    "seconds_per_step": 3.7935805703358105,
-    "solver_finished_at_utc": "2026-07-24T08:14:53+00:00",
-    "solver_started_at_utc": "2026-07-24T08:14:42+00:00",
+    "ms_per_step": 2767.454684673188,
+    "seconds_per_step": 2.767454684673188,
+    "solver_finished_at_utc": "2026-07-24T12:21:24+00:00",
+    "solver_started_at_utc": "2026-07-24T12:21:15+00:00",
     "solver_steps": 3,
-    "solver_wall_time_seconds": 11.380741711007431,
-    "steps_per_second": 0.2636032058524275
+    "solver_wall_time_seconds": 8.302364054019563,
+    "steps_per_second": 0.36134286336764043
   },
   "validation_floor": {
     "divergence_diagnostics": [
@@ -336,7 +332,7 @@
     ],
     "divergence_limit": 0.01,
     "divergence_present": true,
-    "max_divergence": 7.255456995703013e-10,
+    "max_divergence": 7.255456995739012e-10,
     "nonfinite_diagnostics": [],
     "passed": true,
     "required": false
@@ -356,5 +352,5 @@
     "resolution_tier": null,
     "steps_override": null
   },
-  "written_golden": "production/goldens/taylor_couette_hydro_3d_v1/golden/golden.json"
+  "written_golden": "/tmp/fork_jaxfun-pr50-hydro-out-09fef79/golden/golden.json"
 }
